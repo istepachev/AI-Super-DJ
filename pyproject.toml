@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "superdj"
+version = "0.1.0"
+description = "Offline, explainable DJ planning and audio rendering"
+requires-python = ">=3.12"
+license = {text = "MIT"}
+dependencies = ["numpy>=2,<3", "scipy>=1.14,<2", "soundfile>=0.13,<1", "librosa>=0.11,<2", "pyloudnorm>=0.1,<1", "PyYAML>=6,<7"]
+
+[project.optional-dependencies]
+grid = ["beat-this==1.1.0"]
+repair = ["pedalboard>=0.9,<1", "noisereduce>=3,<4"]
+test = ["pytest>=8,<10"]
+
+[project.scripts]
+superdj = "superdj.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["superdj*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

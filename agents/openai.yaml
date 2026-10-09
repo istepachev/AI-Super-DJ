@@ -1,0 +1,4 @@
+interface:
+  display_name: "SuperDJ"
+  short_description: "Plan, mix, master, and verify local DJ sets"
+  default_prompt: "Use $superdj to make a DJ set from my local tracks: optimize the order when requested, preserve any order I specify, and deliver verified FLAC audio with a timed playlist."

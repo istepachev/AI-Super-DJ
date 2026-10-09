@@ -1,0 +1,27 @@
+# Dependency provenance
+
+SuperDJ's original orchestration and skill instructions use the MIT license in [LICENSE](LICENSE). External programs, Python packages, source checkouts, models, and music retain their own licenses. No upstream source or executable is vendored by this initial integration. Adapter availability and actual execution are separate facts; the local run manifest records both.
+
+## Audited integration targets
+
+| Component | Upstream source and audited revision | License at that revision | Role and integration boundary |
+|---|---|---|---|
+| audamcp / dpf-audio-pro | [Dream-Pixels-Forge/audacity-mcp](https://github.com/Dream-Pixels-Forge/audacity-mcp), `9d812922e46f504f91cca48338ed68511f8d4243` | [MIT](https://github.com/Dream-Pixels-Forge/audacity-mcp/blob/9d812922e46f504f91cca48338ed68511f8d4243/LICENSE), copyright 2026 DREAM-PIXELS-FORGE | Optional external Python checkout/package; selective repair/EQ through `audamcp` array functions. The full Audacity/MCP installation is not required for a standalone array processor. |
+| Bitwize music tools | [bitwize-music-studio/claude-ai-music-skills](https://github.com/bitwize-music-studio/claude-ai-music-skills), `58f32c25b9fb2dfe569478459b0a591e0dff22e8` | [CC0-1.0](https://github.com/bitwize-music-studio/claude-ai-music-skills/blob/58f32c25b9fb2dfe569478459b0a591e0dff22e8/LICENSE) | Optional external checkout; `tools/mastering/master_tracks.py` is a final-mastering target. Its imports include shared/mixing tools, so a lone copied file is not sufficient. |
+| Beat This! | [CPJKU/beat_this](https://github.com/CPJKU/beat_this), Python package `beat-this==1.1.0`; checkpoint name and SHA-256 recorded per run | [MIT for code and published model weights](https://github.com/CPJKU/beat_this#license) | Optional neural beat/downbeat predictor. Official checkpoints are downloaded only through an enabled model-download option and stored outside the repository. No training audio or weights are bundled. |
+| Rubber Band | [Breakfast Quay Rubber Band](https://breakfastquay.com/rubberband/), Windows CLI release 4.0.0 | [GPL-2.0-or-later or separate commercial license](https://github.com/breakfastquay/rubberband/blob/v4.0.0/README.md) | Separately installed executable for pitch-preserving tempo changes. SuperDJ does not distribute or link a Rubber Band binary. Record executable version and options, including R2/R3 engine. |
+| FFmpeg and FFprobe | [FFmpeg](https://ffmpeg.org/) | [LGPL/GPL depends on build configuration](https://ffmpeg.org/legal.html) | Separately installed decode, encode, inspection, and optional DSP executables. Capture `-version`/build configuration for a run. SuperDJ does not redistribute a build. |
+
+The audamcp and Bitwize licenses were checked in the actual pinned local checkouts as well as their published source. Beat This!'s official README expressly covers both code and published weights under MIT. These are audited targets, not a claim that every upstream feature is included or that all stages execute in every set. The neural grid backend is an optional install; stem separation, speech recognition, hosted music generation, Ableton, Mixxx, VirtualDJ, and Rekordbox are outside the core install.
+
+## Integration policy
+
+- Keep external checkouts and binary downloads outside the public repository. Record their exact revision or package version in private run manifests.
+- Prefer stable functions or subprocess interfaces. Any adapter correction must be identified as a local adaptation and tested on generated signals before use with music.
+- If upstream source is later copied, preserve its applicable license and notices. In particular, copies or substantial portions of audamcp require its MIT notice. Recheck the actual revision before extending the integration.
+- If a release later bundles or links FFmpeg/Rubber Band, review that release's build and distribution obligations and include the required source/license materials. The initial separate-executable design must not be represented as permission to relicense those programs.
+- Python dependency licenses are available from the installed distributions. Record the environment used; do not imply that this file replaces their notices.
+
+The sequence optimizer is an original, transparent implementation based on stated musical costs. DeckWave's harmonic-transition workflow and music-hearing's acoustic descriptors informed the design review; their code is not copied into this repository. SuperDJ has no affiliation with DJStudio and does not contain its Harmonize AI implementation.
+
+Music and personal playlists are local inputs. The project's software license grants no rights to publish those recordings. The public code repository excludes them by design.
