@@ -119,6 +119,8 @@ def render(args, records=None, planned=None):
                            tempo_ramp_max_change=args.tempo_ramp_max_change if args.tempo_ramp_max_change is not None else 0.25,
                            tempo_ramp_seconds=args.tempo_ramp_seconds,
                            native_exit_seconds=args.native_exit_seconds,
+                           sync_max_change=args.sync_max_change,
+                           sync_transition_bars=args.sync_transition_bars,
                            bridge_overlap_beats=args.bridge_overlap_beats,
                            progress=lambda s: print(s, flush=True))
     write_json(work / "render.json", rendered)
@@ -247,8 +249,12 @@ def _rendering(parser):
     parser.add_argument("--target-lufs", type=float, default=-14.0)
     parser.add_argument("--allow-unverified", action="store_true", help="Allow explicitly labelled free-time short transitions when grids are uncertain")
     parser.add_argument("--allow-hard-cut", action="store_true", help="Explicitly permit deliberate zero-overlap tempo resets; disabled by default")
-    parser.add_argument("--tempo-conflict-policy", choices=("adaptive", "shared_tempo", "review", "echo_bridge"), default="adaptive",
-                        help="Adaptive preserves incoming native tempo with an outgoing-only vinyl exit; shared_tempo is an explicit experiment")
+    parser.add_argument("--tempo-conflict-policy", choices=("sync", "adaptive", "shared_tempo", "review", "echo_bridge"), default="sync",
+                        help="SYNC shares beat phase and one changing BPM curve during overlap; creative exits require explicit selection")
+    parser.add_argument("--sync-max-change", type=float, default=0.40,
+                        help="Temporary rate change cap during shared SYNC, not the main track sections")
+    parser.add_argument("--sync-transition-bars", type=int, choices=(2, 4, 8), default=4,
+                        help="Common beat count for a large SYNC tempo handoff; default 4 bars")
     if "--tempo-ramp-max-change" not in parser._option_string_actions:
         parser.add_argument("--tempo-ramp-max-change", type=float, default=None,
                             help="Explicit shared-tempo cap; a supplied plan can restrict it further")

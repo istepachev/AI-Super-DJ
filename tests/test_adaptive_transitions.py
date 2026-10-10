@@ -119,7 +119,7 @@ class AdaptiveForwardSignalTests(unittest.TestCase):
     def test_normal_blend_has_measured_pulses_and_ordinary_limit(self):
         records = self.fixtures(120.0, 122.0)
         planned = plan_tracks(records, mode="fixed")
-        result = self.render(planned, records)
+        result = self.render(planned, records, tempo_conflict_policy="shared_tempo")
         self.check_matched_output(result)
         self.assertEqual(result["transitions"][0]["tempo_technique"], "standard_blend")
         self.assertEqual(result["transitions"][0]["musical_tempo_limit"], 0.06)
@@ -189,7 +189,7 @@ class AdaptiveForwardSignalTests(unittest.TestCase):
         planned = plan_tracks(records, mode="fixed")
         planned["constraints"]["allow_tempo_reset"] = False
         with self.assertRaisesRegex(RenderError, "forbids"):
-            self.render(planned, records)
+            self.render(planned, records, tempo_conflict_policy="adaptive")
         self.assertFalse((self.directory / "set.wav").exists())
 
     def test_stricter_declared_ramp_cap_is_not_silently_expanded(self):
@@ -198,9 +198,9 @@ class AdaptiveForwardSignalTests(unittest.TestCase):
         with self.assertRaises(RenderError):
             self.render(planned, records, tempo_conflict_policy="shared_tempo")
 
-    def test_default_short_exit_keeps_incoming_native_and_effect_only_on_old_tail(self):
+    def test_explicit_vinyl_keeps_incoming_native_and_effect_only_on_old_tail(self):
         records = self.fixtures(174.0, 128.0)
-        result = self.render(plan_tracks(records, mode="fixed"), records)
+        result = self.render(plan_tracks(records, mode="fixed"), records, tempo_conflict_policy="adaptive")
         transition = result["transitions"][0]
         self.assertEqual(transition["mode"], "outgoing_only_vinyl")
         self.assertEqual(transition["overlap_frames"], 8 * self.sample_rate)

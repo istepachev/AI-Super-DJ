@@ -27,15 +27,15 @@ class RenderError(ValueError):
 
 def validate_transition_policy(plan: Mapping[str, Any], *, allow_hard_cut: bool = False,
                                allow_unverified: bool = False,
-                               tempo_conflict_policy: str = "adaptive") -> None:
+                               tempo_conflict_policy: str = "sync") -> None:
     """Reject unresolved boundaries before audio preparation or output creation.
 
     A tempo reset is a review condition, not permission to stop one deck and
     start the other. Deliberate cuts and unverified fades have separate opt-ins.
     """
-    if tempo_conflict_policy not in {"adaptive", "shared_tempo", "review", "echo_bridge"}:
-        raise RenderError("Tempo conflict policy must be adaptive, shared_tempo, review or echo_bridge")
-    if allow_hard_cut or allow_unverified or tempo_conflict_policy in {"adaptive", "shared_tempo", "echo_bridge"}:
+    if tempo_conflict_policy not in {"sync", "adaptive", "shared_tempo", "review", "echo_bridge"}:
+        raise RenderError("Tempo conflict policy must be sync, adaptive, shared_tempo, review or echo_bridge")
+    if allow_hard_cut or allow_unverified or tempo_conflict_policy in {"sync", "adaptive", "shared_tempo", "echo_bridge"}:
         return
     for edge in plan.get("edges", []):
         if edge.get("tempo_reset") or not (edge.get("tempo") or {}).get("beatmatch_possible"):
@@ -54,6 +54,7 @@ class _Window:
     target_bpm: float
     frames: int
     cue_provenance: dict[str, Any] | None = None
+    clock: dict[str, Any] | None = None
 
 
 def _run(args: Sequence[str], *, cwd: Path | None = None) -> str:
@@ -286,9 +287,12 @@ def _warp_anchors(record: Mapping[str, Any], *, trim_start: float,
     requested_ramp = _finite(tempo_ramp_seconds, "tempo_ramp_seconds")
     if requested_ramp <= 0:
         raise RenderError("tempo_ramp_seconds must be positive")
-    entry_rate = head.target_bpm / native_bpm if head else 1.0
-    exit_rate = tail.target_bpm / native_bpm if tail else 1.0
-    if max(abs(entry_rate - 1), abs(exit_rate - 1)) > max_tempo_change + 1e-6:
+    entry_rate = (head.clock["end_bpm"] if head and head.clock else head.target_bpm) / native_bpm if head else 1.0
+    exit_rate = (tail.clock["start_bpm"] if tail and tail.clock else tail.target_bpm) / native_bpm if tail else 1.0
+    musical_change = max([abs(entry_rate - 1), abs(exit_rate - 1)] +
+                         [abs(w.clock[k] / native_bpm - 1) for w in (head, tail)
+                          if w and w.clock for k in ("start_bpm", "end_bpm")])
+    if musical_change > max_tempo_change + 1e-5:
         raise RenderError("Planned musical tempo change exceeds the per-deck limit")
     duration = source_frames / sample_rate
     points: list[tuple[float, float, str]] = [(0.0, 0.0, "clip_start")]
@@ -306,16 +310,27 @@ def _warp_anchors(record: Mapping[str, Any], *, trim_start: float,
             raise RenderError("Warp map must be strictly monotonic")
         points.append((source_seconds, target_seconds, role))
 
+    def overlap(window: _Window, base: float, role: str) -> None:
+        if window.clock:
+            from .sync import deck_controls
+            sources, outputs = deck_controls(window.times, window.clock, sample_rate)
+            for source_time, output_time in zip(sources, outputs):
+                add(float(source_time - trim_start), base + float(output_time), role + "_sync_control")
+            beat_outputs = np.asarray(window.clock["beat_output_frames"]) / sample_rate
+        else:
+            beat_outputs = np.linspace(0, window.frames / sample_rate, len(window.times))
+            for source_time, output_time in zip(window.times, beat_outputs):
+                add(float(source_time - trim_start), base + float(output_time), role + "_beat")
+        for index, (source_time, output_time) in enumerate(zip(window.times, beat_outputs)):
+            beat_maps[role].append({"beat": index, "source_seconds": float(source_time),
+                                    "output_seconds": base + float(output_time)})
+
     if head:
         prefix = float(head.times[0] - trim_start)
         if prefix > 1 / sample_rate:
             add(prefix, prefix / entry_rate, "intro_before_overlap")
         head_base = points[-1][1]
-        for index, source_time in enumerate(head.times):
-            output = head_base + index * head.frames / sample_rate / (len(head.times) - 1)
-            add(float(source_time - trim_start), output, "head_beat")
-            beat_maps["head"].append({"beat": index, "source_seconds": float(source_time),
-                                      "output_seconds": output})
+        overlap(head, head_base, "head")
         body_begin = float(head.times[-1] - trim_start)
     else:
         body_begin = 0.0
@@ -325,8 +340,8 @@ def _warp_anchors(record: Mapping[str, Any], *, trim_start: float,
     downbeats = _array(record.get("downbeats"), "downbeats") - trim_start
     body_span = max(0.0, body_end - body_begin)
     body_output_base = points[-1][1]
-    entry_changes = abs(entry_rate - 1.0) > 1e-12
-    exit_changes = abs(exit_rate - 1.0) > 1e-12
+    entry_changes = abs(entry_rate - 1.0) > 1e-5
+    exit_changes = abs(exit_rate - 1.0) > 1e-5
     if body_span <= 1 / sample_rate and (entry_changes or exit_changes):
         raise RenderError("No body remains for a continuous tempo ramp outside the overlaps")
     # ds/dt is the musical rate. A smoothstep has mean 1/2, hence a ramp
@@ -433,11 +448,7 @@ def _warp_anchors(record: Mapping[str, Any], *, trim_start: float,
             })
     if tail:
         tail_base = points[-1][1]
-        for index, source_time in enumerate(tail.times):
-            output = tail_base + index * tail.frames / sample_rate / (len(tail.times) - 1)
-            add(float(source_time - trim_start), output, "tail_beat")
-            beat_maps["tail"].append({"beat": index, "source_seconds": float(source_time),
-                                      "output_seconds": output})
+        overlap(tail, tail_base, "tail")
         suffix = duration - float(tail.times[-1] - trim_start)
         if suffix > 1 / sample_rate:
             add(duration, points[-1][1] + suffix / exit_rate, "outro_after_overlap")
@@ -476,9 +487,14 @@ def _warp_anchors(record: Mapping[str, Any], *, trim_start: float,
         # Only measured overlap timing is regularised. Body time maps contain
         # deliberate musical automation, not a correction to observed beats.
         if head and middle < float(head.times[-1] - trim_start) - 1e-8:
-            timing_corrections.append(abs(float(rate) / entry_rate - 1))
+            if not head.clock:
+                timing_corrections.append(abs(float(rate) / entry_rate - 1))
         elif tail and middle > float(tail.times[0] - trim_start) + 1e-8:
-            timing_corrections.append(abs(float(rate) / exit_rate - 1))
+            if not tail.clock:
+                timing_corrections.append(abs(float(rate) / exit_rate - 1))
+    for window in (head, tail):
+        if window and window.clock:
+            timing_corrections.extend(np.abs(np.diff(window.times) / (60 / native_bpm) - 1).tolist())
     max_timing = max(timing_corrections, default=0.0)
     if max_timing > max_local_warp_change + 1e-5:
         raise RenderError(f"Local timing correction {max_timing:.1%} exceeds {max_local_warp_change:.1%}")
@@ -488,10 +504,10 @@ def _warp_anchors(record: Mapping[str, Any], *, trim_start: float,
         for anchor, reference in zip(anchors, reference_points))
     return {"anchors": anchors, "output_frames": anchors[-1]["output_frame"],
             "entry_musical_rate": entry_rate, "exit_musical_rate": exit_rate,
-            "max_musical_rate_change": max(abs(entry_rate - 1), abs(exit_rate - 1)),
+            "max_musical_rate_change": musical_change,
             "max_local_warp_rate_change": max_local, "input_output_beat_mapping": beat_maps,
             "max_timing_correction_change": max_timing,
-            "timing_correction_measurement": "overlap map slope divided by requested musical rate; body contains musical automation only",
+            "timing_correction_measurement": "constant overlap slope divided by requested rate, or source beat spacing versus native period for SYNC; body contains musical automation only",
             "max_anchor_quantization_error_seconds": quantization_error,
             "body_automation": "output-time cubic smoothstep entry-to-native and native-to-exit ramps; exact overlap beat anchors",
             "tempo_ramp_seconds_requested": requested_ramp,
@@ -571,9 +587,10 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                 max_outro_trim_seconds: float = 45.0,
                 strict_grid: bool = True, allow_unverified: bool = False,
                 allow_hard_cut: bool = False,
-                tempo_conflict_policy: str = "adaptive", bridge_overlap_beats: float = 8.0,
+                tempo_conflict_policy: str = "sync", bridge_overlap_beats: float = 8.0,
                 tempo_ramp_max_change: float = 0.25, tempo_ramp_seconds: float = 15.0,
                 native_exit_seconds: float = 8.0,
+                sync_max_change: float = 0.40, sync_transition_bars: int = 4,
                 target_rms_dbfs: float = -20.0, target_lufs: float = -18.0,
                 track_peak_ceiling: float = 0.50,
                 max_gain_db: float = 4.0, bass_hz: float = 180.0,
@@ -590,12 +607,17 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
     `echo_bridge` explicitly selects a native-tempo effect bridge for unresolved
     boundaries; it is not beatmatching. Edge `cue_locks` can mandate the incoming
     start and outgoing end in source seconds without claiming human verification.
+    `sync` shares one changing tempo/beat phase during the overlap, keeping the
+    main body native. A conservative post-render attack check records ambiguous
+    attacks instead of claiming complete acoustic verification.
     `adaptive` preserves incoming native timing on a large downshift using an
     outgoing-only vinyl speed/pitch effect over a short simultaneous overlap.
     `shared_tempo` retains the wider two-deck tempo experiment as an explicit choice.
     """
     if sample_rate < 8000 or transition_bars not in {8, 16, 32}:
         raise RenderError("Use a valid sample rate and 8, 16 or 32 transition bars")
+    if not math.isfinite(sync_max_change) or not 0 < sync_max_change < 0.5 or sync_transition_bars not in {2, 4, 8}:
+        raise RenderError("SYNC needs a positive temporary rate cap below 0.5 and 2, 4 or 8 bars")
     if rubberband_engine not in {"r2", "r3"}:
         raise RenderError("Rubber Band engine must be r2 or r3")
     if not 0 < max_tempo_change < 0.5 or not 0 < max_local_warp_change < 0.5:
@@ -682,6 +704,42 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
             if strict_grid and not allow_unverified:
                 raise RenderError(reason + "; import/review a grid or explicitly allow unverified fades")
             matched = False
+        if tempo_conflict_policy == "sync" and usable_for_search and not allow_hard_cut:
+            from .sync import shared_clock
+            native_a = _finite(by_id[outgoing].get("bpm"), "native outgoing BPM")
+            native_b = _finite(by_id[incoming].get("bpm"), "native incoming BPM")
+            if min(native_a, native_b) <= 0:
+                raise RenderError("SYNC requires positive measured BPM on both decks")
+            change = max(abs(native_b / native_a - 1), abs(native_a / native_b - 1))
+            if change > sync_max_change + 1e-6:
+                raise RenderError(f"{outgoing} → {incoming}: common SYNC curve needs {change:.1%} temporary rate change; cap {sync_max_change:.1%}")
+            count = sync_transition_bars if change > max_tempo_change else transition_bars
+            clock = shared_clock(native_a, native_b, count * 4, sample_rate)
+            h = _select_window(by_id[incoming], gb, region="head", count=count,
+                               locked_cue_seconds=in_lock, target_bpm=native_b, sample_rate=sample_rate,
+                               max_trim_seconds=max_intro_trim_seconds, max_local_warp_change=max_local_warp_change,
+                               minimum_grid_confidence=minimum_grid_confidence)
+            t = _select_window(by_id[outgoing], ga, region="tail", count=count,
+                               locked_cue_seconds=out_lock, target_bpm=native_a, sample_rate=sample_rate,
+                               max_trim_seconds=max_outro_trim_seconds, max_local_warp_change=max_local_warp_change,
+                               minimum_grid_confidence=minimum_grid_confidence)
+            h.clock = t.clock = clock
+            h.frames = t.frames = clock["frames"]
+            head[incoming], tail[outgoing] = h, t
+            musical_caps[incoming] = max(musical_caps[incoming], sync_max_change)
+            musical_caps[outgoing] = max(musical_caps[outgoing], sync_max_change)
+            transitions.append({"from": outgoing, "to": incoming, "mode": "beatmapped_bass_swap",
+                                "tempo_technique": "shared_phase_sync", "shared_clock": clock,
+                                "musical_tempo_limit": sync_max_change, "beatmatched": True,
+                                "bars": count, "beats": count * 4, "target_bpm": None,
+                                "overlap_frames": clock["frames"],
+                                "outgoing_source_start": float(t.times[0]), "outgoing_source_end": float(t.times[-1]),
+                                "incoming_source_start": float(h.times[0]), "incoming_source_end": float(h.times[-1]),
+                                "outgoing_cue": t.cue_provenance, "incoming_cue": h.cue_provenance,
+                                "bar_alignment": "one-to-one shared beat phase from supplied grids",
+                                "phrase_alignment": "bar grouping only; phrase review pending",
+                                "human_reviewed": False})
+            continue
         if matched and float(gb[3][0]) > max_intro_trim_seconds:
             reason = "first incoming downbeat would discard too much introductory audio"
             matched = False
@@ -898,6 +956,29 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                     if difference < 0:
                         dest.write(np.zeros((-difference, 2), dtype=np.float32))
                 fixed.replace(clip_output)
+            if (head[identity] and head[identity].clock) or (tail[identity] and tail[identity].clock):
+                from .sync import transient_drift, compensate_backend_drift
+                audits = []
+                for attempt in range(6):
+                    audit = transient_drift(clip_input, clip_output, warp, sample_rate)
+                    audits.append(audit)
+                    maximum = audit["maximum_measured_drift_seconds"]
+                    if maximum is None or maximum <= .003 or attempt == 5:
+                        break
+                    # The backend can switch a transient's alignment at a
+                    # detector threshold. Damped follow-ups prevent oscillation.
+                    compensate_backend_drift(warp, audit, sample_rate, strength=1.0 if attempt == 0 else .5)
+                    map_path.write_text("".join(f"{p['source_frame']} {p['output_frame']}\n" for p in warp["anchors"]), encoding="ascii")
+                    _run([rubberband, *engine_args, "--centre-focus", "--ignore-clipping", "--quiet",
+                          "--time", f"{ratio:.12f}", "--timemap", map_path.name,
+                          clip_input.name, clip_output.name], cwd=directory)
+                    if sf.info(clip_output).frames != warp["output_frames"]:
+                        raise RenderError("Compensated SYNC render did not retain its exact declared duration")
+                warp["post_render_transient_audit"] = {"iterations": audits,
+                    "final": audits[-1], "tolerance_seconds": .003,
+                    "all_interior_attacks_within_tolerance": bool(audits[-1]["all_interior_beats_verified"] and
+                        audits[-1]["maximum_measured_drift_seconds"] <= .003),
+                    "backend_controls_precompensated": len(audits) > 1}
             clip_input.unlink()
         else:
             clip_input.replace(clip_output)
@@ -1022,6 +1103,8 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                            "tempo_ramp_max_change": tempo_ramp_max_change,
                            "tempo_ramp_requested_output_seconds": tempo_ramp_seconds,
                            "native_exit_seconds": native_exit_seconds,
+                           "sync_max_temporary_rate_change": sync_max_change,
+                           "sync_transition_bars": sync_transition_bars,
                            "native_exit_max_slowdown": 0.35,
                            "max_local_timing_warp_change": max_local_warp_change,
                            "minimum_grid_confidence": minimum_grid_confidence,
