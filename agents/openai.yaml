@@ -1,4 +1,4 @@
 interface:
-  display_name: "SuperDJ"
+  display_name: "AI Super DJ"
   short_description: "Plan, mix, master, and verify local DJ sets"
-  default_prompt: "Use $superdj to make a DJ set from my local tracks: optimize the order when requested, preserve any order I specify, and deliver verified FLAC audio with a timed playlist."
+  default_prompt: "Use $ai-super-dj to make or review my DJ set, preserve my agreed cues and order, and check the final audio."

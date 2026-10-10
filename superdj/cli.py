@@ -45,14 +45,14 @@ def plan(args, records=None):
                          seed=args.seed or 0, energy_arc=args.energy_arc, max_tempo_change=args.max_tempo_change,
                          allow_tempo_reset=not args.no_tempo_reset)
     write_json(Path(args.work) / "plan.json", result)
-    print(f"Planned {len(result['order'])} tracks; {result['tempo_reset_count']} tempo resets; {result['method']}", flush=True)
+    print(f"Planned {len(result['order'])} tracks; {result['tempo_reset_count']} tempo conflicts requiring review; {result['method']}", flush=True)
     return result
 
 
 def render(args, records=None, planned=None):
     from .adapters import master_set, prepare_tracks
     from .quality import export_audio, measure_audio
-    from .render import render_plan
+    from .render import render_plan, validate_transition_policy
     work = private_path(args.work)
     directory = private_path(args.output)
     work.mkdir(parents=True, exist_ok=True)
@@ -63,6 +63,8 @@ def render(args, records=None, planned=None):
         raise FileExistsError("Output already exists; use a new name or --overwrite")
     records = records if records is not None else _records(args.records)
     planned = planned if planned is not None else read_json(args.plan)
+    validate_transition_policy(planned, allow_hard_cut=args.allow_hard_cut,
+                               allow_unverified=args.allow_unverified)
     # Preserve previous intermediates when a user deliberately repeats a run.
     if (work / "premix.wav").exists():
         work = work / ("run_" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S_%f"))
@@ -89,6 +91,7 @@ def render(args, records=None, planned=None):
                            max_tempo_change=planned.get("constraints", {}).get("max_tempo_change_per_deck", 0.06),
                            max_intro_trim_seconds=args.max_intro_trim_seconds,
                            transition_bars=args.transition_bars, allow_unverified=args.allow_unverified,
+                           allow_hard_cut=args.allow_hard_cut,
                            progress=lambda s: print(s, flush=True))
     write_json(work / "render.json", rendered)
     if len(rendered["tracks"]) != len(records) or len({t["id"] for t in rendered["tracks"]}) != len(records):
@@ -106,7 +109,7 @@ def render(args, records=None, planned=None):
                 "listening_review": "pending human audition; measurements do not certify musical quality"}
     write_json(directory / f"{args.name}_manifest.json", manifest)
     names = {r["id"]: Path(r["path"]).stem for r in records}
-    lines = ["SuperDJ — timed playlist", ""]
+    lines = ["AI Super DJ — timed playlist", ""]
     for index, track in enumerate(rendered["tracks"], 1):
         seconds = float(track.get("start_seconds", track.get("start_s", 0)))
         hours, minutes, seconds = int(seconds // 3600), int(seconds % 3600 // 60), int(seconds % 60)
@@ -119,6 +122,56 @@ def render(args, records=None, planned=None):
 def _audio(parser):
     parser.add_argument("--ffmpeg", default="ffmpeg")
     parser.add_argument("--ffprobe", default="ffprobe")
+
+
+def djstudio_audit(args):
+    """Inspect native metadata and exported chapters without changing the mix."""
+    import json
+    import subprocess
+    from .djstudio import audit_djstudio
+    from .quality import measure_audio
+    work = private_path(args.work)
+    inputs = [Path(p).expanduser().resolve() for p in (args.project, args.cue, args.audio) if p]
+    for name in ("djstudio_audit.json", "djstudio_audit.json.partial", "export_qa.log"):
+        target = work / name
+        if any(target.resolve() == source or
+               (target.exists() and source.exists() and target.samefile(source)) for source in inputs):
+            raise ValueError("Audit output must not overwrite a project, CUE or audio input")
+    duration = None
+    measurement = None
+    if args.measure and not args.audio:
+        raise ValueError("--measure requires --audio")
+    if args.audio:
+        if args.measure:
+            measurement = measure_audio(args.audio, ffmpeg=args.ffmpeg, ffprobe=args.ffprobe,
+                                        log=work / "export_qa.log")
+            duration = measurement["duration_seconds"]
+        else:
+            result = subprocess.run([args.ffprobe, "-v", "error", "-select_streams", "a:0",
+                                     "-show_streams", "-show_format", "-of", "json", args.audio],
+                                    capture_output=True, check=True)
+            data = json.loads(result.stdout)
+            if not data.get("streams"):
+                raise ValueError("Export has no audio stream")
+            stream = data["streams"][0]
+            duration = float(stream.get("duration") or data["format"]["duration"])
+            measurement = {"path": str(Path(args.audio).resolve()), "codec": stream["codec_name"],
+                           "sample_rate": int(stream["sample_rate"]), "channels": int(stream["channels"]),
+                           "duration_seconds": duration, "full_decode_ok": None,
+                           "measurement": "container probe only; no loudness, peaks or full decode check"}
+    report = audit_djstudio(args.project, cue=args.cue, export_duration_s=duration,
+                            minimum_track_s=args.min_track_seconds,
+                            include_native_state=args.include_native_state)
+    report["audio_measurement"] = measurement
+    declared_duration = report.get("project_duration_metadata_s")
+    if duration is not None and declared_duration is not None and abs(duration - declared_duration) > 2.0:
+        report["warnings"].append("Project duration metadata differs from the exported audio; "
+                                  "use the export duration for timeline review and investigate the mismatch.")
+    report["listening_review"] = "pending; metadata and measurements do not certify audible quality"
+    write_json(work / "djstudio_audit.json", report)
+    print(f"AI Super DJ: {report['track_count']} tracks, {report['transition_count']} transitions; "
+          f"CUE order matches: {report['cue_order_matches']}. Report: {work / 'djstudio_audit.json'}", flush=True)
+    return report
 
 
 def _source(parser):
@@ -149,7 +202,7 @@ def _planning(parser, seed=True):
 
 def _rendering(parser):
     parser.add_argument("--output", required=True)
-    parser.add_argument("--name", default="SuperDJ_001")
+    parser.add_argument("--name", default="AI_Super_DJ_001")
     parser.add_argument("--audamcp", required=True, help="Audited external checkout")
     parser.add_argument("--bitwize", required=True, help="Audited external checkout")
     parser.add_argument("--git", default="git")
@@ -161,12 +214,13 @@ def _rendering(parser):
                         help="Maximum intro skipped to reach a stable musical transition window")
     parser.add_argument("--target-lufs", type=float, default=-14.0)
     parser.add_argument("--allow-unverified", action="store_true", help="Allow explicitly labelled free-time short transitions when grids are uncertain")
+    parser.add_argument("--allow-hard-cut", action="store_true", help="Explicitly permit deliberate zero-overlap tempo resets; disabled by default")
     parser.add_argument("--no-mp3", action="store_true")
     parser.add_argument("--overwrite", action="store_true")
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(prog="superdj", description="Offline DJ analysis, ordering, rendering and verified export")
+    parser = argparse.ArgumentParser(prog="ai-super-dj", description="AI Super DJ: offline analysis, ordering, rendering and verified export")
     subs = parser.add_subparsers(dest="command", required=True)
     ap = subs.add_parser("analyze")
     ap.add_argument("--work", required=True)
@@ -180,6 +234,15 @@ def main(argv=None):
     runp = subs.add_parser("run")
     runp.add_argument("--work", required=True)
     _audio(runp); _source(runp); _planning(runp, seed=False); _rendering(runp)
+    djp = subs.add_parser("djstudio-audit", help="Read-only DJ.Studio project/CUE/export audit")
+    djp.add_argument("--project", required=True, help="Native .djs archive; never modified")
+    djp.add_argument("--cue", help="Exported CUE chapters")
+    djp.add_argument("--audio", help="Exported audio for duration and optional full-file QA")
+    djp.add_argument("--work", required=True, help="Private report folder outside this repository")
+    djp.add_argument("--min-track-seconds", type=float, default=120.0)
+    djp.add_argument("--include-native-state", action="store_true", help="Preserve complete native metadata in the private report")
+    djp.add_argument("--measure", action="store_true", help="Decode and measure the complete exported audio")
+    _audio(djp)
     setup = subs.add_parser("setup", help="Fetch pinned external checkouts and optionally official model weights")
     setup.add_argument("--components", required=True); setup.add_argument("--git", default="git")
     setup.add_argument("--download-model", action="store_true"); setup.add_argument("--cache"); setup.add_argument("--checkpoint", default="final0")
@@ -192,6 +255,8 @@ def main(argv=None):
         render(args)
     elif args.command == "run":
         records = analyze(args); planned = plan(args, records); render(args, records, planned)
+    elif args.command == "djstudio-audit":
+        djstudio_audit(args)
     else:
         from .adapters import setup_components
         setup_components(args.components, args.git)

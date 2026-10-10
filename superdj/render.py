@@ -25,6 +25,24 @@ class RenderError(ValueError):
     """A plan cannot be rendered under the declared timing constraints."""
 
 
+def validate_transition_policy(plan: Mapping[str, Any], *, allow_hard_cut: bool = False,
+                               allow_unverified: bool = False) -> None:
+    """Reject unresolved boundaries before audio preparation or output creation.
+
+    A tempo reset is a review condition, not permission to stop one deck and
+    start the other. Deliberate cuts and unverified fades have separate opt-ins.
+    """
+    if allow_hard_cut or allow_unverified:
+        return
+    for edge in plan.get("edges", []):
+        if edge.get("tempo_reset") or not (edge.get("tempo") or {}).get("beatmatch_possible"):
+            raise RenderError(
+                f"{edge.get('from')} → {edge.get('to')}: transition needs review; "
+                "automatic hard cuts are disabled. Choose a reviewed blend/bridge, "
+                "or explicitly allow a deliberate hard cut or unverified fade."
+            )
+
+
 @dataclass
 class _Window:
     times: np.ndarray
@@ -391,6 +409,7 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                 minimum_grid_confidence: float = 0.75, max_intro_trim_seconds: float = 32.0,
                 max_outro_trim_seconds: float = 45.0,
                 strict_grid: bool = True, allow_unverified: bool = False,
+                allow_hard_cut: bool = False,
                 target_rms_dbfs: float = -20.0, target_lufs: float = -18.0,
                 track_peak_ceiling: float = 0.50,
                 max_gain_db: float = 4.0, bass_hz: float = 180.0,
@@ -403,6 +422,7 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
     explicit short unverified fades instead of calling them beatmatched blends.
     A musical BPM change limit and a separate microtiming correction limit are
     applied and reported. Output is never overwritten, and no audio is uploaded.
+    Zero-overlap tempo resets require the separate `allow_hard_cut` opt-in.
     """
     if sample_rate < 8000 or transition_bars not in {8, 16, 32}:
         raise RenderError("Use a valid sample rate and 8, 16 or 32 transition bars")
@@ -422,6 +442,8 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
     for i, edge in enumerate(edges):
         if str(edge.get("from")) != order[i] or str(edge.get("to")) != order[i + 1]:
             raise RenderError("Plan edges disagree with track order")
+    validate_transition_policy(plan, allow_hard_cut=allow_hard_cut,
+                               allow_unverified=allow_unverified)
     directory = Path(work_dir).expanduser().resolve()
     directory.mkdir(parents=True, exist_ok=True)
     output = Path(output_path).expanduser().resolve()
@@ -491,9 +513,12 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                 reason = str(exc)
                 matched = False
         if not matched:
+            if not allow_hard_cut and not allow_unverified:
+                raise RenderError(f"{outgoing} → {incoming}: {reason or 'no feasible common tempo'}; "
+                                  "transition needs review; automatic hard cuts are disabled")
             mode = "unverified_short_crossfade"
             reset_cues: dict[str, Any] = {}
-            if usable_for_search:
+            if usable_for_search and allow_hard_cut:
                 try:
                     hreset = _choose_window(by_id[incoming], gb, region="head", count=8,
                                             target_bpm=_finite(by_id[incoming].get("bpm"), "native incoming BPM"),

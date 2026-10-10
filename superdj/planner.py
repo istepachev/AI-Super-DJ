@@ -215,10 +215,11 @@ def _edge(a: _Track, b: _Track, limit: float, weights: Mapping[str, float],
     if has_similarity:
         reasons.append("acoustic embedding similarity considered")
     if reset:
-        reasons.append("use an explicit tempo reset; do not stretch outside limit")
+        reasons.append("transition needs review: choose a deliberate bridge or technique; do not stretch outside limit")
     cost = sum(components.values()) if allow_reset or not reset else math.inf
     return {"from": a.id, "to": b.id, "cost": cost, "components": components,
-            "tempo": tempo, "tempo_reset": reset, "harmonic_relation": harmonic_reason,
+            "tempo": tempo, "tempo_reset": reset, "transition_review_required": reset,
+            "harmonic_relation": harmonic_reason,
             "confidence": {"key": confidence, "bpm": bpm_confidence},
             "reasons": reasons}
 
@@ -516,7 +517,7 @@ def plan_tracks(records: Sequence[Mapping[str, Any]], *, mode: str = "auto",
     if low_confidence:
         warnings.append("Low-confidence musical analysis needs review; confidence is not a calibrated probability")
     if reset_count:
-        warnings.append(f"{reset_count} transitions need explicit tempo resets; these are not beatmatched blends")
+        warnings.append(f"{reset_count} transitions need review; no beatmatched blend within the declared tempo limit; default render refuses automatic hard cuts")
     warnings.append("This plan does not validate bar-one or phrase boundaries; verify them before rendering")
     return {
         "schema_version": 1, "mode": mode, "method": method,
@@ -535,4 +536,5 @@ def plan_tracks(records: Sequence[Mapping[str, Any]], *, mode: str = "auto",
                         "allow_tempo_reset": allow_tempo_reset,
                         "all_tracks_once": True, "seed": seed},
         "tempo_reset_count": reset_count,
+        "render_readiness": "needs_transition_review" if reset_count else "candidate_pending_grid_and_phrase_review",
     }

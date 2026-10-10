@@ -85,6 +85,8 @@ class PlannerTests(unittest.TestCase):
         tempo = result["edges"][0]["tempo"]
         self.assertEqual(result["tempo_reset_count"], 1)
         self.assertIsNone(tempo["target_bpm"])
+        self.assertEqual(result["render_readiness"], "needs_transition_review")
+        self.assertTrue(result["edges"][0]["transition_review_required"])
         self.assertEqual(tempo["outgoing_rate"], 1.0)
         self.assertEqual(tempo["incoming_rate"], 1.0)
         with self.assertRaisesRegex(ValueError, "No complete path"):

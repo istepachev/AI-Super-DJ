@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "superdj"
-version = "0.1.0"
-description = "Offline, explainable DJ planning and audio rendering"
+version = "0.2.0"
+description = "AI Super DJ: offline planning, DJ.Studio audits and audio rendering"
 requires-python = ">=3.12"
 license = {text = "MIT"}
 dependencies = ["numpy>=2,<3", "scipy>=1.14,<2", "soundfile>=0.13,<1", "librosa>=0.11,<2", "pyloudnorm>=0.1,<1", "PyYAML>=6,<7"]
@@ -17,6 +17,7 @@ test = ["pytest>=8,<10"]
 
 [project.scripts]
 superdj = "superdj.cli:main"
+ai-super-dj = "superdj.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["superdj*"]

@@ -1,9 +1,9 @@
 ---
-name: superdj
-description: Build an offline DJ set from local audio with a fixed or optimized track order, reviewed beat and phrase cues, selective restoration, mastering, and verified FLAC export. Use for making or improving a DJ mix, including harmonic sequencing; a track list alone is enough to begin planning.
+name: ai-super-dj
+description: Build or review local DJ sets with fixed or optimized order, beat and phrase cues, selective restoration, mastering, verified FLAC export, and DJ.Studio project/export audits. Use for making or improving a DJ mix, including harmonic sequencing.
 ---
 
-# SuperDJ
+# AI Super DJ
 
 Make a listenable set with an auditable plan: source tracks, actual order, transition cues, processing decisions, and final quality measurements. Read [references/workflow.md](references/workflow.md) for the analysis, transition, restoration, and export procedure. Read [THIRD_PARTY.md](THIRD_PARTY.md) before adding or changing an upstream adapter.
 
@@ -24,6 +24,8 @@ The optional Beat This! neural backend predicts beats and downbeats across the c
 
 Review uncertain tempo/octave choices, changing-tempo tracks, bar starts, and phrase cues before a strict phrase-aligned render. A listening check or a supplied verified cue can resolve them. Store cue provenance and overrides. If evidence remains uncertain, produce a review plan or choose a clearly labelled free-time transition when the user permits it; do not report verified square alignment.
 
+A tempo conflict is a review condition. The default renderer refuses an unresolved boundary rather than silently replacing a blend with a zero-overlap cut. `--allow-hard-cut` is only for a deliberately requested cut; `--allow-unverified` permits a labelled short fade and does not authorize a hard cut. Creative echo/break bridges are not implemented yet. Do not promise that refusing a poor transition automatically produces a better one.
+
 Prefer small, pitch-preserving tempo changes and useful intro/outro or instrumental regions. Avoid two prominent vocal passages and two full bass lines playing together. Keep a difficult fixed-order boundary visible in the plan. Harmonic compatibility is a musical heuristic, not proof that a transition sounds good.
 
 ## Processing and delivery
@@ -34,6 +36,12 @@ Prefer small, pitch-preserving tempo changes and useful intro/outro or instrumen
 - Export the final lossless master as explicitly configured 24-bit FLAC at an appropriate sample rate. MP3 is an optional listening copy. FLAC preserves the processed signal; it cannot recover details removed by an earlier lossy encoder. Raising the bit depth or sample rate does not prove improved fidelity.
 - Measure the encoded final file independently of the mastering processor: full decode, duration, channels, sample rate, bit depth, integrated loudness, sample peak, and oversampled true peak. Inspect all transition excerpts for rhythm, phrasing, vocals, and bass balance. Quantitative checks do not replace listening.
 - Deliver audio, a timed track list, a transition/processing manifest, and a brief report of what was verified and what remains approximate. Do not claim a completed audio set when only a plan or synthetic test exists.
+
+## DJ.Studio projects and exported sets
+
+For an existing `.djs` project or exported MP3/CUE, read [references/djstudio.md](references/djstudio.md). Use the project adapter for inspection and preserve the agreed order, cue points, custom curves, and vocal inserts. The adapter does not render DJ.Studio automation or edit its archive. CUE chapter intervals, selected source spans, and actual audible track durations are different measurements; do not substitute one for another or assume a stale project duration matches its export.
+
+Keep any requested minimum track length and protected words/sections visible as constraints. The standalone renderer does not yet enforce minimum track duration, protected cue ranges, custom per-edge transition lengths, or vocal stems. A native project with these decisions needs a preserving workflow rather than a fresh generic automatic render. The proposed “своди как DJ Жилин” mode is deferred and must not be advertised as implemented.
 
 ## Local and public artifacts
 

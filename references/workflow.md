@@ -32,7 +32,7 @@ In `fixed` mode compute the cost and technique of each existing boundary, retain
 
 Useful edge-cost terms are Camelot/key compatibility with uncertainty, stretch needed for common tempo, energy difference relative to the intended arc, transition-region suitability, and vocals/bass overlap. An uncertain key should weaken its influence. The analyzer's sustained midband proxy is not a learned vocal detector: guitars and synths can resemble vocals. A high-confidence tempo conflict or missing phrase cue should remain visible even when the combined numerical score is good. Give proposed candidates and reasons when the user asks for the next track. The reported top-three candidates use immediate edge plus next-position energy cost, not three alternative globally optimized playlists.
 
-SuperDJ's transparent optimizer is an independent approach. Do not describe it as an implementation or reproduction of DJStudio's proprietary Harmonize AI unless its internals have actually been made available and verified.
+AI Super DJ's transparent optimizer is an independent approach. Do not describe it as an implementation or reproduction of DJStudio's proprietary Harmonize AI unless its internals have actually been made available and verified.
 
 ## Transition plan and review
 
@@ -42,7 +42,7 @@ For 4/4 music, 8, 16, and 32 bars correspond to 32, 64, and 128 beats. This arit
 
 Preserve the beat-to-time mapping after stretching. For a constant BPM change with unchanged pitch, duration ratio is source BPM / target BPM; the inverse is a tempo multiplier. The Rubber Band CLI `-t` argument is a duration ratio. Check output length and transient positions rather than trusting an option label.
 
-Create transition excerpts containing the preceding section, overlap, and following section. Audition them when an audio listening tool is available; otherwise explicitly mark human listening review pending and provide the excerpts for the user. Check kicks and snares, phase drift, phrase changes, vocal collisions, and bass build-up. Use a shorter blend, instrumental cue, controlled bass exchange, echo exit, or free-time cut when the material calls for it. Record the actual technique rather than calling every crossfade beatmatched.
+Create transition excerpts containing the preceding section, overlap, and following section. Audition them when an audio listening tool is available; otherwise explicitly mark human listening review pending and provide the excerpts for the user. Check kicks and snares, phase drift, phrase changes, vocal collisions, and bass build-up. Consider a shorter blend, instrumental cue, controlled bass exchange, or creative bridge when the material calls for it, and verify backend support before promising it. Echo/break bridges are not implemented in the current renderer. Unresolved transitions stop the default render; a deliberate cut requires `--allow-hard-cut`, and a labelled short fade requires `--allow-unverified`. Record the actual technique rather than calling every crossfade beatmatched.
 
 ## Restoration and upstream adapters
 

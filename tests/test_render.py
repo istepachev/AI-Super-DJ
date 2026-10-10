@@ -28,6 +28,19 @@ def plan(a, b, target=122):
 
 
 class TimingTests(unittest.TestCase):
+    def test_unresolved_tempo_reset_refused_before_files_or_backend_calls(self):
+        planned = plan("a", "b")
+        planned["edges"][0]["tempo_reset"] = True
+        planned["edges"][0]["tempo"]["beatmatch_possible"] = False
+        with tempfile.TemporaryDirectory() as temp:
+            directory = Path(temp)
+            with self.assertRaisesRegex(RenderError, "automatic hard cuts are disabled"):
+                render_plan(planned, [record("a", bpm=174), record("b", bpm=128)], {},
+                            directory / "set.wav", directory / "work",
+                            ffmpeg="must-not-run", rubberband="must-not-run")
+            self.assertFalse((directory / "set.wav").exists())
+            self.assertFalse((directory / "work").exists())
+
     def test_variable_native_tempos_share_exact_overlap_anchors(self):
         sr = 8000
         track = record("a")
@@ -181,7 +194,7 @@ class ExternalTimingTests(unittest.TestCase):
             planned["edges"][0]["tempo_reset"] = True
             result = render_plan(planned, records, {}, directory / "set.wav", directory / "work",
                                  sample_rate=sr, ffmpeg=os.getenv("SUPERDJ_FFMPEG") or shutil.which("ffmpeg"),
-                                 rubberband="not-invoked")
+                                 rubberband="not-invoked", allow_hard_cut=True)
             transition = result["transitions"][0]
             self.assertEqual(transition["mode"], "bar_tempo_reset")
             self.assertFalse(transition["beatmatched"])
@@ -190,6 +203,11 @@ class ExternalTimingTests(unittest.TestCase):
             self.assertLess(evidence["whole_track_confidence"], 0.75)
             self.assertGreater(evidence["local_timing_confidence"], 0.75)
             self.assertEqual(sf.info(directory / "set.wav").subtype, "FLOAT")
+            faded = render_plan(planned, records, {}, directory / "fade.wav", directory / "fade-work",
+                                sample_rate=sr, ffmpeg=os.getenv("SUPERDJ_FFMPEG") or shutil.which("ffmpeg"),
+                                rubberband="not-invoked", allow_unverified=True)
+            self.assertEqual(faded["transitions"][0]["mode"], "unverified_short_crossfade")
+            self.assertGreater(faded["transitions"][0]["overlap_frames"], 0)
 
     @unittest.skipUnless((os.getenv("SUPERDJ_FFMPEG") or shutil.which("ffmpeg")) and
                          (os.getenv("SUPERDJ_RUBBERBAND") or shutil.which("rubberband")),
