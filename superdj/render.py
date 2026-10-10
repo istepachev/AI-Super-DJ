@@ -26,13 +26,16 @@ class RenderError(ValueError):
 
 
 def validate_transition_policy(plan: Mapping[str, Any], *, allow_hard_cut: bool = False,
-                               allow_unverified: bool = False) -> None:
+                               allow_unverified: bool = False,
+                               tempo_conflict_policy: str = "review") -> None:
     """Reject unresolved boundaries before audio preparation or output creation.
 
     A tempo reset is a review condition, not permission to stop one deck and
     start the other. Deliberate cuts and unverified fades have separate opt-ins.
     """
-    if allow_hard_cut or allow_unverified:
+    if tempo_conflict_policy not in {"review", "echo_bridge"}:
+        raise RenderError("Tempo conflict policy must be review or echo_bridge")
+    if allow_hard_cut or allow_unverified or tempo_conflict_policy == "echo_bridge":
         return
     for edge in plan.get("edges", []):
         if edge.get("tempo_reset") or not (edge.get("tempo") or {}).get("beatmatch_possible"):
@@ -234,6 +237,33 @@ def _choose_window(record: Mapping[str, Any], grid: tuple[Any, ...], *,
     return min(candidates, key=lambda item: (item[0], item[1]))[2]
 
 
+def _select_window(record: Mapping[str, Any], grid: tuple[Any, ...], *,
+                   locked_cue_seconds: float | None = None, **kwargs: Any) -> _Window:
+    """An explicit boundary lock is mandatory, never merely a score bonus."""
+    if locked_cue_seconds is None:
+        return _choose_window(record, grid, **kwargs)
+    cue = _finite(locked_cue_seconds, "locked cue")
+    downbeats = grid[3]
+    if not len(downbeats):
+        raise RenderError("A locked cue requires a downbeat grid")
+    index = int(np.argmin(np.abs(downbeats - cue)))
+    if abs(float(downbeats[index]) - cue) > 1 / kwargs["sample_rate"] + 1e-6:
+        raise RenderError("Locked cue is not on the supplied downbeat grid; review it instead of moving it")
+    count = kwargs["count"]
+    first = index if kwargs["region"] == "head" else index - count
+    if first < 0 or first + count >= len(downbeats):
+        raise RenderError("Locked cue does not leave a complete transition window")
+    constrained = (*grid[:3], downbeats[first:first + count + 1], grid[4])
+    window = _choose_window(record, constrained, **kwargs)
+    window.cue_provenance["bar_index"] += first
+    window.cue_provenance["mandatory_boundary"] = {
+        "region": kwargs["region"], "seconds": cue,
+        "human_reviewed": bool((record.get("grid") or {}).get("human_reviewed")),
+        "selection": "explicit boundary lock; no relocation permitted",
+    }
+    return window
+
+
 def _warp_anchors(record: Mapping[str, Any], *, trim_start: float,
                   trim_end: float, source_frames: int, sample_rate: int,
                   head: _Window | None, tail: _Window | None,
@@ -410,6 +440,7 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                 max_outro_trim_seconds: float = 45.0,
                 strict_grid: bool = True, allow_unverified: bool = False,
                 allow_hard_cut: bool = False,
+                tempo_conflict_policy: str = "review", bridge_overlap_beats: float = 8.0,
                 target_rms_dbfs: float = -20.0, target_lufs: float = -18.0,
                 track_peak_ceiling: float = 0.50,
                 max_gain_db: float = 4.0, bass_hz: float = 180.0,
@@ -423,6 +454,9 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
     A musical BPM change limit and a separate microtiming correction limit are
     applied and reported. Output is never overwritten, and no audio is uploaded.
     Zero-overlap tempo resets require the separate `allow_hard_cut` opt-in.
+    `echo_bridge` explicitly selects a native-tempo effect bridge for unresolved
+    boundaries; it is not beatmatching. Edge `cue_locks` can mandate the incoming
+    start and outgoing end in source seconds without claiming human verification.
     """
     if sample_rate < 8000 or transition_bars not in {8, 16, 32}:
         raise RenderError("Use a valid sample rate and 8, 16 or 32 transition bars")
@@ -432,6 +466,9 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
         raise RenderError("Tempo limits must be positive fractions below 0.5")
     if not 0 < track_peak_ceiling < 1 or not 0 <= minimum_grid_confidence <= 1:
         raise RenderError("Invalid peak ceiling or grid confidence")
+    bridge_overlap_beats = _finite(bridge_overlap_beats, "bridge overlap beats")
+    if not 4 <= bridge_overlap_beats <= 32:
+        raise RenderError("Echo bridge must span 4 to 32 incoming beats")
     by_id = {str(r["id"]): r for r in (records.values() if isinstance(records, Mapping) else records)}
     order = [str(item) for item in plan.get("order", [])]
     if not order or len(set(order)) != len(order) or set(order) != set(by_id):
@@ -443,7 +480,8 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
         if str(edge.get("from")) != order[i] or str(edge.get("to")) != order[i + 1]:
             raise RenderError("Plan edges disagree with track order")
     validate_transition_policy(plan, allow_hard_cut=allow_hard_cut,
-                               allow_unverified=allow_unverified)
+                               allow_unverified=allow_unverified,
+                               tempo_conflict_policy=tempo_conflict_policy)
     directory = Path(work_dir).expanduser().resolve()
     directory.mkdir(parents=True, exist_ok=True)
     output = Path(output_path).expanduser().resolve()
@@ -461,9 +499,15 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
         outgoing, incoming = order[index:index + 2]
         ga, gb = grids[outgoing], grids[incoming]
         tempo = edge.get("tempo") or {}
+        locks = edge.get("cue_locks") or {}
+        if not isinstance(locks, Mapping):
+            raise RenderError("cue_locks must be a mapping")
+        in_lock, out_lock = locks.get("incoming_start_seconds"), locks.get("outgoing_end_seconds")
         reason = ""
         matched = bool(tempo.get("beatmatch_possible") and not edge.get("tempo_reset"))
         usable_for_search = (ga[0] or _local_validation_possible(by_id[outgoing], ga)) and (gb[0] or _local_validation_possible(by_id[incoming], gb))
+        if (in_lock is not None or out_lock is not None) and not usable_for_search:
+            raise RenderError(f"{outgoing} → {incoming}: mandatory cues require usable native grids")
         if not usable_for_search:
             reason = "; ".join(f"{identity}: {grid[1]}" for identity, grid in ((outgoing, ga), (incoming, gb)) if not grid[0])
             if strict_grid and not allow_unverified:
@@ -484,12 +528,14 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                 last_window_error = None
                 for window_bars in dict.fromkeys((bars, 8)):
                     try:
-                        h = _choose_window(by_id[incoming], gb, region="head", count=window_bars,
+                        h = _select_window(by_id[incoming], gb, region="head", count=window_bars,
+                                           locked_cue_seconds=in_lock,
                                            target_bpm=target, sample_rate=sample_rate,
                                            max_trim_seconds=max_intro_trim_seconds,
                                            max_local_warp_change=max_local_warp_change,
                                            minimum_grid_confidence=minimum_grid_confidence)
-                        t = _choose_window(by_id[outgoing], ga, region="tail", count=window_bars,
+                        t = _select_window(by_id[outgoing], ga, region="tail", count=window_bars,
+                                           locked_cue_seconds=out_lock,
                                            target_bpm=target, sample_rate=sample_rate,
                                            max_trim_seconds=max_outro_trim_seconds,
                                            max_local_warp_change=max_local_warp_change,
@@ -513,34 +559,48 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                 reason = str(exc)
                 matched = False
         if not matched:
-            if not allow_hard_cut and not allow_unverified:
+            use_bridge = tempo_conflict_policy == "echo_bridge"
+            if not allow_hard_cut and not allow_unverified and not use_bridge:
                 raise RenderError(f"{outgoing} → {incoming}: {reason or 'no feasible common tempo'}; "
                                   "transition needs review; automatic hard cuts are disabled")
             mode = "unverified_short_crossfade"
             reset_cues: dict[str, Any] = {}
-            if usable_for_search and allow_hard_cut:
+            if usable_for_search and (allow_hard_cut or use_bridge):
                 try:
-                    hreset = _choose_window(by_id[incoming], gb, region="head", count=8,
+                    hreset = _select_window(by_id[incoming], gb, region="head", count=8,
+                                            locked_cue_seconds=in_lock,
                                             target_bpm=_finite(by_id[incoming].get("bpm"), "native incoming BPM"),
                                             sample_rate=sample_rate, max_trim_seconds=max_intro_trim_seconds,
                                             max_local_warp_change=max_local_warp_change,
                                             minimum_grid_confidence=minimum_grid_confidence)
-                    treset = _choose_window(by_id[outgoing], ga, region="tail", count=8,
+                    treset = _select_window(by_id[outgoing], ga, region="tail", count=8,
+                                            locked_cue_seconds=out_lock,
                                             target_bpm=_finite(by_id[outgoing].get("bpm"), "native outgoing BPM"),
                                             sample_rate=sample_rate, max_trim_seconds=max_outro_trim_seconds,
                                             max_local_warp_change=max_local_warp_change,
                                             minimum_grid_confidence=minimum_grid_confidence)
                     reset_head[incoming], reset_tail[outgoing] = hreset, treset
-                    mode = "bar_tempo_reset"
+                    mode = "free_time_echo_bridge" if use_bridge else "bar_tempo_reset"
                     reset_cues = {"incoming_cue": hreset.cue_provenance,
                                   "outgoing_cue": treset.cue_provenance,
-                                  "bar_alignment": "locally validated predicted/reviewed native bar endpoints; different tempos, no beatmatching"}
+                                  "bar_alignment": "locally validated predicted/reviewed native cue points; different tempos, no beatmatching"}
+                    if use_bridge:
+                        overlap_seconds = bridge_overlap_beats * 60 / float(by_id[incoming]["bpm"])
+                        if overlap_seconds > float(treset.times[-1] - treset.times[0]):
+                            raise RenderError("Echo overlap exceeds the validated outgoing region")
+                        reset_cues["echo_parameters"] = {"outgoing_bpm": float(by_id[outgoing]["bpm"]),
+                            "incoming_bpm": float(by_id[incoming]["bpm"]), "overlap_beats": bridge_overlap_beats}
                 except RenderError as exc:
+                    if use_bridge or in_lock is not None or out_lock is not None:
+                        raise RenderError(f"{outgoing} → {incoming}: explicit bridge/cue could not be rendered: {exc}") from exc
                     reason = (reason + "; " if reason else "") + f"bar reset unavailable: {exc}"
+            if use_bridge and mode != "free_time_echo_bridge":
+                raise RenderError(f"{outgoing} → {incoming}: echo bridge requires reliable native grids and cues")
             if mode == "unverified_short_crossfade" and strict_grid and not allow_unverified:
                 raise RenderError(f"{outgoing} → {incoming}: {reason or 'no reliable bar-aligned reset'}")
             warnings.append(f"{outgoing} → {incoming}: {reason or 'no feasible common tempo'}; {mode}, not beatmatched")
-            overlap = 0 if mode == "bar_tempo_reset" else round(0.20 * sample_rate)
+            overlap = (round(overlap_seconds * sample_rate) if mode == "free_time_echo_bridge"
+                       else 0 if mode == "bar_tempo_reset" else round(0.20 * sample_rate))
             transitions.append({"from": outgoing, "to": incoming, "mode": mode,
                                 "beatmatched": False, "bars": None, "target_bpm": None,
                                 "overlap_frames": overlap, "reason": reason or "no feasible common tempo",
@@ -675,8 +735,15 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                         if previous_tail is None or len(block) != incoming:
                             raise RenderError("Missing overlap audio")
                         mode = transitions[position - 1]["mode"]
-                        dest.write(_crossfade(previous_tail, block, sample_rate,
-                                              bass_hz if mode == "beatmapped_bass_swap" else 0.0))
+                        if mode == "free_time_echo_bridge":
+                            from .bridges import echo_bridge
+                            mixed, evidence = echo_bridge(previous_tail, block, sample_rate,
+                                **transitions[position - 1]["echo_parameters"])
+                            transitions[position - 1]["echo_processing"] = evidence
+                            dest.write(mixed)
+                        else:
+                            dest.write(_crossfade(previous_tail, block, sample_rate,
+                                                  bass_hz if mode == "beatmapped_bass_swap" else 0.0))
                         transitions[position - 1]["set_start_frame"] = cursor - incoming
                         transitions[position - 1]["set_end_frame"] = cursor
                         transitions[position - 1]["set_start_seconds"] = (cursor - incoming) / sample_rate
@@ -702,7 +769,15 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
     except BaseException:
         temporary.unlink(missing_ok=True)
         raise
-    manifest = {"schema_version": 1, "renderer": "SuperDJ sample-frame timemap renderer",
+    warped = any(clip["warp"] is not None for clip in clips)
+    used_modes = sorted({transition["mode"] for transition in transitions})
+    overlap_descriptions = {
+        "beatmapped_bass_swap": "equal-power high bands, complementary zero-phase low-band bass swap",
+        "free_time_echo_bridge": "filtered finite echo with sequential dry-signal handoff at native tempos",
+        "unverified_short_crossfade": "explicit short equal-power fade, no beatmatching",
+        "bar_tempo_reset": "explicit zero-overlap cut with anti-click endpoint fades",
+    }
+    manifest = {"schema_version": 1, "renderer": "AI Super DJ sample-frame timemap renderer",
                 "output_path": str(output), "sample_rate": sample_rate, "channels": 2,
                 "subtype": "FLOAT", "duration_seconds": cursor / sample_rate, "total_frames": cursor,
                 "track_count": len(order), "all_tracks_once": True, "order": order,
@@ -712,10 +787,15 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                            "minimum_grid_confidence": minimum_grid_confidence,
                            "max_intro_trim_seconds": max_intro_trim_seconds,
                            "max_outro_trim_seconds": max_outro_trim_seconds,
-                           "strict_grid": strict_grid, "allow_unverified": allow_unverified},
-                "processing": {"time_stretch": f"external Rubber Band {rubberband_engine.upper()}, pitch preserved, explicit source→target frame map",
-                               "rubberband_engine": rubberband_engine,
-                               "overlap": "equal-power high bands, complementary zero-phase low-band bass swap",
+                           "strict_grid": strict_grid, "allow_unverified": allow_unverified,
+                           "allow_hard_cut": allow_hard_cut, "tempo_conflict_policy": tempo_conflict_policy,
+                           "bridge_overlap_beats": bridge_overlap_beats},
+                "processing": {"time_stretch": (f"external Rubber Band {rubberband_engine.upper()}, pitch preserved, explicit source→target frame map"
+                                                if warped else "none; native sample timing preserved"),
+                               "time_stretch_executed": warped,
+                               "rubberband_engine": rubberband_engine if warped else None,
+                               "transition_modes": used_modes,
+                               "overlap": "; ".join(overlap_descriptions[mode] for mode in used_modes) or "none; single track",
                                "low_band_cutoff_hz": bass_hz, "mastering": "none; this is a headroom premix",
                                "intermediate_format": "32-bit floating-point PCM, stereo"},
                 "warnings": warnings + ["Predicted downbeats are not human-reviewed musical ground truth.",
@@ -738,6 +818,12 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
             in_clip = next(clip for clip in clips if clip["id"] == transition["to"])
             transition["outgoing_source_cut_seconds"] = out_clip["trim_end_seconds"]
             transition["incoming_source_start_seconds"] = in_clip["trim_start_seconds"]
+            if transition["mode"] == "free_time_echo_bridge":
+                transition["selected_cues_are_audibility_guarantees"] = False
+                transition["audible_handoff_note"] = (
+                    "Selected source boundaries stay fixed; effect gain envelopes determine audible dry entry/exit. "
+                    "The incoming dry signal is initially muted, then faded in; inspect echo_processing timing."
+                )
     manifest_path = output.with_suffix(".render.json")
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2, allow_nan=False), encoding="utf-8")
     return manifest

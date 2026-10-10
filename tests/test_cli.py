@@ -14,6 +14,24 @@ import soundfile as sf
 from superdj.cli import djstudio_audit, main
 
 
+def test_cli_plan_attaches_cue_locks_without_reordering(tmp_path):
+    records = tmp_path / "records.json"
+    records.write_text(json.dumps([{"id": "a", "bpm": 174}, {"id": "b", "bpm": 128}]), encoding="utf-8")
+    overrides = tmp_path / "locks.json"
+    locks = {"incoming_start_seconds": 15.04, "outgoing_end_seconds": 244.18}
+    overrides.write_text(json.dumps([{"from": "a", "to": "b", "cue_locks": locks}]), encoding="utf-8")
+    work = tmp_path / "private-work"
+    main(["plan", "--records", str(records), "--mode", "fixed", "--work", str(work),
+          "--transition-overrides", str(overrides)])
+    planned = json.loads((work / "plan.json").read_text(encoding="utf-8"))
+    assert planned["order"] == ["a", "b"]
+    assert planned["edges"][0]["cue_locks"] == locks
+    overrides.write_text(json.dumps([{"from": "b", "to": "a", "cue_locks": locks}]), encoding="utf-8")
+    with pytest.raises(ValueError, match="existing adjacent pair"):
+        main(["plan", "--records", str(records), "--mode", "fixed", "--work", str(work),
+              "--transition-overrides", str(overrides)])
+
+
 def test_audit_refuses_to_replace_its_project_input(tmp_path):
     project = tmp_path / "djstudio_audit.json"
     project.write_bytes(b"untouched native input")

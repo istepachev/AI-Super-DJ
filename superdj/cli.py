@@ -44,6 +44,27 @@ def plan(args, records=None):
     result = plan_tracks(records, mode=args.mode, fixed_order=order, first_id=args.first, last_id=args.last,
                          seed=args.seed or 0, energy_arc=args.energy_arc, max_tempo_change=args.max_tempo_change,
                          allow_tempo_reset=not args.no_tempo_reset)
+    if args.transition_overrides:
+        import math
+        overrides = read_json(args.transition_overrides)
+        if not isinstance(overrides, list):
+            raise ValueError("Transition overrides must be a JSON array")
+        edges = {(edge["from"], edge["to"]): edge for edge in result["edges"]}
+        seen = set()
+        for item in overrides:
+            if not isinstance(item, dict) or set(item) - {"from", "to", "cue_locks"}:
+                raise ValueError("Transition override supports only from, to and cue_locks")
+            pair = (item.get("from"), item.get("to"))
+            if pair not in edges or pair in seen:
+                raise ValueError("Transition override must identify one unique existing adjacent pair")
+            locks = item.get("cue_locks")
+            if not isinstance(locks, dict) or not locks or set(locks) - {"incoming_start_seconds", "outgoing_end_seconds"}:
+                raise ValueError("Use explicit incoming-start and/or outgoing-end source seconds")
+            for value in locks.values():
+                if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
+                    raise ValueError("Locked source seconds must be nonnegative finite numbers")
+            edges[pair]["cue_locks"] = dict(locks)
+            seen.add(pair)
     write_json(Path(args.work) / "plan.json", result)
     print(f"Planned {len(result['order'])} tracks; {result['tempo_reset_count']} tempo conflicts requiring review; {result['method']}", flush=True)
     return result
@@ -64,7 +85,8 @@ def render(args, records=None, planned=None):
     records = records if records is not None else _records(args.records)
     planned = planned if planned is not None else read_json(args.plan)
     validate_transition_policy(planned, allow_hard_cut=args.allow_hard_cut,
-                               allow_unverified=args.allow_unverified)
+                               allow_unverified=args.allow_unverified,
+                               tempo_conflict_policy=args.tempo_conflict_policy)
     # Preserve previous intermediates when a user deliberately repeats a run.
     if (work / "premix.wav").exists():
         work = work / ("run_" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S_%f"))
@@ -92,6 +114,8 @@ def render(args, records=None, planned=None):
                            max_intro_trim_seconds=args.max_intro_trim_seconds,
                            transition_bars=args.transition_bars, allow_unverified=args.allow_unverified,
                            allow_hard_cut=args.allow_hard_cut,
+                           tempo_conflict_policy=args.tempo_conflict_policy,
+                           bridge_overlap_beats=args.bridge_overlap_beats,
                            progress=lambda s: print(s, flush=True))
     write_json(work / "render.json", rendered)
     if len(rendered["tracks"]) != len(records) or len({t["id"] for t in rendered["tracks"]}) != len(records):
@@ -191,6 +215,7 @@ def _source(parser):
 def _planning(parser, seed=True):
     parser.add_argument("--mode", choices=("auto", "fixed"), default="auto")
     parser.add_argument("--fixed-order", help="JSON array of every track id, in user order")
+    parser.add_argument("--transition-overrides", help="Private JSON array of {from,to,cue_locks} for existing adjacent pairs")
     parser.add_argument("--first")
     parser.add_argument("--last")
     parser.add_argument("--energy-arc", choices=("build", "release", "wave", "flat", "none"), default="build")
@@ -215,6 +240,10 @@ def _rendering(parser):
     parser.add_argument("--target-lufs", type=float, default=-14.0)
     parser.add_argument("--allow-unverified", action="store_true", help="Allow explicitly labelled free-time short transitions when grids are uncertain")
     parser.add_argument("--allow-hard-cut", action="store_true", help="Explicitly permit deliberate zero-overlap tempo resets; disabled by default")
+    parser.add_argument("--tempo-conflict-policy", choices=("review", "echo_bridge"), default="review",
+                        help="Stop for review by default; optionally use a labelled native-tempo echo bridge")
+    parser.add_argument("--bridge-overlap-beats", type=float, default=8.0,
+                        help="Echo bridge length in incoming beats (4 to 32), not a beatmatched phrase")
     parser.add_argument("--no-mp3", action="store_true")
     parser.add_argument("--overwrite", action="store_true")
 

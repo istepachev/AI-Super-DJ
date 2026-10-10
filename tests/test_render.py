@@ -10,7 +10,7 @@ import unittest
 import numpy as np
 import soundfile as sf
 
-from superdj.render import RenderError, _Window, _choose_window, _crossfade, _grid, _local_validation_possible, _warp_anchors, render_plan
+from superdj.render import RenderError, _Window, _choose_window, _crossfade, _grid, _local_validation_possible, _select_window, _warp_anchors, render_plan
 
 
 def record(identity, path="unused.wav", bpm=120, seconds=90, first=0.25):
@@ -28,6 +28,34 @@ def plan(a, b, target=122):
 
 
 class TimingTests(unittest.TestCase):
+    def test_boundary_lock_is_mandatory_without_inventing_review(self):
+        item = record("a")
+        item["grid"]["human_reviewed"] = False
+        grid = _grid(item, 0.75)
+        cue = item["downbeats"][8]
+        window = _select_window(item, grid, region="head", count=8, target_bpm=120,
+                                sample_rate=8000, max_trim_seconds=32,
+                                max_local_warp_change=0.15, locked_cue_seconds=cue)
+        self.assertEqual(float(window.times[0]), cue)
+        self.assertFalse(window.cue_provenance["mandatory_boundary"]["human_reviewed"])
+        with self.assertRaisesRegex(RenderError, "instead of moving"):
+            _select_window(item, grid, region="head", count=8, target_bpm=120,
+                           sample_rate=8000, max_trim_seconds=32,
+                           max_local_warp_change=0.15, locked_cue_seconds=cue + 0.02)
+
+    def test_tail_lock_preserves_end_and_rejects_insufficient_region(self):
+        item = record("a")
+        grid = _grid(item, 0.75)
+        cue = item["downbeats"][-3]
+        window = _select_window(item, grid, region="tail", count=8, target_bpm=120,
+                                sample_rate=8000, max_trim_seconds=45,
+                                max_local_warp_change=0.15, locked_cue_seconds=cue)
+        self.assertEqual(float(window.times[-1]), cue)
+        with self.assertRaisesRegex(RenderError, "complete transition"):
+            _select_window(item, grid, region="tail", count=8, target_bpm=120,
+                           sample_rate=8000, max_trim_seconds=100,
+                           max_local_warp_change=0.15, locked_cue_seconds=item["downbeats"][2])
+
     def test_unresolved_tempo_reset_refused_before_files_or_backend_calls(self):
         planned = plan("a", "b")
         planned["edges"][0]["tempo_reset"] = True
@@ -168,6 +196,44 @@ class TimingTests(unittest.TestCase):
 
 
 class ExternalTimingTests(unittest.TestCase):
+    @unittest.skipUnless(os.getenv("SUPERDJ_FFMPEG") or shutil.which("ffmpeg"),
+                         "FFmpeg required for real echo bridge rendering")
+    def test_echo_bridge_has_overlap_and_keeps_native_audio_timing(self):
+        sr = 8000
+        with tempfile.TemporaryDirectory() as temp:
+            directory = Path(temp)
+            records = []
+            for identity, bpm in (("a", 174), ("b", 128)):
+                path = directory / (identity + ".wav")
+                item = record(identity, path, bpm)
+                audio = 0.1 * np.sin(2 * math.pi * 440 * np.arange(90 * sr) / sr)
+                sf.write(path, np.column_stack((audio, audio)), sr, subtype="FLOAT")
+                records.append(item)
+            planned = plan("a", "b")
+            planned["edges"][0]["tempo"].update({"beatmatch_possible": False, "target_bpm": None})
+            planned["edges"][0]["tempo_reset"] = True
+            end = records[0]["downbeats"][-1]
+            start = records[1]["downbeats"][8]
+            planned["edges"][0]["cue_locks"] = {"outgoing_end_seconds": end,
+                                                 "incoming_start_seconds": start}
+            result = render_plan(planned, records, {}, directory / "bridge.wav", directory / "work",
+                                 sample_rate=sr, ffmpeg=os.getenv("SUPERDJ_FFMPEG") or shutil.which("ffmpeg"),
+                                 rubberband="must-not-run", tempo_conflict_policy="echo_bridge")
+            transition = result["transitions"][0]
+            self.assertEqual(transition["mode"], "free_time_echo_bridge")
+            self.assertFalse(transition["beatmatched"])
+            self.assertEqual(transition["overlap_frames"], round(8 * 60 / 128 * sr))
+            self.assertAlmostEqual(transition["incoming_source_start_seconds"], start, places=4)
+            self.assertAlmostEqual(transition["outgoing_source_cut_seconds"], end, places=4)
+            self.assertTrue(all(clip["warp"] is None for clip in result["tracks"]))
+            self.assertFalse(result["processing"]["time_stretch_executed"])
+            self.assertIsNone(result["processing"]["rubberband_engine"])
+            self.assertEqual(result["processing"]["transition_modes"], ["free_time_echo_bridge"])
+            self.assertIn("echo", result["processing"]["overlap"])
+            self.assertFalse(transition["selected_cues_are_audibility_guarantees"])
+            self.assertFalse(transition["echo_processing"]["beatmatched"])
+            self.assertEqual(sf.info(directory / "bridge.wav").frames, result["total_frames"])
+
     @unittest.skipUnless(os.getenv("SUPERDJ_FFMPEG") or shutil.which("ffmpeg"),
                          "Set SUPERDJ_FFMPEG for the real native tempo-reset test")
     def test_strong_local_neural_grid_allows_native_bar_reset(self):
