@@ -253,7 +253,7 @@ def _rendering(parser):
                         help="SYNC shares beat phase and one changing BPM curve during overlap; creative exits require explicit selection")
     parser.add_argument("--sync-max-change", type=float, default=0.40,
                         help="Temporary rate change cap during shared SYNC, not the main track sections")
-    parser.add_argument("--sync-transition-bars", type=int, choices=(2, 4, 8), default=4,
+    parser.add_argument("--sync-transition-bars", type=int, choices=(2, 4, 8, 16, 32), default=4,
                         help="Common beat count for a large SYNC tempo handoff; default 4 bars")
     if "--tempo-ramp-max-change" not in parser._option_string_actions:
         parser.add_argument("--tempo-ramp-max-change", type=float, default=None,

@@ -96,6 +96,31 @@ class RenderedSyncTests(unittest.TestCase):
                 self.assertLess(np.max(np.abs(observed[0]-observed[1])), .005)
                 self.assertLess(edge["mapped_beat_alignment_max_error_seconds"], 1/16000)
 
+    def test_long_overlaps_preserve_rendered_phase_across_all_beats(self):
+        for bars in (16, 32):
+            with self.subTest(bars=bars), tempfile.TemporaryDirectory() as temporary:
+                d = Path(temporary)
+                result = self.render(d, self.fixtures(d, (138, 174)), sync_transition_bars=bars)
+                edge = result["transitions"][0]
+                self.assertEqual(edge["beats"], bars * 4)
+                self.assertAlmostEqual(edge["duration_seconds"], bars * 4 * 120 / 312, places=3)
+                observed = []
+                for clip, role in zip(result["tracks"], ("tail", "head")):
+                    self.assertFalse(clip["warp"]["tempo_ramps"])
+                    times = np.array([b["output_seconds"] for b in
+                        clip["warp"]["input_output_beat_mapping"][role]])[1:-1]
+                    actual = self.pulse_positions(clip["audio_path"], times)
+                    # Long Rubber Band warps can broaden an isolated pulse;
+                    # inspect every audible maximum independently, including
+                    # attacks the conservative audit declines to certify.
+                    self.assertLess(np.max(np.abs(actual-times)), .007)
+                    audit = clip["warp"]["post_render_transient_audit"]["final"]
+                    self.assertGreaterEqual(len(audit["measured"]), .9 * len(times))
+                    self.assertEqual(len(audit["measured"]) + len(audit["unverified"]), len(times))
+                    self.assertLessEqual(audit["maximum_measured_drift_seconds"], .003)
+                    observed.append(actual + clip["set_start_seconds"])
+                self.assertLess(np.max(np.abs(observed[0]-observed[1])), .007)
+
     def test_temporary_rate_limit_refuses_before_render(self):
         with tempfile.TemporaryDirectory() as temporary:
             d = Path(temporary)

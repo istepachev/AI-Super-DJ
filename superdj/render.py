@@ -616,8 +616,8 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
     """
     if sample_rate < 8000 or transition_bars not in {8, 16, 32}:
         raise RenderError("Use a valid sample rate and 8, 16 or 32 transition bars")
-    if not math.isfinite(sync_max_change) or not 0 < sync_max_change < 0.5 or sync_transition_bars not in {2, 4, 8}:
-        raise RenderError("SYNC needs a positive temporary rate cap below 0.5 and 2, 4 or 8 bars")
+    if not math.isfinite(sync_max_change) or not 0 < sync_max_change < 0.5 or sync_transition_bars not in {2, 4, 8, 16, 32}:
+        raise RenderError("SYNC needs a positive temporary rate cap below 0.5 and 2, 4, 8, 16 or 32 bars")
     if rubberband_engine not in {"r2", "r3"}:
         raise RenderError("Rubber Band engine must be r2 or r3")
     if not 0 < max_tempo_change < 0.5 or not 0 < max_local_warp_change < 0.5:
