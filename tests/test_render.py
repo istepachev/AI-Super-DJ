@@ -65,7 +65,8 @@ class TimingTests(unittest.TestCase):
             with self.assertRaisesRegex(RenderError, "automatic hard cuts are disabled"):
                 render_plan(planned, [record("a", bpm=174), record("b", bpm=128)], {},
                             directory / "set.wav", directory / "work",
-                            ffmpeg="must-not-run", rubberband="must-not-run")
+                            ffmpeg="must-not-run", rubberband="must-not-run",
+                            tempo_conflict_policy="review")
             self.assertFalse((directory / "set.wav").exists())
             self.assertFalse((directory / "work").exists())
 
@@ -271,7 +272,8 @@ class ExternalTimingTests(unittest.TestCase):
             self.assertEqual(sf.info(directory / "set.wav").subtype, "FLOAT")
             faded = render_plan(planned, records, {}, directory / "fade.wav", directory / "fade-work",
                                 sample_rate=sr, ffmpeg=os.getenv("SUPERDJ_FFMPEG") or shutil.which("ffmpeg"),
-                                rubberband="not-invoked", allow_unverified=True)
+                                rubberband="not-invoked", allow_unverified=True,
+                                tempo_conflict_policy="review")
             self.assertEqual(faded["transitions"][0]["mode"], "unverified_short_crossfade")
             self.assertGreater(faded["transitions"][0]["overlap_frames"], 0)
 

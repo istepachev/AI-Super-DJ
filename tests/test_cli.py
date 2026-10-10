@@ -26,10 +26,20 @@ def test_cli_plan_attaches_cue_locks_without_reordering(tmp_path):
     planned = json.loads((work / "plan.json").read_text(encoding="utf-8"))
     assert planned["order"] == ["a", "b"]
     assert planned["edges"][0]["cue_locks"] == locks
+    assert planned["edges"][0]["tempo"]["technique"] == "tempo_ramp"
+    assert planned["constraints"]["tempo_ramp_max_change_per_deck"] == .25
     overrides.write_text(json.dumps([{"from": "b", "to": "a", "cue_locks": locks}]), encoding="utf-8")
     with pytest.raises(ValueError, match="existing adjacent pair"):
         main(["plan", "--records", str(records), "--mode", "fixed", "--work", str(work),
               "--transition-overrides", str(overrides)])
+
+
+def test_cli_strict_tempo_cap_refuses_wider_ramp_without_changing_order(tmp_path):
+    records = tmp_path / "records.json"
+    records.write_text(json.dumps([{"id": "a", "bpm": 174}, {"id": "b", "bpm": 128}]), encoding="utf-8")
+    with pytest.raises(ValueError, match="strict tempo"):
+        main(["plan", "--records", str(records), "--mode", "fixed", "--work", str(tmp_path / "work"),
+              "--tempo-ramp-max-change", "0.06", "--no-tempo-reset"])
 
 
 def test_audit_refuses_to_replace_its_project_input(tmp_path):

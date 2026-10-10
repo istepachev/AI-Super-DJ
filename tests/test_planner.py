@@ -81,7 +81,7 @@ class PlannerTests(unittest.TestCase):
 
     def test_impossible_tempo_becomes_explicit_reset_or_error(self):
         records = [track("a", 90), track("b", 150)]
-        result = plan_tracks(records, mode="fixed")
+        result = plan_tracks(records, mode="fixed", tempo_ramp_max_change=None)
         tempo = result["edges"][0]["tempo"]
         self.assertEqual(result["tempo_reset_count"], 1)
         self.assertIsNone(tempo["target_bpm"])
@@ -90,9 +90,33 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(tempo["outgoing_rate"], 1.0)
         self.assertEqual(tempo["incoming_rate"], 1.0)
         with self.assertRaisesRegex(ValueError, "No complete path"):
-            plan_tracks(records, allow_tempo_reset=False)
+            plan_tracks(records, allow_tempo_reset=False, tempo_ramp_max_change=None)
         with self.assertRaisesRegex(ValueError, "strict tempo"):
-            plan_tracks(records, mode="fixed", allow_tempo_reset=False)
+            plan_tracks(records, mode="fixed", allow_tempo_reset=False, tempo_ramp_max_change=None)
+
+    def test_large_tempo_gap_uses_minimax_common_tempo_with_visible_cap(self):
+        result = plan_tracks([track("a", 174.066), track("b", 128.06)], mode="fixed",
+                             allow_tempo_reset=False)
+        tempo = result["edges"][0]["tempo"]
+        self.assertEqual(tempo["technique"], "tempo_ramp")
+        self.assertAlmostEqual(tempo["target_bpm"], 147.56023619, places=6)
+        self.assertAlmostEqual(1 - tempo["outgoing_rate"], tempo["incoming_rate"] - 1, places=7)
+        self.assertEqual(result["tempo_reset_count"], 0)
+        self.assertEqual(result["tempo_ramp_count"], 1)
+        self.assertEqual(result["constraints"]["max_tempo_change_per_deck"], .06)
+        self.assertEqual(result["constraints"]["tempo_ramp_max_change_per_deck"], .25)
+
+    def test_large_tempo_gap_is_not_cheaper_than_modest_stretch(self):
+        modest = transition_score(track("a", 120), track("b", 132))
+        large = transition_score(track("a", 174), track("b", 128))
+        self.assertGreater(large["components"]["tempo"], modest["components"]["tempo"])
+
+    def test_beyond_ramp_cap_remains_native_tempo_bridge_candidate(self):
+        result = plan_tracks([track("a", 100), track("b", 180)], mode="fixed")
+        self.assertEqual(result["tempo_reset_count"], 1)
+        self.assertFalse(result["edges"][0]["tempo"]["beatmatch_possible"])
+        with self.assertRaises(ValueError):
+            plan_tracks([track("a", 100), track("b", 180)], mode="fixed", allow_tempo_reset=False)
 
     def test_seed_reproducible_and_no_duplicate_records(self):
         records = [track(str(i)) for i in range(7)]

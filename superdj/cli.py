@@ -43,6 +43,7 @@ def plan(args, records=None):
     order = read_json(args.fixed_order) if args.fixed_order else None
     result = plan_tracks(records, mode=args.mode, fixed_order=order, first_id=args.first, last_id=args.last,
                          seed=args.seed or 0, energy_arc=args.energy_arc, max_tempo_change=args.max_tempo_change,
+                         tempo_ramp_max_change=args.tempo_ramp_max_change,
                          allow_tempo_reset=not args.no_tempo_reset)
     if args.transition_overrides:
         import math
@@ -66,7 +67,7 @@ def plan(args, records=None):
             edges[pair]["cue_locks"] = dict(locks)
             seen.add(pair)
     write_json(Path(args.work) / "plan.json", result)
-    print(f"Planned {len(result['order'])} tracks; {result['tempo_reset_count']} tempo conflicts requiring review; {result['method']}", flush=True)
+    print(f"Planned {len(result['order'])} tracks; {result['tempo_ramp_count']} tempo ramps; {result['tempo_reset_count']} native-tempo bridges; {result['method']}", flush=True)
     return result
 
 
@@ -115,6 +116,8 @@ def render(args, records=None, planned=None):
                            transition_bars=args.transition_bars, allow_unverified=args.allow_unverified,
                            allow_hard_cut=args.allow_hard_cut,
                            tempo_conflict_policy=args.tempo_conflict_policy,
+                           tempo_ramp_max_change=args.tempo_ramp_max_change,
+                           tempo_ramp_seconds=args.tempo_ramp_seconds,
                            bridge_overlap_beats=args.bridge_overlap_beats,
                            progress=lambda s: print(s, flush=True))
     write_json(work / "render.json", rendered)
@@ -220,7 +223,10 @@ def _planning(parser, seed=True):
     parser.add_argument("--last")
     parser.add_argument("--energy-arc", choices=("build", "release", "wave", "flat", "none"), default="build")
     parser.add_argument("--max-tempo-change", type=float, default=0.06)
-    parser.add_argument("--no-tempo-reset", action="store_true")
+    parser.add_argument("--no-tempo-reset", action="store_true", help="Require a bounded common tempo; disallow native-tempo fallback bridges")
+    if "--tempo-ramp-max-change" not in parser._option_string_actions:
+        parser.add_argument("--tempo-ramp-max-change", type=float, default=0.25,
+                            help="Separate per-deck musical-change cap for tempo ramps; default 0.25")
     if seed:
         parser.add_argument("--seed", type=int, default=0)
 
@@ -240,8 +246,13 @@ def _rendering(parser):
     parser.add_argument("--target-lufs", type=float, default=-14.0)
     parser.add_argument("--allow-unverified", action="store_true", help="Allow explicitly labelled free-time short transitions when grids are uncertain")
     parser.add_argument("--allow-hard-cut", action="store_true", help="Explicitly permit deliberate zero-overlap tempo resets; disabled by default")
-    parser.add_argument("--tempo-conflict-policy", choices=("review", "echo_bridge"), default="review",
-                        help="Stop for review by default; optionally use a labelled native-tempo echo bridge")
+    parser.add_argument("--tempo-conflict-policy", choices=("adaptive", "review", "echo_bridge"), default="adaptive",
+                        help="Adaptive: common-tempo ramp, then native-tempo echo fallback; review stops unresolved edges")
+    if "--tempo-ramp-max-change" not in parser._option_string_actions:
+        parser.add_argument("--tempo-ramp-max-change", type=float, default=0.25,
+                            help="Separate per-deck musical-change cap for tempo ramps; default 0.25")
+    parser.add_argument("--tempo-ramp-seconds", type=float, default=15.0,
+                        help="Smooth tempo change in output seconds (10 to 20); default 15")
     parser.add_argument("--bridge-overlap-beats", type=float, default=8.0,
                         help="Echo bridge length in incoming beats (4 to 32), not a beatmatched phrase")
     parser.add_argument("--no-mp3", action="store_true")
