@@ -17,8 +17,8 @@ def shared_clock(start_bpm: float, end_bpm: float, beats: int,
     alone does not supply this phase lock. Input grids still need validation.
     """
     if (not all(math.isfinite(v) and v > 0 for v in (start_bpm, end_bpm))
-            or beats < 4 or beats % 4 or sample_rate < 8000):
-        raise ValueError("SYNC needs positive BPM, complete 4/4 bars and a valid sample rate")
+            or isinstance(beats, bool) or not isinstance(beats, int) or beats < 4 or sample_rate < 8000):
+        raise ValueError("SYNC needs positive BPM, an integer beat count and a valid sample rate")
     frames = round(beats * 120 / (start_bpm + end_bpm) * sample_rate)
     duration = frames / sample_rate
     # Quantisation changes the requested endpoints by far less than 0.001 BPM.

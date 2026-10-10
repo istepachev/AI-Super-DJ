@@ -29,7 +29,7 @@ class ClockTests(unittest.TestCase):
 
     def test_invalid_clock_is_rejected(self):
         for settings in ((0, 128, 16, 44100), (174, float("nan"), 16, 44100),
-                         (174, 128, 15, 44100)):
+                         (174, 128, 15.5, 44100), (174, 128, True, 44100)):
             with self.assertRaises(ValueError):
                 shared_clock(*settings)
 

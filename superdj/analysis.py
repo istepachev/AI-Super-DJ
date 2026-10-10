@@ -21,7 +21,7 @@ from typing import Any, Mapping
 import numpy as np
 
 SCHEMA_VERSION = 1
-ANALYSIS_VERSION = "superdj-analysis-1.4"
+ANALYSIS_VERSION = "superdj-analysis-1.5"
 SAMPLE_RATE = 22050
 HOP = 512
 N_FFT = 2048
@@ -123,6 +123,8 @@ def _features(signal: np.ndarray) -> dict[str, Any]:
     flux = np.empty(frame_count, dtype=np.float32)
     mid_tonal = np.empty(frame_count, dtype=np.float32)
     centroid = np.empty(frame_count, dtype=np.float32)
+    bass_rms = np.empty(frame_count, dtype=np.float32)
+    high_rms = np.empty(frame_count, dtype=np.float32)
     chroma_sum = np.zeros(12, dtype=np.float64)
     frequencies = np.fft.rfftfreq(N_FFT, 1.0 / SAMPLE_RATE)
     mid = (frequencies >= 300) & (frequencies <= 3500)
@@ -141,6 +143,8 @@ def _features(signal: np.ndarray) -> dict[str, Any]:
         flux[sl] = np.mean(np.maximum(logged - before, 0), axis=0)
         previous = logged[:, -1]
         denominator = np.maximum(power.sum(axis=0), 1e-12)
+        bass_rms[sl] = rms[sl] * np.sqrt(power[frequencies < 180].sum(axis=0) / denominator)
+        high_rms[sl] = rms[sl] * np.sqrt(power[frequencies > 3500].sum(axis=0) / denominator)
         band = power[mid]
         flatness = np.exp(np.mean(np.log(np.maximum(band, 1e-12)), axis=0)) / np.maximum(np.mean(band, axis=0), 1e-12)
         mid_tonal[sl] = band.sum(axis=0) / denominator * (1 - flatness)
@@ -151,7 +155,7 @@ def _features(signal: np.ndarray) -> dict[str, Any]:
     # This proxy is sustained tonal energy in a voice-like frequency band;
     # guitars, synths and strings can also produce it. It is not vocal detection.
     sustained_mid = mid_tonal * (1 - np.minimum(flux, 1))
-    return {"rms": rms, "flux": flux, "sustained_mid": sustained_mid,
+    return {"rms": rms, "bass_rms": bass_rms, "high_rms": high_rms, "flux": flux, "sustained_mid": sustained_mid,
             "centroid": centroid, "chroma_sum": chroma_sum,
             "times": (np.arange(frame_count) * HOP + N_FFT / 2) / SAMPLE_RATE}
 
@@ -476,7 +480,8 @@ def _cue_candidates(beats: np.ndarray, downbeats: np.ndarray, features: dict[str
 def analyze_track(path: str | Path, *, ffmpeg: str = "ffmpeg", cache_dir: str | Path | None = None,
                   backend: str = "librosa", checkpoint: str = "final0", device: str = "cpu",
                   grid: Mapping[str, Any] | None = None, track_id: str | None = None,
-                  allow_model_download: bool = False, use_cache: bool = True) -> dict[str, Any]:
+                  allow_model_download: bool = False, use_cache: bool = True,
+                  cue_backend: str = "hybrid") -> dict[str, Any]:
     """Measure a complete track and return a JSON-serializable analysis record.
 
     `grid` can contain explicit beats/downbeats, or bpm + first_downbeat_s +
@@ -491,12 +496,19 @@ def analyze_track(path: str | Path, *, ffmpeg: str = "ffmpeg", cache_dir: str | 
         raise ValueError("An audio file is required")
     if backend not in ("librosa", "beat_this"):
         raise ValueError("backend must be librosa or beat_this")
+    if cue_backend not in {"hybrid", "structure"}:
+        raise ValueError("cue_backend must be hybrid or structure")
+    from .cues import configuration, infer, hybrid_candidates
+    from .stems import configuration as stem_configuration, separate
+    cue_config = configuration() if cue_backend == "hybrid" else None
+    stem_config = stem_configuration()
     cache = _cache_directory(cache_dir)
     source_hash = _sha256(source)
     model_path = prepare_beat_model(checkpoint, cache_dir=cache, allow_download=allow_model_download) if backend == "beat_this" and grid is None else None
     model_hash = _sha256(model_path) if model_path else None
     options = {"version": ANALYSIS_VERSION, "source_sha256": source_hash, "backend": backend,
-               "model_sha256": model_hash, "device": device, "grid": grid, "track_id": track_id}
+               "model_sha256": model_hash, "device": device, "grid": grid, "track_id": track_id,
+               "cue_backend": cue_backend, "cue_configuration": cue_config, "stem_configuration": stem_config}
     cache_key = hashlib.sha256(json.dumps(options, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
     record_path = cache / "analysis" / f"{cache_key}.json"
     if use_cache and record_path.is_file():
@@ -544,6 +556,25 @@ def analyze_track(path: str | Path, *, ffmpeg: str = "ffmpeg", cache_dir: str | 
         warnings = ["Key and grid confidence are heuristic diagnostics, not calibrated probabilities.",
                     "Phrase boundaries are estimates; 8/16/32 bar grouping is not musical ground truth.",
                     "Sustained midband proxy is not a vocal detector."]
+        predictions = infer(source, cache, cue_config) if cue_config else None
+        if cue_backend == "hybrid" and not cue_config:
+            warnings.append("CUE-DETR is not configured: audio structure/grid fusion executed without the neural cue model.")
+        cues = _cue_candidates(beats, downbeats, features, duration, grid_info["status"],
+            {**diagnostics, "neural_downbeat_probability_by_beat": grid_info.get("neural_downbeat_probability_by_beat", [])}, grid)
+        cues = hybrid_candidates(cues, downbeats, features, duration, predictions, meter=diagnostics.get("meter"))
+        vocals = separate(source, source_hash, cache, stem_config, ffmpeg) if stem_config else None
+        voice_profile = (vocals or {}).get("profile", [])
+        def vocal_risk(time):
+            if not voice_profile:
+                return None
+            return float(np.interp(time, [p["time"] for p in voice_profile], [p["foreground_risk"] for p in voice_profile]))
+        if vocals:
+            for cue in cues:
+                cue["vocal_activity"] = vocal_risk(cue["time"])
+                if cue.get("method") != "imported cue":
+                    cue["confidence"] *= 1 - .20 * cue["vocal_activity"]
+        else:
+            warnings.append("No vocal separation backend configured: sustained tonal activity remains a vocal-risk proxy.")
         if not len(downbeats):
             warnings.append("No downbeats: bar/phrase alignment is unavailable; do not synthesize every fourth beat.")
         if diagnostics["meter"] is None and len(downbeats):
@@ -562,8 +593,13 @@ def analyze_track(path: str | Path, *, ffmpeg: str = "ffmpeg", cache_dir: str | 
                   "embedding": {"values": [round(float(value), 6) for value in descriptor],
                                 "method": "handcrafted complete-track chroma, spectral and rhythm descriptor; not a learned embedding"},
                   "beats": [round(float(value), 6) for value in beats], "downbeats": [round(float(value), 6) for value in downbeats],
-                  "cue_candidates": _cue_candidates(beats, downbeats, features, duration, grid_info["status"],
-                                                    {**diagnostics, "neural_downbeat_probability_by_beat": grid_info.get("neural_downbeat_probability_by_beat", [])}, grid),
+                  "cue_candidates": cues,
+                  "vocal_stem": vocals,
+                  "structure": [{"time": round(float(t), 6),
+                    "energy": round(float(np.interp(t, features["times"], features["rms"]) / max(float(features["rms"].max()), 1e-7)), 4),
+                    "tonal_activity_proxy": round(float(np.interp(t, features["times"], features["sustained_mid"])), 4),
+                    **({"vocal_activity": vocal_risk(t)} if vocals else {})} for t in downbeats],
+                  "cue_model": predictions or {"provenance": {"executed": False, "reason": "not configured" if cue_backend == "hybrid" else "structure-only explicitly requested"}},
                   "grid_status": grid_info["status"], "grid_confidence": diagnostics["confidence"],
                   "grid": {**grid_info, **diagnostics, "confidence_kind": "heuristic timing regularity and onset alignment; not model posterior"},
                   "warnings": warnings,

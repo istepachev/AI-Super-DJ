@@ -1,6 +1,6 @@
 # Dependency provenance
 
-SuperDJ's original orchestration and skill instructions use the MIT license in [LICENSE](LICENSE). External programs, Python packages, source checkouts, models, and music retain their own licenses. No upstream source or executable is vendored by this initial integration. Adapter availability and actual execution are separate facts; the local run manifest records both.
+SuperDJ's original orchestration and skill instructions use the MIT license in [LICENSE](LICENSE). External programs, Python packages, source checkouts, models, and music retain their own licenses. No upstream executable or complete checkout is vendored. The CUE-DETR preprocessing adaptation retains its upstream MIT notice. Adapter availability and actual execution are separate facts; the local run manifest records both.
 
 ## Audited integration targets
 
@@ -12,7 +12,7 @@ SuperDJ's original orchestration and skill instructions use the MIT license in [
 | Rubber Band | [Breakfast Quay Rubber Band](https://breakfastquay.com/rubberband/), Windows CLI release 4.0.0 | [GPL-2.0-or-later or separate commercial license](https://github.com/breakfastquay/rubberband/blob/v4.0.0/README.md) | Separately installed executable for pitch-preserving tempo changes. SuperDJ does not distribute or link a Rubber Band binary. Record executable version and options, including R2/R3 engine. |
 | FFmpeg and FFprobe | [FFmpeg](https://ffmpeg.org/) | [LGPL/GPL depends on build configuration](https://ffmpeg.org/legal.html) | Separately installed decode, encode, inspection, and optional DSP executables. Capture `-version`/build configuration for a run. SuperDJ does not redistribute a build. |
 
-The audamcp and Bitwize licenses were checked in the actual pinned local checkouts as well as their published source. Beat This!'s official README expressly covers both code and published weights under MIT. These are audited targets, not a claim that every upstream feature is included or that all stages execute in every set. The neural grid backend is an optional install; stem separation, speech recognition, hosted music generation, Ableton, Mixxx, VirtualDJ, and Rekordbox are outside the core install.
+The audamcp and Bitwize licenses were checked in the actual pinned local checkouts as well as their published source. Beat This!'s official README expressly covers both code and published weights under MIT. These are audited targets, not a claim that every upstream feature is included or that all stages execute in every set. The neural grid backend is an optional install; speech recognition, hosted music generation, Ableton, Mixxx, VirtualDJ, and Rekordbox are outside the core install.
 
 ## Integration policy
 
@@ -25,3 +25,9 @@ The audamcp and Bitwize licenses were checked in the actual pinned local checkou
 The sequence optimizer is an original, transparent implementation based on stated musical costs. DeckWave's harmonic-transition workflow and music-hearing's acoustic descriptors informed the design review; their code is not copied into this repository. SuperDJ has no affiliation with DJStudio and does not contain its Harmonize AI implementation.
 
 Music and personal playlists are local inputs. The project's software license grants no rights to publish those recordings. The public code repository excludes them by design.
+
+## Neural cue and voice adapters (0.8)
+
+- [ETH-DISCO/cue-detr](https://github.com/ETH-DISCO/cue-detr), audited revision d0462856ed2f59a1fb65267cfbe87340a65ad1bb, MIT, copyright 2024 ETH DISCO. The local preprocessing/inference adaptation in superdj.cues retains [the complete notice](licenses/CUE-DETR-MIT.txt). Its batching is bounded to 32, unlike the upstream whole-track batch. Fusion with structure/grid evidence is original code.
+- [disco-eth/cue-detr weights](https://huggingface.co/disco-eth/cue-detr), model-card license MIT. Audited model.safetensors SHA-256: 195b80f5c94e4b424b417a7c04e0aac238082c584ddcb65d01be8a97c69cadd3. Configuration/processor hashes are checked in superdj.cues. No weights are bundled; the Facebook DETR image processor is an external transformers dependency.
+- [Demucs](https://github.com/facebookresearch/demucs), package 4.0.1, [MIT](https://github.com/facebookresearch/demucs/blob/v4.0.1/LICENSE), copyright Meta Platforms, Inc. and affiliates. Optional local vocal estimator via public get_model/apply_model functions. The upstream repository is archived; pinning and a compatible isolated environment are intentional. Official htdemucs checkpoint 955717e8-8726e21a.th had SHA-256 8726e21a993978c7ba086d3872e7608d7d5bfca646ca4aca459ffda844faa8b4 in validation; actual weights/settings are recorded per run. Estimated vocal energy is not a calibrated probability. No upstream source or weights are copied into this repository.

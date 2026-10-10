@@ -1,8 +1,9 @@
 # DJ.Studio adapter
 
 AI Super DJ can inspect a native `.djs` archive, its exported CUE sheet and an
-exported audio file. The current adapter is **read-only**: it does not edit the
-native project, reproduce DJ.Studio's synthesis, or render its automation.
+exported audio file. The audit adapter is read-only. An advanced preserving rewrite API
+patches selected records in a new archive. It does not reproduce DJ.Studio's
+synthesis or render its automation.
 
 ## Run an audit
 
@@ -91,11 +92,16 @@ independent deep copy of all native JSON. `read_cue()` and `parse_cue_text()` pa
 chapters without opening any audio paths named inside them. The audit returns a
 JSON-serializable dictionary and performs no output writes itself.
 
-## Work still required for native editing
+## Advanced preserving rewrite
 
-An eventual native montage option must separately implement exact tempo and
-automation semantics, protected musical ranges, minimum **actual audible**
-track durations, targeted transition editing, preservation of sample/stem
-placements, native re-import verification and listening comparisons. The
-proposed “своди как DJ Жилин” option is reserved for that later work; this adapter
-does not implement it.
+`superdj.project_edit.rewrite_djs(source, new_output, cue_updates=..., transition_updates=...)`
+patches explicitly selected zero-based records. Cue fields merge into existing
+cueData; duration, automation and lock fields can be updated on a transition.
+Unknown metadata and all unmodified members remain. Every retained member is
+compared by SHA-256 and the original archive is untouched. Keep personal native
+snapshots private.
+
+Archive verification does not confirm application import, exact automation
+semantics or audible duration. Import and audition remain separate checks.
+Standalone zhilin arrangement uses our mixer for energetic source spans and
+long overlaps, without emulating the application's complete rendering engine.

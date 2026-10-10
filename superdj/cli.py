@@ -32,6 +32,14 @@ def analyze(args):
         records.append(analyze_track(track["path"], track_id=track["id"], ffmpeg=args.ffmpeg,
             backend=args.backend, cache_dir=args.cache, checkpoint=args.checkpoint, device=args.device,
             grid=overrides.get(track["id"]), allow_model_download=args.download_model))
+        if track.get("protected_ranges"):
+            import math
+            ranges = track["protected_ranges"]
+            if not isinstance(ranges, list) or any(not isinstance(r, list) or len(r) != 2 or
+                any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) for v in r) or
+                not 0 <= r[0] < r[1] <= records[-1]["duration"] for r in ranges):
+                raise ValueError("Protected ranges must be valid [start,end] source seconds")
+            records[-1]["protected_ranges"] = ranges
         write_json(Path(args.work) / "records.partial.json", records)
     write_json(Path(args.work) / "records.json", records)
     return records
@@ -53,15 +61,16 @@ def plan(args, records=None):
         edges = {(edge["from"], edge["to"]): edge for edge in result["edges"]}
         seen = set()
         for item in overrides:
-            if not isinstance(item, dict) or set(item) - {"from", "to", "cue_locks", "overlap_bars", "transition_policy"}:
-                raise ValueError("Transition override supports only from, to, cue_locks, overlap_bars and transition_policy")
+            if not isinstance(item, dict) or set(item) - {"from", "to", "cue_locks", "overlap_bars", "overlap_beats", "transition_policy"}:
+                raise ValueError("Transition override supports only from, to, cue_locks, overlap_bars, overlap_beats and transition_policy")
             pair = (item.get("from"), item.get("to"))
             if pair not in edges or pair in seen:
                 raise ValueError("Transition override must identify one unique existing adjacent pair")
             locks = item.get("cue_locks", {})
             bars = item.get("overlap_bars")
+            beats = item.get("overlap_beats")
             policy = item.get("transition_policy")
-            if not isinstance(locks, dict) or (not locks and bars is None and policy is None) or set(locks) - {"incoming_start_seconds", "outgoing_end_seconds"}:
+            if not isinstance(locks, dict) or (not locks and bars is None and beats is None and policy is None) or set(locks) - {"incoming_start_seconds", "outgoing_end_seconds"}:
                 raise ValueError("Use explicit incoming-start and/or outgoing-end source seconds")
             for value in locks.values():
                 if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
@@ -69,14 +78,21 @@ def plan(args, records=None):
             if locks:
                 edges[pair]["cue_locks"] = dict(locks)
             if bars is not None:
-                if isinstance(bars, bool) or not isinstance(bars, int) or bars not in {2, 4, 8, 16, 32}:
-                    raise ValueError("overlap_bars must be 2, 4, 8, 16 or 32")
+                if isinstance(bars, bool) or not isinstance(bars, int) or bars not in {2, 4, 8, 16, 32, 40, 44}:
+                    raise ValueError("overlap_bars must be 2, 4, 8, 16, 32, 40 or 44")
                 edges[pair]["overlap_bars"] = bars
+            if beats is not None:
+                if bars is not None or isinstance(beats, bool) or not isinstance(beats, int) or not 8 <= beats <= 256 or len(locks) != 2:
+                    raise ValueError("overlap_beats requires 8–256 integer beats, both cue locks and no overlap_bars")
+                edges[pair]["overlap_beats"] = beats
             if policy is not None:
                 if policy not in {"auto", "sync", "review"}:
                     raise ValueError("transition_policy must be auto, sync or review")
                 edges[pair]["transition_policy"] = policy
             seen.add(pair)
+    if getattr(args, "style", "default") == "zhilin":
+        from .sections import arrange
+        result = arrange(result, records)
     write_json(Path(args.work) / "plan.json", result)
     print(f"Planned {len(result['order'])} tracks; {result['tempo_ramp_count']} tempo ramps; {result['tempo_reset_count']} native-tempo bridges; {result['method']}", flush=True)
     return result
@@ -108,7 +124,8 @@ def render(args, records=None, planned=None):
     else:
         profiles = read_json(args.noise_profiles) if args.noise_profiles else None
         prepared = prepare_tracks(records, work, audamcp=args.audamcp, ffmpeg=args.ffmpeg,
-                                  git=args.git, noise_profiles=profiles, progress=lambda s: print(s, flush=True))
+                                  git=args.git, noise_profiles=profiles, progress=lambda s: print(s, flush=True),
+                                  sample_rate=args.sample_rate)
     for record in records:
         item = prepared[record["id"]]
         if item.get("loudness_lufs") is None:
@@ -122,6 +139,7 @@ def render(args, records=None, planned=None):
     print("Rendering tempo maps and transitions", flush=True)
     rendered = render_plan(planned, records, prepared, premix, work / "render",
                            ffmpeg=args.ffmpeg, rubberband=args.rubberband,
+                           sample_rate=args.sample_rate,
                            max_tempo_change=planned.get("constraints", {}).get("max_tempo_change_per_deck", 0.06),
                            max_intro_trim_seconds=args.max_intro_trim_seconds,
                            transition_bars=args.transition_bars, allow_unverified=args.allow_unverified,
@@ -230,6 +248,7 @@ def _source(parser):
 
 
 def _planning(parser, seed=True):
+    parser.add_argument("--style", choices=("default", "zhilin"), default="default")
     parser.add_argument("--mode", choices=("auto", "fixed"), default="auto")
     parser.add_argument("--fixed-order", help="JSON array of every track id, in user order")
     parser.add_argument("--transition-overrides", help="Private JSON array of {from,to,cue_locks?,overlap_bars?} for existing adjacent pairs")
@@ -246,6 +265,7 @@ def _planning(parser, seed=True):
 
 
 def _rendering(parser):
+    parser.add_argument("--sample-rate", type=int, default=44100, help=argparse.SUPPRESS)
     parser.add_argument("--output", required=True)
     parser.add_argument("--name", default="AI_Super_DJ_001")
     parser.add_argument("--audamcp", required=True, help="Audited external checkout")
@@ -282,6 +302,13 @@ def _rendering(parser):
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="ai-super-dj", description="AI Super DJ: offline analysis, ordering, rendering and verified export")
     subs = parser.add_subparsers(dest="command", required=True)
+    mp = subs.add_parser("make", help="One file → mastered FLAC; multiple files → mixed FLAC")
+    mp.add_argument("inputs", nargs="+", help="Audio files or a folder")
+    mp.add_argument("--style", choices=("default", "zhilin"), default="default")
+    mp.add_argument("--keep-order", action="store_true", help="Keep supplied file order")
+    mp.add_argument("--output")
+    mp.add_argument("--name")
+    mp.add_argument("--work", help=argparse.SUPPRESS)
     ap = subs.add_parser("analyze")
     ap.add_argument("--work", required=True)
     _audio(ap); _source(ap)
@@ -306,8 +333,12 @@ def main(argv=None):
     setup = subs.add_parser("setup", help="Fetch pinned external checkouts and optionally official model weights")
     setup.add_argument("--components", required=True); setup.add_argument("--git", default="git")
     setup.add_argument("--download-model", action="store_true"); setup.add_argument("--cache"); setup.add_argument("--checkpoint", default="final0")
+    setup.add_argument("--download-cue-model", action="store_true")
     args = parser.parse_args(argv)
-    if args.command == "analyze":
+    if args.command == "make":
+        from .make import make
+        make(args)
+    elif args.command == "analyze":
         analyze(args)
     elif args.command == "plan":
         plan(args)
@@ -323,3 +354,6 @@ def main(argv=None):
         if args.download_model:
             from .analysis import prepare_beat_model
             prepare_beat_model(args.checkpoint, cache_dir=args.cache, allow_download=True)
+        if args.download_cue_model:
+            from .cues import download_checkpoint
+            download_checkpoint(Path.home() / ".cache" / "superdj" / "cue-detr")

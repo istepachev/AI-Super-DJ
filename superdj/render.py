@@ -52,7 +52,7 @@ def validate_transition_policy(plan: Mapping[str, Any], *, allow_hard_cut: bool 
 @dataclass
 class _Window:
     times: np.ndarray
-    bars: int
+    bars: float
     meter: int
     target_bpm: float
     frames: int
@@ -218,14 +218,16 @@ def _choose_window(record: Mapping[str, Any], grid: tuple[Any, ...], *,
             continue
         time = float(downbeats[begin])
         nearby = [cue for cue in record.get("cue_candidates", [])
-                  if abs(float(cue.get("time", cue.get("seconds", -999))) - time) <= 0.05
-                  and cue.get("kind", "intro" if region == "head" else "outro") == ("intro" if region == "head" else "outro")]
+                  if abs(float(cue.get("time", cue.get("seconds", -999))) - time) <= 0.05]
         cue = max(nearby, key=lambda item: float(item.get("confidence") or 0), default={})
         confidence = max(0.0, min(1.0, float(cue.get("confidence") or 0)))
         probability = max(0.0, min(1.0, float(cue.get("downbeat_model_probability") or 0)))
         novelty = max(0.0, min(1.0, float(cue.get("novelty") or 0)))
         sustained_value = cue.get("sustained_midband_proxy")
         sustained = max(0.0, min(1.0, float(sustained_value if sustained_value is not None else 1)))
+        vocal_risk = cue.get("vocal_activity")
+        if vocal_risk is not None:
+            sustained = max(sustained, float(vocal_risk))
         discarded = time if region == "head" else float(duration - downbeats[begin + count])
         score = (0.25 * discarded / max(max_trim_seconds, 1e-6) - 0.45 * confidence
                  - 0.15 * novelty - 0.15 * (1 - sustained) - 0.20 * probability)
@@ -233,6 +235,9 @@ def _choose_window(record: Mapping[str, Any], grid: tuple[Any, ...], *,
                                  "cue_status": cue.get("status", "estimated_bar_grouping"),
                                  "cue_confidence": confidence, "downbeat_model_probability": probability,
                                  "novelty": novelty, "sustained_midband_proxy": sustained,
+                                 "method": cue.get("method", "grid-only fallback"),
+                                 "cue_detr_evidence": cue.get("cue_detr_evidence", []),
+                                 "vocal_activity": vocal_risk,
                                  "local_validation": evidence,
                                  "selection": "stable complete beat/bar window scored for structural cue evidence, within bounded trims",
                                  "musical_phrase_verified": bool(cue.get("reviewed") and cue.get("status") == "reviewed")}
@@ -243,8 +248,33 @@ def _choose_window(record: Mapping[str, Any], grid: tuple[Any, ...], *,
 
 
 def _select_window(record: Mapping[str, Any], grid: tuple[Any, ...], *,
-                   locked_cue_seconds: float | None = None, **kwargs: Any) -> _Window:
+                   locked_cue_seconds: float | None = None, beat_count: int | None = None,
+                   **kwargs: Any) -> _Window:
     """An explicit boundary lock is mandatory, never merely a score bonus."""
+    if beat_count is not None:
+        if locked_cue_seconds is None:
+            raise RenderError("A native beat-count exception requires an explicit boundary")
+        cue = _finite(locked_cue_seconds, "locked cue")
+        duration = float(record.get("duration", record.get("duration_seconds", grid[2][-1])))
+        discarded = cue if kwargs["region"] == "head" else duration - cue
+        if discarded < 0 or discarded > kwargs["max_trim_seconds"] + 1e-6:
+            raise RenderError("Native beat-count boundary exceeds permitted trim limits")
+        beats = grid[2]
+        index = int(np.argmin(np.abs(beats - cue)))
+        if abs(float(beats[index]) - cue) > 1 / kwargs["sample_rate"] + 1e-6:
+            raise RenderError("Locked cue is not on the supplied beat grid; review it instead of moving it")
+        first = index if kwargs["region"] == "head" else index - beat_count
+        if first < 0 or first + beat_count >= len(beats):
+            raise RenderError("Locked cue does not leave a complete transition window")
+        times = beats[first:first + beat_count + 1]
+        if np.max(np.abs(np.diff(times) / (60 / record["bpm"]) - 1)) > kwargs["max_local_warp_change"]:
+            raise RenderError("Native beat-count exception exceeds timing correction limits")
+        window = _Window(times, beat_count / grid[4], grid[4], kwargs["target_bpm"],
+                         round(beat_count * 60 / kwargs["target_bpm"] * kwargs["sample_rate"]))
+        window.cue_provenance = {"region": kwargs["region"], "cue_status": "explicit_beat_boundary",
+            "mandatory_boundary": {"seconds": cue, "human_reviewed": bool((record.get("grid") or {}).get("human_reviewed"))},
+            "musical_phrase_verified": False, "native_exception_beats": beat_count}
+        return window
     if locked_cue_seconds is None:
         return _choose_window(record, grid, **kwargs)
     cue = _finite(locked_cue_seconds, "locked cue")
@@ -302,7 +332,7 @@ def _warp_anchors(record: Mapping[str, Any], *, trim_start: float,
     beat_maps: dict[str, list[dict[str, Any]]] = {"head": [], "tail": []}
 
     def add(source_seconds: float, target_seconds: float, role: str) -> None:
-        if source_seconds < -1e-5 or source_seconds > duration + 0.02:
+        if source_seconds < -max(1e-5, 1 / sample_rate + 1e-6) or source_seconds > duration + 0.02:
             raise RenderError("Warp anchor lies outside the decoded track")
         source_seconds = min(duration, max(0.0, source_seconds))
         if abs(source_seconds - points[-1][0]) < 1 / sample_rate:
@@ -557,27 +587,49 @@ def _copy_region(source: sf.SoundFile, target: sf.SoundFile, frames: int,
 
 def _crossfade(outgoing: np.ndarray, incoming: np.ndarray, sample_rate: int,
                bass_hz: float = 180.0) -> np.ndarray:
-    """Equal-power highs, complementary smooth bass exchange at the centre.
-
-    Zero-phase filtering ensures low/high decomposition sums to the unchanged
-    input. The overlap only (normally 8/16 bars) is loaded, never the whole set.
-    """
+    """Compatibility entry point for the default independent-band mixer."""
     if outgoing.shape != incoming.shape or outgoing.ndim != 2 or outgoing.shape[1] != 2:
         raise RenderError("Crossfade needs equally sized stereo blocks")
-    length = len(outgoing)
-    if length < 2:
-        return incoming.copy()
-    position = np.linspace(0.0, 1.0, length, dtype=np.float64)
-    a = np.cos(position * math.pi / 2).astype(np.float32)[:, None]
-    b = np.sin(position * math.pi / 2).astype(np.float32)[:, None]
-    if bass_hz <= 0 or length < 128:
-        return outgoing * a + incoming * b
-    filt = butter(4, bass_hz, fs=sample_rate, output="sos")
-    low_out = sosfiltfilt(filt, outgoing, axis=0).astype(np.float32)
-    low_in = sosfiltfilt(filt, incoming, axis=0).astype(np.float32)
-    swap = np.clip((position - 0.35) / 0.30, 0.0, 1.0)
-    swap = (swap * swap * (3 - 2 * swap)).astype(np.float32)[:, None]
-    return (outgoing - low_out) * a + (incoming - low_in) * b + low_out * (1 - swap) + low_in * swap
+    from .mixing import blend
+    return blend(outgoing, incoming, sample_rate, bass_hz=bass_hz)[0]
+
+
+def _aligned_vocals(stem, directory, position, *, ffmpeg, rubberband, engine,
+                    sample_rate, first_frame, source_frames, output_frames,
+                    gain, warp):
+    """Render a local estimate with the final deck map and identical gain."""
+    decoded = directory / f"voice-{position + 1:02d}-decoded.wav"
+    cut = directory / f"voice-{position + 1:02d}-input.wav"
+    output = directory / f"voice-{position + 1:02d}.wav"
+    _run([ffmpeg, "-nostdin", "-v", "error", "-y", "-i", str(stem["path"]),
+          "-ac", "2", "-ar", str(sample_rate), "-c:a", "pcm_f32le", str(decoded)])
+    with sf.SoundFile(decoded) as source, sf.SoundFile(cut, "w", samplerate=sample_rate,
+                                                     channels=2, subtype="FLOAT") as dest:
+        if source.frames < first_frame + source_frames:
+            raise RenderError("Vocal estimate is shorter than its source deck")
+        source.seek(first_frame)
+        _copy_region(source, dest, source_frames, gain)
+    decoded.unlink()
+    if warp:
+        control = directory / f"track-{position + 1:02d}-timemap.txt"
+        options = ["--fast", "--detector-perc"] if engine == "r2" else ["--fine"]
+        _run([rubberband, *options, "--centre-focus", "--ignore-clipping", "--quiet", "--time",
+              f"{output_frames / source_frames:.12f}", "--timemap", control.name, cut.name, output.name], cwd=directory)
+        difference = sf.info(output).frames - output_frames
+        if abs(difference) > 128:
+            raise RenderError("Vocal render differs from deck length")
+        if difference:
+            fixed = output.with_name(output.stem + "-exact.wav")
+            with sf.SoundFile(output) as reader, sf.SoundFile(fixed, "w", samplerate=sample_rate,
+                                                            channels=2, subtype="FLOAT") as writer:
+                _copy_region(reader, writer, min(output_frames, reader.frames))
+                if difference < 0:
+                    writer.write(np.zeros((-difference, 2), dtype=np.float32))
+            fixed.replace(output)
+        cut.unlink()
+    else:
+        cut.replace(output)
+    return str(output)
 
 
 def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | Mapping[str, Mapping[str, Any]],
@@ -634,6 +686,10 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
     if not max_tempo_change <= tempo_ramp_max_change < 0.5:
         raise RenderError("Tempo ramp limit must be at least the regular limit and below 0.5")
     constraints = plan.get("constraints") or {}
+    sections = plan.get("sections") or {}
+    if sections:
+        max_intro_trim_seconds = max(max_intro_trim_seconds, max(float(r.get("duration", r.get("duration_seconds"))) for r in (records.values() if isinstance(records, Mapping) else records)))
+        max_outro_trim_seconds = max_intro_trim_seconds
     if "tempo_ramp_max_change_per_deck" in constraints:
         planned_ramp_limit = constraints["tempo_ramp_max_change_per_deck"]
         planned_ramp_limit = max_tempo_change if planned_ramp_limit is None else _finite(planned_ramp_limit, "planned tempo ramp limit")
@@ -680,13 +736,26 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
     for index, edge in enumerate(edges):
         outgoing, incoming = order[index:index + 2]
         selected_bars = edge.get("overlap_bars")
+        selected_beats = edge.get("overlap_beats")
+        section_bars = edge.get("section_overlap_bars")
+        if section_bars is not None and (plan.get("style") != "zhilin" or section_bars not in {16, 32, 40, 44}):
+            raise RenderError("Long section overlaps require the Zhilin style")
+        if selected_beats is not None:
+            if isinstance(selected_beats, bool) or not isinstance(selected_beats, int) or not 8 <= selected_beats <= 256 or selected_bars is not None:
+                raise RenderError("Use one native overlap of 8–256 integer beats")
+            if set(edge.get("cue_locks") or {}) != {"incoming_start_seconds", "outgoing_end_seconds"}:
+                raise RenderError("Native beat overlap requires both source boundary locks")
         edge_policy = edge.get("transition_policy", tempo_conflict_policy)
+        if selected_beats is not None:
+            if allow_hard_cut or edge_policy == "review":
+                raise RenderError("A mandatory native beat overlap requires SYNC without hard cuts")
+            edge_policy = "sync"
         # A pair-specific SYNC length is also an explicit choice of that method.
         if selected_bars is not None and "transition_policy" not in edge and edge_policy == "auto":
             edge_policy = "sync"
         if selected_bars is not None:
-            if isinstance(selected_bars, bool) or not isinstance(selected_bars, int) or selected_bars not in {2, 4, 8, 16, 32}:
-                raise RenderError("Edge overlap_bars must be 2, 4, 8, 16 or 32")
+            if isinstance(selected_bars, bool) or not isinstance(selected_bars, int) or selected_bars not in {2, 4, 8, 16, 32, 40, 44}:
+                raise RenderError("Edge overlap_bars must be 2, 4, 8, 16, 32, 40 or 44")
             if edge_policy != "sync" or allow_hard_cut:
                 raise RenderError("Edge overlap_bars requires the SYNC renderer without hard cuts")
         ga, gb = grids[outgoing], grids[incoming]
@@ -729,7 +798,7 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
         if matched and float(gb[3][0]) > max_intro_trim_seconds:
             reason = "first incoming downbeat would discard too much introductory audio"
             matched = False
-        bars = min(transition_bars, 8 if "distant" in str(edge.get("harmonic_relation", "")) else transition_bars)
+        bars = section_bars or min(transition_bars, 8 if "distant" in str(edge.get("harmonic_relation", "")) else transition_bars)
         target = tempo.get("target_bpm")
         if matched:
             try:
@@ -789,12 +858,19 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                      (16 if change > .20 else 32)) if change > max_tempo_change else transition_bars
             if selected_bars is not None:
                 count = selected_bars
-            clock = shared_clock(native_a, native_b, count * 4, sample_rate)
+            elif section_bars and change <= .20:
+                count = section_bars
+            beat_count = selected_beats or count * 4
+            if selected_beats is not None:
+                count = selected_beats / 4
+            clock = shared_clock(native_a, native_b, beat_count, sample_rate)
             h = _select_window(by_id[incoming], gb, region="head", count=count,
+                               beat_count=selected_beats,
                                locked_cue_seconds=in_lock, target_bpm=native_b, sample_rate=sample_rate,
                                max_trim_seconds=max_intro_trim_seconds, max_local_warp_change=max_local_warp_change,
                                minimum_grid_confidence=minimum_grid_confidence)
             t = _select_window(by_id[outgoing], ga, region="tail", count=count,
+                               beat_count=selected_beats,
                                locked_cue_seconds=out_lock, target_bpm=native_a, sample_rate=sample_rate,
                                max_trim_seconds=max_outro_trim_seconds, max_local_warp_change=max_local_warp_change,
                                minimum_grid_confidence=minimum_grid_confidence)
@@ -808,12 +884,12 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                                 "selection_reason": reason or "ordinary blend unavailable; long F replaces a discontinuous reset",
                                 "fallback_from_ordinary": edge_policy == "auto",
                                 "musical_tempo_limit": sync_max_change, "beatmatched": True,
-                                "bars": count, "beats": count * 4, "target_bpm": None,
+                                "bars": count, "beats": beat_count, "target_bpm": None,
                                 "overlap_frames": clock["frames"],
                                 "outgoing_source_start": float(t.times[0]), "outgoing_source_end": float(t.times[-1]),
                                 "incoming_source_start": float(h.times[0]), "incoming_source_end": float(h.times[-1]),
                                 "outgoing_cue": t.cue_provenance, "incoming_cue": h.cue_provenance,
-                                "bar_alignment": "one-to-one shared beat phase from supplied grids",
+                                "bar_alignment": "one-to-one shared beat phase; explicit partial-bar exception" if selected_beats else "one-to-one shared beat phase from supplied grids",
                                 "phrase_alignment": "bar grouping only; phrase review pending",
                                 "human_reviewed": False})
             continue
@@ -917,8 +993,11 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
         if abs(info.duration - duration) > 0.05:
             raise RenderError("Prepared processing changed track timing; reanalyse that recording before rendering")
         ga = grids[identity]
-        trim_start = float(head[identity].times[0]) if head[identity] else (float(reset_head[identity].times[0]) if identity in reset_head else 0.0)
-        trim_end = float(tail[identity].times[-1]) if tail[identity] else (float(reset_tail[identity].times[-1]) if identity in reset_tail else info.duration)
+        section = sections.get(identity) or {}
+        trim_start = float(head[identity].times[0]) if head[identity] else (float(reset_head[identity].times[0]) if identity in reset_head else float(section.get("start", 0.0)))
+        trim_end = float(tail[identity].times[-1]) if tail[identity] else (float(reset_tail[identity].times[-1]) if identity in reset_tail else float(section.get("end", info.duration)))
+        if section and (abs(trim_start - section["start"]) > 1 / sample_rate or abs(trim_end - section["end"]) > 1 / sample_rate):
+            raise RenderError("Selected transition moved a mandatory section boundary")
         if trim_start > max_intro_trim_seconds:
             if strict_grid and not allow_unverified:
                 raise RenderError("Incoming bar-aligned cut would discard too much introductory audio")
@@ -953,7 +1032,11 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
         decoded.unlink()
         warp: dict[str, Any] | None = None
         if head[identity] or tail[identity]:
-            warp = _warp_anchors(record, trim_start=trim_start, trim_end=trim_end,
+            # The decoded clip starts/ends on actual sample frames. Using two
+            # unquantized cue times with separately rounded cuts can lose the
+            # final frame at nonzero body cues (a one-frame endpoint mismatch).
+            warp = _warp_anchors(record, trim_start=first_frame / sample_rate,
+                                 trim_end=end_frame / sample_rate,
                                  source_frames=source_frames, sample_rate=sample_rate,
                                  head=head[identity], tail=tail[identity], max_tempo_change=musical_caps[identity],
                                  max_local_warp_change=max_local_warp_change,
@@ -1040,7 +1123,19 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                              "incoming_tempo_changed": False, "pitch_preserved": False,
                              "effect": "outgoing-only vinyl speed and pitch fall"}
             effect["outgoing_exit_processing"] = creative_warp
+        vocal_path = None
+        if record.get("vocal_stem"):
+            processed_voice = prepared.get("vocal_path") if isinstance(prepared, Mapping) else None
+            if creative_warp or ((preparation or {}).get("processors") and not processed_voice):
+                warnings.append(f"{identity}: vocal routing bypassed because preparation/creative processing changed the source mixture")
+            else:
+                vocal_source = {**record["vocal_stem"], "path": processed_voice or record["vocal_stem"]["path"]}
+                vocal_path = _aligned_vocals(vocal_source, directory, position, ffmpeg=ffmpeg,
+                    rubberband=rubberband, engine=rubberband_engine, sample_rate=sample_rate,
+                    first_frame=first_frame, source_frames=source_frames,
+                    output_frames=sf.info(clip_output).frames, gain=gain, warp=warp)
         clips.append({"id": identity, "audio_path": str(clip_output), "source_path": str(source_path),
+                      "aligned_vocal_path": vocal_path,
                       "prepared_path": str(prepared_path), "preparation_provenance": preparation,
                       "source_duration_seconds": info.duration, "trim_start_seconds": first_frame / sample_rate,
                       "trim_end_seconds": end_frame / sample_rate,
@@ -1052,11 +1147,17 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                       "human_reviewed": bool((record.get("grid") or {}).get("human_reviewed")),
                       "output_frames": sf.info(clip_output).frames,
                       "duration_seconds": sf.info(clip_output).frames / sample_rate})
+        if section:
+            clips[-1]["section_policy"] = section
+            clips[-1]["rendered_selected_span_in_3_4_minutes"] = 180 <= clips[-1]["duration_seconds"] <= 240
+            if not clips[-1]["rendered_selected_span_in_3_4_minutes"]:
+                warnings.append(f"{identity}: rendered selected span outside 3–4 minutes; source/tempo/manual exception retained")
     temporary = output.with_name(output.stem + ".partial.wav")
     if temporary.exists():
         raise FileExistsError(temporary)
     cursor = 0
     previous_tail: np.ndarray | None = None
+    previous_vocal: np.ndarray | None = None
     try:
         with sf.SoundFile(temporary, "w", samplerate=sample_rate, channels=2, subtype="FLOAT", format="WAV") as dest:
             for position, clip in enumerate(clips):
@@ -1087,13 +1188,28 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                             transitions[position - 1]["vinyl_gain_processing"] = evidence
                             dest.write(mixed)
                         else:
-                            dest.write(_crossfade(previous_tail, block, sample_rate,
-                                                  bass_hz if mode == "beatmapped_bass_swap" else 0.0))
+                            from .mixing import blend
+                            from .stems import handoff
+                            transition = transitions[position - 1]
+                            incoming_vocal = None
+                            if clip.get("aligned_vocal_path"):
+                                with sf.SoundFile(clip["aligned_vocal_path"]) as voice:
+                                    incoming_vocal = voice.read(incoming, dtype="float32", always_2d=True)
+                            previous_tail, block, voice_report = handoff(previous_tail, block, previous_vocal, incoming_vocal)
+                            transition["vocal_processing"] = voice_report
+                            risk = any(float((transition.get(role) or {}).get("sustained_midband_proxy") or 0) > .5
+                                       for role in ("outgoing_cue", "incoming_cue"))
+                            mixed, evidence = blend(previous_tail, block, sample_rate,
+                                bass_hz=bass_hz if mode == "beatmapped_bass_swap" else 0.0,
+                                beats=transition.get("beats", 64), tonal_conflict=risk)
+                            transition["frequency_processing"] = evidence
+                            dest.write(mixed)
                         transitions[position - 1]["set_start_frame"] = cursor - incoming
                         transitions[position - 1]["set_end_frame"] = cursor
                         transitions[position - 1]["set_start_seconds"] = (cursor - incoming) / sample_rate
                         transitions[position - 1]["set_end_seconds"] = cursor / sample_rate
                         previous_tail = None
+                        previous_vocal = None
                     elif position:
                         transitions[position - 1].update({"set_start_frame": cursor, "set_end_frame": cursor,
                                                          "set_start_seconds": cursor / sample_rate,
@@ -1104,6 +1220,10 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                     _copy_region(original, dest, body, fade_in=fade_in, fade_out=fade_out)
                     if outgoing:
                         previous_tail = original.read(outgoing, dtype="float32", always_2d=True)
+                        if clip.get("aligned_vocal_path"):
+                            with sf.SoundFile(clip["aligned_vocal_path"]) as voice:
+                                voice.seek(clip["output_frames"] - outgoing)
+                                previous_vocal = voice.read(outgoing, dtype="float32", always_2d=True)
                         if len(previous_tail) != outgoing:
                             raise RenderError("Missing outgoing transition audio")
                 cursor += clip["output_frames"] - incoming
@@ -1118,7 +1238,7 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
     creative_speed = any(clip.get("creative_warp") is not None for clip in clips)
     used_modes = sorted({transition["mode"] for transition in transitions})
     overlap_descriptions = {
-        "beatmapped_bass_swap": "equal-power high bands, complementary zero-phase low-band bass swap",
+        "beatmapped_bass_swap": "independent bass/mid/high curves; gentle mid entry and bounded incoming gain",
         "free_time_echo_bridge": "filtered finite echo with sequential dry-signal handoff at native tempos",
         "outgoing_only_vinyl": "short outgoing-only speed/pitch fall with simultaneous incoming native-tempo mix and bass handoff",
         "unverified_short_crossfade": "explicit short equal-power fade, no beatmatching",

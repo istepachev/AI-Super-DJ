@@ -52,6 +52,18 @@ def _worker(job: dict) -> dict:
         maximum = float(np.max(np.abs(samples)))
         report = {"dc_per_channel": dc.tolist(), "sample_peak": maximum,
                   "restoration": "bypassed: no identified noise/click profile", "processors": []}
+        if job.get("forced_processors") is not None:
+            for processor in job["forced_processors"]:
+                from audamcp.master import apply_highpass, apply_eq
+                if processor["function"] == "audamcp.master.apply_highpass":
+                    samples, _ = apply_highpass(samples, rate, cutoff_hz=processor["settings"]["highpass_hz"])
+                elif processor["function"] == "audamcp.master.apply_eq":
+                    samples, _ = apply_eq(samples, rate, **processor["parameters"])
+                else:
+                    raise ValueError("Only the mixture's linear preparation can be applied to a vocal estimate")
+            report["processors"] = job["forced_processors"]
+            save(samples.astype(np.float32), rate, job["output"])
+            return {"path": job["output"], "provenance": {**job["checkout"], "executed": True, **report}}
         if float(np.max(np.abs(dc))) > 0.001:
             from audamcp.master import apply_highpass
             samples, settings = apply_highpass(samples, rate, cutoff_hz=20)
@@ -64,6 +76,14 @@ def _worker(job: dict) -> dict:
             samples, settings = spectral_reduce(samples, rate, noise_profile=profile, strength=0.30)
             report["restoration"] = "explicit noise-only profile, conservative spectral reduction"
             report["processors"].append({"function": "audamcp.denoise.spectral_reduce", "settings": settings})
+        from .tone import settings as tone_settings
+        eq, evidence = tone_settings(samples, rate)
+        report["tonal_analysis"] = evidence
+        if eq:
+            from audamcp.master import apply_eq
+            samples, settings = apply_eq(samples, rate, **eq)
+            report["processors"].append({"function": "audamcp.master.apply_eq", "parameters": eq,
+                "reason": "bounded content-dependent tonal balancing", "settings": settings})
         save(samples.astype(np.float32), rate, job["output"])
         if sf.info(job["output"]).subtype != "FLOAT":
             raise RuntimeError("Upstream bridge did not retain FLOAT PCM")
@@ -71,7 +91,7 @@ def _worker(job: dict) -> dict:
     if job["action"] == "master":
         from tools.mastering.master_tracks import master_track
         preset = {"target_lufs": job["target_lufs"], "compress_ratio": 1.0, "output_bits": 24,
-                  "dither_bits": 24, "processing_oversample": 1, "limiter_lookahead_ms": 5,
+                  "dither_bits": 24, "processing_oversample": 1, "limiter_lookahead_ms": job.get("limiter_lookahead_ms", 5),
                   "limiter_release_ms": 100, "track_gap": 0}
         result = master_track(job["input"], job["output"], ceiling_db=job["ceiling_db"], preset=preset)
         if result.get("skipped") or not Path(job["output"]).is_file():
@@ -96,7 +116,8 @@ def run_worker(job: dict, directory: str | Path, tag: str) -> dict:
     return read_json(result_file)
 
 
-def prepare_tracks(records: list[dict], work_dir: str | Path, *, audamcp: str | Path, ffmpeg="ffmpeg", git="git", noise_profiles=None, progress=print) -> dict:
+def prepare_tracks(records: list[dict], work_dir: str | Path, *, audamcp: str | Path, ffmpeg="ffmpeg", git="git", noise_profiles=None, progress=print,
+                   sample_rate=44100) -> dict:
     directory = private_path(work_dir) / "prepared"
     directory.mkdir(parents=True, exist_ok=True)
     checkout = checkout_info(audamcp, "audamcp", git)
@@ -105,19 +126,29 @@ def prepare_tracks(records: list[dict], work_dir: str | Path, *, audamcp: str | 
         track_id = record["id"]
         decoded, output = directory / f"{track_id}_decoded.wav", directory / f"{track_id}.wav"
         progress(f"Preparing {index}/{len(records)}: {Path(record['path']).name}")
-        execute([ffmpeg, "-nostdin", "-hide_banner", "-v", "error", "-y", "-i", record["path"], "-map", "0:a:0", "-ac", "2", "-ar", "44100", "-c:a", "pcm_f32le", "-rf64", "auto", str(decoded)])
+        execute([ffmpeg, "-nostdin", "-hide_banner", "-v", "error", "-y", "-i", record["path"], "-map", "0:a:0", "-ac", "2", "-ar", str(sample_rate), "-c:a", "pcm_f32le", "-rf64", "auto", str(decoded)])
         result = run_worker({"action": "prepare", "checkout": checkout, "decoded": str(decoded), "output": str(output),
                             "noise_profile": (noise_profiles or {}).get(track_id)}, directory, track_id)
         result["provenance"]["original"] = record["path"]
+        if record.get("vocal_stem") and not (noise_profiles or {}).get(track_id):
+            vocal_decoded, vocal_output = directory / f"{track_id}_voice_decoded.wav", directory / f"{track_id}_voice.wav"
+            execute([ffmpeg, "-nostdin", "-v", "error", "-y", "-i", record["vocal_stem"]["path"],
+                     "-ac", "2", "-ar", str(sample_rate), "-c:a", "pcm_f32le", str(vocal_decoded)])
+            voice = run_worker({"action": "prepare", "checkout": checkout, "decoded": str(vocal_decoded),
+                "output": str(vocal_output), "forced_processors": result["provenance"]["processors"]}, directory, track_id + "_voice")
+            result["vocal_path"] = voice["path"]
+            result["vocal_preparation"] = voice["provenance"]
+            vocal_decoded.unlink()
         prepared[track_id] = result
         decoded.unlink()
     return prepared
 
 
-def master_set(input_path, output_path, work_dir, *, bitwize, git="git", target_lufs=-14.0, ceiling_db=-1.5):
+def master_set(input_path, output_path, work_dir, *, bitwize, git="git", target_lufs=-14.0, ceiling_db=-1.5,
+               limiter_lookahead_ms=5.0):
     return run_worker({"action": "master", "checkout": checkout_info(bitwize, "bitwize", git),
                        "input": str(input_path), "output": str(output_path), "target_lufs": target_lufs,
-                       "ceiling_db": ceiling_db}, work_dir, "master")
+                       "ceiling_db": ceiling_db, "limiter_lookahead_ms": limiter_lookahead_ms}, work_dir, "master")
 
 
 if __name__ == "__main__":
