@@ -59,7 +59,7 @@ class RenderedSyncTests(unittest.TestCase):
     def render(self, directory, records, **settings):
         return render_plan(plan_tracks(records, mode="fixed"), records, {}, directory / "set.wav",
             directory / "work", ffmpeg=FFMPEG, rubberband=RUBBERBAND,
-            sample_rate=16000, transition_bars=8, **settings)
+            sample_rate=16000, **settings)
 
     def pulse_positions(self, path, times):
         x, sr = sf.read(path, always_2d=True)
@@ -71,11 +71,11 @@ class RenderedSyncTests(unittest.TestCase):
             result.append((max(0, begin) + np.argmax(energy[max(0, begin):end])) / sr)
         return np.asarray(result)
 
-    def test_default_both_decks_follow_changing_clock_in_both_directions(self):
+    def test_requested_short_both_decks_follow_changing_clock_in_both_directions(self):
         for bpms in ((174, 128), (128, 174), (120, 122)):
             with self.subTest(bpms=bpms), tempfile.TemporaryDirectory() as temporary:
                 d = Path(temporary)
-                result = self.render(d, self.fixtures(d, bpms))
+                result = self.render(d, self.fixtures(d, bpms), sync_transition_bars=4, transition_bars=8)
                 edge = result["transitions"][0]
                 self.assertEqual(edge["tempo_technique"], "shared_phase_sync")
                 self.assertEqual(edge["shared_clock"]["beats"], edge["beats"])
@@ -97,13 +97,13 @@ class RenderedSyncTests(unittest.TestCase):
                 self.assertLess(edge["mapped_beat_alignment_max_error_seconds"], 1/16000)
 
     def test_long_overlaps_preserve_rendered_phase_across_all_beats(self):
-        for bars in (16, 32):
-            with self.subTest(bars=bars), tempfile.TemporaryDirectory() as temporary:
+        for bpms, requested, bars in (((138,174), None,16), ((135,145),None,32), ((126,123),None,32), ((138,174),32,32)):
+            with self.subTest(bpms=bpms, bars=bars), tempfile.TemporaryDirectory() as temporary:
                 d = Path(temporary)
-                result = self.render(d, self.fixtures(d, (138, 174)), sync_transition_bars=bars)
+                result = self.render(d, self.fixtures(d, bpms), sync_transition_bars=requested)
                 edge = result["transitions"][0]
                 self.assertEqual(edge["beats"], bars * 4)
-                self.assertAlmostEqual(edge["duration_seconds"], bars * 4 * 120 / 312, places=3)
+                self.assertAlmostEqual(edge["duration_seconds"], bars * 4 * 120 / sum(bpms), places=3)
                 observed = []
                 for clip, role in zip(result["tracks"], ("tail", "head")):
                     self.assertFalse(clip["warp"]["tempo_ramps"])
@@ -136,3 +136,27 @@ class RenderedSyncTests(unittest.TestCase):
             self.assertFalse(middle["tempo_ramps"])
             self.assertEqual(len(result["transitions"]), 2)
             self.assertTrue(all(e["beatmatched"] for e in result["transitions"]))
+
+    def test_edge_length_preserves_approved_short_exception_among_long_defaults(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            d = Path(temporary)
+            records = self.fixtures(d, (138,174,133))
+            plan = plan_tracks(records, mode="fixed")
+            plan["edges"][1]["overlap_bars"] = 4
+            result = render_plan(plan, records, {}, d/"set.wav", d/"work", ffmpeg=FFMPEG,
+                rubberband=RUBBERBAND, sample_rate=16000)
+            self.assertEqual([e["bars"] for e in result["transitions"]], [16,4])
+            self.assertTrue(all(e["beatmatched"] for e in result["transitions"]))
+
+    def test_mandatory_length_is_not_silently_replaced_by_unverified_fade(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            d = Path(temporary)
+            records = self.fixtures(d, (138,174))
+            records[0]["grid_status"] = "estimated"
+            records[0]["grid_confidence"] = 0.
+            plan = plan_tracks(records, mode="fixed")
+            plan["edges"][0]["overlap_bars"] = 32
+            with self.assertRaisesRegex(RenderError, "mandatory overlap_bars"):
+                render_plan(plan, records, {}, d/"set.wav", d/"work", ffmpeg="must-not-run",
+                    rubberband="must-not-run", sample_rate=16000, allow_unverified=True)
+            self.assertFalse((d/"set.wav").exists())

@@ -581,7 +581,7 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                 prepared_files: Mapping[str, Any] | None, output_path: str | Path,
                 work_dir: str | Path, *, ffmpeg: str = "ffmpeg", rubberband: str = "rubberband",
                 rubberband_engine: str = "r2",
-                sample_rate: int = 44100, transition_bars: int = 16,
+                sample_rate: int = 44100, transition_bars: int = 32,
                 max_tempo_change: float = 0.06, max_local_warp_change: float = 0.15,
                 minimum_grid_confidence: float = 0.75, max_intro_trim_seconds: float = 32.0,
                 max_outro_trim_seconds: float = 45.0,
@@ -590,7 +590,7 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                 tempo_conflict_policy: str = "sync", bridge_overlap_beats: float = 8.0,
                 tempo_ramp_max_change: float = 0.25, tempo_ramp_seconds: float = 15.0,
                 native_exit_seconds: float = 8.0,
-                sync_max_change: float = 0.40, sync_transition_bars: int = 4,
+                sync_max_change: float = 0.40, sync_transition_bars: int | None = None,
                 target_rms_dbfs: float = -20.0, target_lufs: float = -18.0,
                 track_peak_ceiling: float = 0.50,
                 max_gain_db: float = 4.0, bass_hz: float = 180.0,
@@ -616,7 +616,8 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
     """
     if sample_rate < 8000 or transition_bars not in {8, 16, 32}:
         raise RenderError("Use a valid sample rate and 8, 16 or 32 transition bars")
-    if not math.isfinite(sync_max_change) or not 0 < sync_max_change < 0.5 or sync_transition_bars not in {2, 4, 8, 16, 32}:
+    if not math.isfinite(sync_max_change) or not 0 < sync_max_change < 0.5 or (sync_transition_bars is not None and
+            (isinstance(sync_transition_bars, bool) or not isinstance(sync_transition_bars, int) or sync_transition_bars not in {2, 4, 8, 16, 32})):
         raise RenderError("SYNC needs a positive temporary rate cap below 0.5 and 2, 4, 8, 16 or 32 bars")
     if rubberband_engine not in {"r2", "r3"}:
         raise RenderError("Rubber Band engine must be r2 or r3")
@@ -672,6 +673,12 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
     warnings: list[str] = []
     for index, edge in enumerate(edges):
         outgoing, incoming = order[index:index + 2]
+        selected_bars = edge.get("overlap_bars")
+        if selected_bars is not None:
+            if isinstance(selected_bars, bool) or not isinstance(selected_bars, int) or selected_bars not in {2, 4, 8, 16, 32}:
+                raise RenderError("Edge overlap_bars must be 2, 4, 8, 16 or 32")
+            if tempo_conflict_policy != "sync" or allow_hard_cut:
+                raise RenderError("Edge overlap_bars requires the SYNC renderer without hard cuts")
         ga, gb = grids[outgoing], grids[incoming]
         tempo = edge.get("tempo") or {}
         locks = edge.get("cue_locks") or {}
@@ -697,6 +704,8 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                              "technique": "tempo_ramp"}
                     matched, ramp_selected, edge_cap = True, True, tempo_ramp_max_change
         usable_for_search = (ga[0] or _local_validation_possible(by_id[outgoing], ga)) and (gb[0] or _local_validation_possible(by_id[incoming], gb))
+        if selected_bars is not None and not usable_for_search:
+            raise RenderError(f"{outgoing} → {incoming}: mandatory overlap_bars requires usable native grids")
         if (in_lock is not None or out_lock is not None) and not usable_for_search:
             raise RenderError(f"{outgoing} → {incoming}: mandatory cues require usable native grids")
         if not usable_for_search:
@@ -713,7 +722,12 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
             change = max(abs(native_b / native_a - 1), abs(native_a / native_b - 1))
             if change > sync_max_change + 1e-6:
                 raise RenderError(f"{outgoing} → {incoming}: common SYNC curve needs {change:.1%} temporary rate change; cap {sync_max_change:.1%}")
-            count = sync_transition_bars if change > max_tempo_change else transition_bars
+            # Long blending is the default. This tempo heuristic chooses a
+            # starting length, not a detected phrase or an audible optimum.
+            count = (sync_transition_bars if sync_transition_bars is not None else
+                     (16 if change > .20 else 32)) if change > max_tempo_change else transition_bars
+            if selected_bars is not None:
+                count = selected_bars
             clock = shared_clock(native_a, native_b, count * 4, sample_rate)
             h = _select_window(by_id[incoming], gb, region="head", count=count,
                                locked_cue_seconds=in_lock, target_bpm=native_b, sample_rate=sample_rate,

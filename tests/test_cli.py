@@ -42,6 +42,31 @@ def test_cli_strict_tempo_cap_refuses_wider_ramp_without_changing_order(tmp_path
               "--tempo-ramp-max-change", "0.06", "--no-tempo-reset"])
 
 
+@pytest.mark.parametrize("bars", [4,32])
+def test_cli_plan_accepts_pair_specific_length_without_changing_order(tmp_path, bars):
+    records = tmp_path / "records.json"
+    records.write_text(json.dumps([{"id":"a","bpm":138},{"id":"b","bpm":174}]), encoding="utf-8")
+    overrides = tmp_path / "overrides.json"
+    overrides.write_text(json.dumps([{"from":"a","to":"b","overlap_bars":bars}]), encoding="utf-8")
+    work = tmp_path / "work"
+    main(["plan","--records",str(records),"--mode","fixed","--work",str(work),
+          "--transition-overrides",str(overrides)])
+    planned = json.loads((work/"plan.json").read_text(encoding="utf-8"))
+    assert planned["order"] == ["a","b"]
+    assert planned["edges"][0]["overlap_bars"] == bars
+
+
+@pytest.mark.parametrize("bars", [True,16.0,3,64,"32"])
+def test_cli_plan_rejects_invalid_pair_length(tmp_path, bars):
+    records = tmp_path / "records.json"
+    records.write_text(json.dumps([{"id":"a","bpm":138},{"id":"b","bpm":174}]), encoding="utf-8")
+    overrides = tmp_path / "overrides.json"
+    overrides.write_text(json.dumps([{"from":"a","to":"b","overlap_bars":bars}]), encoding="utf-8")
+    with pytest.raises(ValueError, match="overlap_bars"):
+        main(["plan","--records",str(records),"--mode","fixed","--work",str(tmp_path/"work"),
+              "--transition-overrides",str(overrides)])
+
+
 def test_audit_refuses_to_replace_its_project_input(tmp_path):
     project = tmp_path / "djstudio_audit.json"
     project.write_bytes(b"untouched native input")

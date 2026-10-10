@@ -53,18 +53,24 @@ def plan(args, records=None):
         edges = {(edge["from"], edge["to"]): edge for edge in result["edges"]}
         seen = set()
         for item in overrides:
-            if not isinstance(item, dict) or set(item) - {"from", "to", "cue_locks"}:
-                raise ValueError("Transition override supports only from, to and cue_locks")
+            if not isinstance(item, dict) or set(item) - {"from", "to", "cue_locks", "overlap_bars"}:
+                raise ValueError("Transition override supports only from, to, cue_locks and overlap_bars")
             pair = (item.get("from"), item.get("to"))
             if pair not in edges or pair in seen:
                 raise ValueError("Transition override must identify one unique existing adjacent pair")
-            locks = item.get("cue_locks")
-            if not isinstance(locks, dict) or not locks or set(locks) - {"incoming_start_seconds", "outgoing_end_seconds"}:
+            locks = item.get("cue_locks", {})
+            bars = item.get("overlap_bars")
+            if not isinstance(locks, dict) or (not locks and bars is None) or set(locks) - {"incoming_start_seconds", "outgoing_end_seconds"}:
                 raise ValueError("Use explicit incoming-start and/or outgoing-end source seconds")
             for value in locks.values():
                 if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
                     raise ValueError("Locked source seconds must be nonnegative finite numbers")
-            edges[pair]["cue_locks"] = dict(locks)
+            if locks:
+                edges[pair]["cue_locks"] = dict(locks)
+            if bars is not None:
+                if isinstance(bars, bool) or not isinstance(bars, int) or bars not in {2, 4, 8, 16, 32}:
+                    raise ValueError("overlap_bars must be 2, 4, 8, 16 or 32")
+                edges[pair]["overlap_bars"] = bars
             seen.add(pair)
     write_json(Path(args.work) / "plan.json", result)
     print(f"Planned {len(result['order'])} tracks; {result['tempo_ramp_count']} tempo ramps; {result['tempo_reset_count']} native-tempo bridges; {result['method']}", flush=True)
@@ -221,7 +227,7 @@ def _source(parser):
 def _planning(parser, seed=True):
     parser.add_argument("--mode", choices=("auto", "fixed"), default="auto")
     parser.add_argument("--fixed-order", help="JSON array of every track id, in user order")
-    parser.add_argument("--transition-overrides", help="Private JSON array of {from,to,cue_locks} for existing adjacent pairs")
+    parser.add_argument("--transition-overrides", help="Private JSON array of {from,to,cue_locks?,overlap_bars?} for existing adjacent pairs")
     parser.add_argument("--first")
     parser.add_argument("--last")
     parser.add_argument("--energy-arc", choices=("build", "release", "wave", "flat", "none"), default="build")
@@ -243,7 +249,7 @@ def _rendering(parser):
     parser.add_argument("--rubberband", required=True)
     parser.add_argument("--prepared", help="Private JSON of existing FLOAT preparations")
     parser.add_argument("--noise-profiles", help="Explicit noise-only reference files by track id")
-    parser.add_argument("--transition-bars", type=int, choices=(8, 16, 32), default=16)
+    parser.add_argument("--transition-bars", type=int, choices=(8, 16, 32), default=32)
     parser.add_argument("--max-intro-trim-seconds", type=float, default=32.0,
                         help="Maximum intro skipped to reach a stable musical transition window")
     parser.add_argument("--target-lufs", type=float, default=-14.0)
@@ -253,8 +259,8 @@ def _rendering(parser):
                         help="SYNC shares beat phase and one changing BPM curve during overlap; creative exits require explicit selection")
     parser.add_argument("--sync-max-change", type=float, default=0.40,
                         help="Temporary rate change cap during shared SYNC, not the main track sections")
-    parser.add_argument("--sync-transition-bars", type=int, choices=(2, 4, 8, 16, 32), default=4,
-                        help="Common beat count for a large SYNC tempo handoff; default 4 bars")
+    parser.add_argument("--sync-transition-bars", type=int, choices=(2, 4, 8, 16, 32), default=None,
+                        help="Override conflict overlap length; default long: 32 bars, or 16 above 20%% temporary rate change")
     if "--tempo-ramp-max-change" not in parser._option_string_actions:
         parser.add_argument("--tempo-ramp-max-change", type=float, default=None,
                             help="Explicit shared-tempo cap; a supplied plan can restrict it further")
