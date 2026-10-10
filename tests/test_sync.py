@@ -57,6 +57,7 @@ class RenderedSyncTests(unittest.TestCase):
         return records
 
     def render(self, directory, records, **settings):
+        settings.setdefault("tempo_conflict_policy", "sync")
         return render_plan(plan_tracks(records, mode="fixed"), records, {}, directory / "set.wav",
             directory / "work", ffmpeg=FFMPEG, rubberband=RUBBERBAND,
             sample_rate=16000, **settings)
@@ -100,7 +101,7 @@ class RenderedSyncTests(unittest.TestCase):
         for bpms, requested, bars in (((138,174), None,16), ((135,145),None,32), ((126,123),None,32), ((138,174),32,32)):
             with self.subTest(bpms=bpms, bars=bars), tempfile.TemporaryDirectory() as temporary:
                 d = Path(temporary)
-                result = self.render(d, self.fixtures(d, bpms), sync_transition_bars=requested)
+                result = self.render(d, self.fixtures(d, bpms), sync_transition_bars=requested, transition_bars=32)
                 edge = result["transitions"][0]
                 self.assertEqual(edge["beats"], bars * 4)
                 self.assertAlmostEqual(edge["duration_seconds"], bars * 4 * 120 / sum(bpms), places=3)
@@ -160,3 +161,44 @@ class RenderedSyncTests(unittest.TestCase):
                 render_plan(plan, records, {}, d/"set.wav", d/"work", ffmpeg="must-not-run",
                     rubberband="must-not-run", sample_rate=16000, allow_unverified=True)
             self.assertFalse((d/"set.wav").exists())
+
+    def test_default_auto_preserves_existing_ordinary_audio_exactly(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            d = Path(temporary)
+            records = self.fixtures(d, (126,123))
+            planned = plan_tracks(records, mode="fixed")
+            auto = render_plan(planned, records, {}, d/"auto.wav", d/"auto-work", ffmpeg=FFMPEG,
+                rubberband=RUBBERBAND, sample_rate=16000)
+            ordinary = render_plan(planned, records, {}, d/"ordinary.wav", d/"ordinary-work", ffmpeg=FFMPEG,
+                rubberband=RUBBERBAND, sample_rate=16000, tempo_conflict_policy="review")
+            self.assertEqual(auto["transitions"][0]["tempo_technique"], "standard_blend")
+            self.assertEqual(auto["transitions"][0]["bars"],16)
+            self.assertEqual(auto["transitions"], ordinary["transitions"])
+            np.testing.assert_array_equal(sf.read(d/"auto.wav")[0], sf.read(d/"ordinary.wav")[0])
+
+    def test_default_auto_replaces_only_unresolved_boundary_in_mixed_set(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            d = Path(temporary)
+            records = self.fixtures(d, (128,126,174))
+            planned = plan_tracks(records, mode="fixed")
+            result = render_plan(planned, records, {}, d/"set.wav", d/"work", ffmpeg=FFMPEG,
+                rubberband=RUBBERBAND, sample_rate=16000)
+            self.assertEqual([e["tempo_technique"] for e in result["transitions"]],
+                             ["standard_blend","shared_phase_sync"])
+            self.assertTrue(result["transitions"][1]["fallback_from_ordinary"])
+            self.assertTrue(all(e["overlap_frames"] > 0 for e in result["transitions"]))
+
+    def test_pair_approved_sync_can_override_an_ordinary_feasible_transition(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            d = Path(temporary)
+            records = self.fixtures(d, (135,145))
+            planned = plan_tracks(records, mode="fixed")
+            self.assertTrue(planned["edges"][0]["tempo"]["beatmatch_possible"])
+            planned["edges"][0]["transition_policy"] = "sync"
+            planned["edges"][0]["overlap_bars"] = 32
+            result = render_plan(planned, records, {}, d/"set.wav", d/"work", ffmpeg=FFMPEG,
+                rubberband=RUBBERBAND, sample_rate=16000)
+            edge = result["transitions"][0]
+            self.assertEqual(edge["tempo_technique"], "shared_phase_sync")
+            self.assertEqual(edge["bars"],32)
+            self.assertFalse(edge["fallback_from_ordinary"])

@@ -27,17 +27,20 @@ class RenderError(ValueError):
 
 def validate_transition_policy(plan: Mapping[str, Any], *, allow_hard_cut: bool = False,
                                allow_unverified: bool = False,
-                               tempo_conflict_policy: str = "sync") -> None:
+                               tempo_conflict_policy: str = "auto") -> None:
     """Reject unresolved boundaries before audio preparation or output creation.
 
     A tempo reset is a review condition, not permission to stop one deck and
     start the other. Deliberate cuts and unverified fades have separate opt-ins.
     """
-    if tempo_conflict_policy not in {"sync", "adaptive", "shared_tempo", "review", "echo_bridge"}:
-        raise RenderError("Tempo conflict policy must be sync, adaptive, shared_tempo, review or echo_bridge")
-    if allow_hard_cut or allow_unverified or tempo_conflict_policy in {"sync", "adaptive", "shared_tempo", "echo_bridge"}:
-        return
+    if tempo_conflict_policy not in {"auto", "sync", "adaptive", "shared_tempo", "review", "echo_bridge"}:
+        raise RenderError("Tempo conflict policy must be auto, sync, adaptive, shared_tempo, review or echo_bridge")
     for edge in plan.get("edges", []):
+        policy = edge.get("transition_policy", tempo_conflict_policy)
+        if "transition_policy" in edge and policy not in {"auto", "sync", "review"}:
+            raise RenderError("Edge transition_policy must be auto, sync or review")
+        if allow_hard_cut or allow_unverified or policy in {"auto", "sync", "adaptive", "shared_tempo", "echo_bridge"}:
+            continue
         if edge.get("tempo_reset") or not (edge.get("tempo") or {}).get("beatmatch_possible"):
             raise RenderError(
                 f"{edge.get('from')} → {edge.get('to')}: transition needs review; "
@@ -581,13 +584,13 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                 prepared_files: Mapping[str, Any] | None, output_path: str | Path,
                 work_dir: str | Path, *, ffmpeg: str = "ffmpeg", rubberband: str = "rubberband",
                 rubberband_engine: str = "r2",
-                sample_rate: int = 44100, transition_bars: int = 32,
+                sample_rate: int = 44100, transition_bars: int = 16,
                 max_tempo_change: float = 0.06, max_local_warp_change: float = 0.15,
                 minimum_grid_confidence: float = 0.75, max_intro_trim_seconds: float = 32.0,
                 max_outro_trim_seconds: float = 45.0,
                 strict_grid: bool = True, allow_unverified: bool = False,
                 allow_hard_cut: bool = False,
-                tempo_conflict_policy: str = "sync", bridge_overlap_beats: float = 8.0,
+                tempo_conflict_policy: str = "auto", bridge_overlap_beats: float = 8.0,
                 tempo_ramp_max_change: float = 0.25, tempo_ramp_seconds: float = 15.0,
                 native_exit_seconds: float = 8.0,
                 sync_max_change: float = 0.40, sync_transition_bars: int | None = None,
@@ -607,7 +610,10 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
     `echo_bridge` explicitly selects a native-tempo effect bridge for unresolved
     boundaries; it is not beatmatching. Edge `cue_locks` can mandate the incoming
     start and outgoing end in source seconds without claiming human verification.
-    `sync` shares one changing tempo/beat phase during the overlap, keeping the
+    Default `auto` first retains an ordinary valid blend, then tries long SYNC
+    only if ordinary selection/rate validation fails. Pair `transition_policy`
+    can retain an approved explicit SYNC exception.
+    `sync` explicitly shares changing tempo/beat phase during the overlap, keeping the
     main body native. A conservative post-render attack check records ambiguous
     attacks instead of claiming complete acoustic verification.
     `adaptive` preserves incoming native timing on a large downshift using an
@@ -674,10 +680,14 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
     for index, edge in enumerate(edges):
         outgoing, incoming = order[index:index + 2]
         selected_bars = edge.get("overlap_bars")
+        edge_policy = edge.get("transition_policy", tempo_conflict_policy)
+        # A pair-specific SYNC length is also an explicit choice of that method.
+        if selected_bars is not None and "transition_policy" not in edge and edge_policy == "auto":
+            edge_policy = "sync"
         if selected_bars is not None:
             if isinstance(selected_bars, bool) or not isinstance(selected_bars, int) or selected_bars not in {2, 4, 8, 16, 32}:
                 raise RenderError("Edge overlap_bars must be 2, 4, 8, 16 or 32")
-            if tempo_conflict_policy != "sync" or allow_hard_cut:
+            if edge_policy != "sync" or allow_hard_cut:
                 raise RenderError("Edge overlap_bars requires the SYNC renderer without hard cuts")
         ga, gb = grids[outgoing], grids[incoming]
         tempo = edge.get("tempo") or {}
@@ -687,11 +697,14 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
         in_lock, out_lock = locks.get("incoming_start_seconds"), locks.get("outgoing_end_seconds")
         reason = ""
         matched = bool(tempo.get("beatmatch_possible") and not edge.get("tempo_reset"))
+        if edge_policy == "sync":
+            matched = False
+            reason = "explicit pair/global SYNC selection"
         ramp_selected = tempo.get("technique") == "tempo_ramp"
-        if ramp_selected and tempo_conflict_policy == "adaptive":
+        if ramp_selected and edge_policy == "adaptive":
             matched = False
         edge_cap = tempo_ramp_max_change if ramp_selected else max_tempo_change
-        if not matched and tempo_conflict_policy == "shared_tempo" and not allow_hard_cut:
+        if not matched and edge_policy == "shared_tempo" and not allow_hard_cut:
             native_a, native_b = by_id[outgoing].get("bpm"), by_id[incoming].get("bpm")
             if native_a is not None and native_b is not None:
                 native_a = _finite(native_a, "native outgoing BPM")
@@ -713,47 +726,6 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
             if strict_grid and not allow_unverified:
                 raise RenderError(reason + "; import/review a grid or explicitly allow unverified fades")
             matched = False
-        if tempo_conflict_policy == "sync" and usable_for_search and not allow_hard_cut:
-            from .sync import shared_clock
-            native_a = _finite(by_id[outgoing].get("bpm"), "native outgoing BPM")
-            native_b = _finite(by_id[incoming].get("bpm"), "native incoming BPM")
-            if min(native_a, native_b) <= 0:
-                raise RenderError("SYNC requires positive measured BPM on both decks")
-            change = max(abs(native_b / native_a - 1), abs(native_a / native_b - 1))
-            if change > sync_max_change + 1e-6:
-                raise RenderError(f"{outgoing} → {incoming}: common SYNC curve needs {change:.1%} temporary rate change; cap {sync_max_change:.1%}")
-            # Long blending is the default. This tempo heuristic chooses a
-            # starting length, not a detected phrase or an audible optimum.
-            count = (sync_transition_bars if sync_transition_bars is not None else
-                     (16 if change > .20 else 32)) if change > max_tempo_change else transition_bars
-            if selected_bars is not None:
-                count = selected_bars
-            clock = shared_clock(native_a, native_b, count * 4, sample_rate)
-            h = _select_window(by_id[incoming], gb, region="head", count=count,
-                               locked_cue_seconds=in_lock, target_bpm=native_b, sample_rate=sample_rate,
-                               max_trim_seconds=max_intro_trim_seconds, max_local_warp_change=max_local_warp_change,
-                               minimum_grid_confidence=minimum_grid_confidence)
-            t = _select_window(by_id[outgoing], ga, region="tail", count=count,
-                               locked_cue_seconds=out_lock, target_bpm=native_a, sample_rate=sample_rate,
-                               max_trim_seconds=max_outro_trim_seconds, max_local_warp_change=max_local_warp_change,
-                               minimum_grid_confidence=minimum_grid_confidence)
-            h.clock = t.clock = clock
-            h.frames = t.frames = clock["frames"]
-            head[incoming], tail[outgoing] = h, t
-            musical_caps[incoming] = max(musical_caps[incoming], sync_max_change)
-            musical_caps[outgoing] = max(musical_caps[outgoing], sync_max_change)
-            transitions.append({"from": outgoing, "to": incoming, "mode": "beatmapped_bass_swap",
-                                "tempo_technique": "shared_phase_sync", "shared_clock": clock,
-                                "musical_tempo_limit": sync_max_change, "beatmatched": True,
-                                "bars": count, "beats": count * 4, "target_bpm": None,
-                                "overlap_frames": clock["frames"],
-                                "outgoing_source_start": float(t.times[0]), "outgoing_source_end": float(t.times[-1]),
-                                "incoming_source_start": float(h.times[0]), "incoming_source_end": float(h.times[-1]),
-                                "outgoing_cue": t.cue_provenance, "incoming_cue": h.cue_provenance,
-                                "bar_alignment": "one-to-one shared beat phase from supplied grids",
-                                "phrase_alignment": "bar grouping only; phrase review pending",
-                                "human_reviewed": False})
-            continue
         if matched and float(gb[3][0]) > max_intro_trim_seconds:
             reason = "first incoming downbeat would discard too much introductory audio"
             matched = False
@@ -802,11 +774,54 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
             except RenderError as exc:
                 reason = str(exc)
                 matched = False
+        if not matched and edge_policy in {"auto", "sync"} and usable_for_search and not allow_hard_cut:
+            from .sync import shared_clock
+            native_a = _finite(by_id[outgoing].get("bpm"), "native outgoing BPM")
+            native_b = _finite(by_id[incoming].get("bpm"), "native incoming BPM")
+            if min(native_a, native_b) <= 0:
+                raise RenderError("SYNC requires positive measured BPM on both decks")
+            change = max(abs(native_b / native_a - 1), abs(native_a / native_b - 1))
+            if change > sync_max_change + 1e-6:
+                raise RenderError(f"{outgoing} → {incoming}: common SYNC curve needs {change:.1%} temporary rate change; cap {sync_max_change:.1%}")
+            # Long F is the default fallback. This tempo heuristic chooses a
+            # starting length, not a detected phrase or an audible optimum.
+            count = (sync_transition_bars if sync_transition_bars is not None else
+                     (16 if change > .20 else 32)) if change > max_tempo_change else transition_bars
+            if selected_bars is not None:
+                count = selected_bars
+            clock = shared_clock(native_a, native_b, count * 4, sample_rate)
+            h = _select_window(by_id[incoming], gb, region="head", count=count,
+                               locked_cue_seconds=in_lock, target_bpm=native_b, sample_rate=sample_rate,
+                               max_trim_seconds=max_intro_trim_seconds, max_local_warp_change=max_local_warp_change,
+                               minimum_grid_confidence=minimum_grid_confidence)
+            t = _select_window(by_id[outgoing], ga, region="tail", count=count,
+                               locked_cue_seconds=out_lock, target_bpm=native_a, sample_rate=sample_rate,
+                               max_trim_seconds=max_outro_trim_seconds, max_local_warp_change=max_local_warp_change,
+                               minimum_grid_confidence=minimum_grid_confidence)
+            h.clock = t.clock = clock
+            h.frames = t.frames = clock["frames"]
+            head[incoming], tail[outgoing] = h, t
+            musical_caps[incoming] = max(musical_caps[incoming], sync_max_change)
+            musical_caps[outgoing] = max(musical_caps[outgoing], sync_max_change)
+            transitions.append({"from": outgoing, "to": incoming, "mode": "beatmapped_bass_swap",
+                                "tempo_technique": "shared_phase_sync", "shared_clock": clock,
+                                "selection_reason": reason or "ordinary blend unavailable; long F replaces a discontinuous reset",
+                                "fallback_from_ordinary": edge_policy == "auto",
+                                "musical_tempo_limit": sync_max_change, "beatmatched": True,
+                                "bars": count, "beats": count * 4, "target_bpm": None,
+                                "overlap_frames": clock["frames"],
+                                "outgoing_source_start": float(t.times[0]), "outgoing_source_end": float(t.times[-1]),
+                                "incoming_source_start": float(h.times[0]), "incoming_source_end": float(h.times[-1]),
+                                "outgoing_cue": t.cue_provenance, "incoming_cue": h.cue_provenance,
+                                "bar_alignment": "one-to-one shared beat phase from supplied grids",
+                                "phrase_alignment": "bar grouping only; phrase review pending",
+                                "human_reviewed": False})
+            continue
         if not matched:
             native_a, native_b = by_id[outgoing].get("bpm"), by_id[incoming].get("bpm")
-            use_vinyl = bool(tempo_conflict_policy == "adaptive" and not allow_hard_cut and usable_for_search
+            use_vinyl = bool(edge_policy == "adaptive" and not allow_hard_cut and usable_for_search
                              and native_a and native_b and 0.65 <= float(native_b) / float(native_a) < 1)
-            use_bridge = tempo_conflict_policy == "echo_bridge" and not allow_hard_cut
+            use_bridge = edge_policy == "echo_bridge" and not allow_hard_cut
             if (use_bridge or use_vinyl) and plan.get("constraints", {}).get("allow_tempo_reset") is False:
                 raise RenderError(f"{outgoing} → {incoming}: plan forbids native-tempo fallback bridges")
             if not allow_hard_cut and not allow_unverified and not use_bridge and not use_vinyl:
@@ -868,6 +883,7 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
         else:
             transitions.append({"from": outgoing, "to": incoming, "mode": "beatmapped_bass_swap",
                                 "tempo_technique": "tempo_ramp" if ramp_selected else "standard_blend",
+                                "selection_reason": "ordinary beatmatched blend succeeded; fallback F bypassed",
                                 "musical_tempo_limit": edge_cap,
                                 "tempo_ramp_requested_output_seconds": tempo_ramp_seconds,
                                 "beatmatched": True, "bars": bars, "beats": bars * 4,

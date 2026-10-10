@@ -56,6 +56,19 @@ def test_cli_plan_accepts_pair_specific_length_without_changing_order(tmp_path, 
     assert planned["edges"][0]["overlap_bars"] == bars
 
 
+def test_cli_plan_keeps_explicit_pair_method(tmp_path):
+    records = tmp_path / "records.json"
+    records.write_text(json.dumps([{"id":"a","bpm":135},{"id":"b","bpm":145}]), encoding="utf-8")
+    overrides = tmp_path / "overrides.json"
+    overrides.write_text(json.dumps([{"from":"a","to":"b","transition_policy":"sync","overlap_bars":32}]), encoding="utf-8")
+    work = tmp_path / "work"
+    main(["plan","--records",str(records),"--mode","fixed","--work",str(work),
+          "--transition-overrides",str(overrides)])
+    planned = json.loads((work/"plan.json").read_text(encoding="utf-8"))
+    assert planned["edges"][0]["transition_policy"] == "sync"
+    assert planned["edges"][0]["overlap_bars"] == 32
+
+
 @pytest.mark.parametrize("bars", [True,16.0,3,64,"32"])
 def test_cli_plan_rejects_invalid_pair_length(tmp_path, bars):
     records = tmp_path / "records.json"

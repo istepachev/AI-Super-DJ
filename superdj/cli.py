@@ -53,14 +53,15 @@ def plan(args, records=None):
         edges = {(edge["from"], edge["to"]): edge for edge in result["edges"]}
         seen = set()
         for item in overrides:
-            if not isinstance(item, dict) or set(item) - {"from", "to", "cue_locks", "overlap_bars"}:
-                raise ValueError("Transition override supports only from, to, cue_locks and overlap_bars")
+            if not isinstance(item, dict) or set(item) - {"from", "to", "cue_locks", "overlap_bars", "transition_policy"}:
+                raise ValueError("Transition override supports only from, to, cue_locks, overlap_bars and transition_policy")
             pair = (item.get("from"), item.get("to"))
             if pair not in edges or pair in seen:
                 raise ValueError("Transition override must identify one unique existing adjacent pair")
             locks = item.get("cue_locks", {})
             bars = item.get("overlap_bars")
-            if not isinstance(locks, dict) or (not locks and bars is None) or set(locks) - {"incoming_start_seconds", "outgoing_end_seconds"}:
+            policy = item.get("transition_policy")
+            if not isinstance(locks, dict) or (not locks and bars is None and policy is None) or set(locks) - {"incoming_start_seconds", "outgoing_end_seconds"}:
                 raise ValueError("Use explicit incoming-start and/or outgoing-end source seconds")
             for value in locks.values():
                 if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
@@ -71,6 +72,10 @@ def plan(args, records=None):
                 if isinstance(bars, bool) or not isinstance(bars, int) or bars not in {2, 4, 8, 16, 32}:
                     raise ValueError("overlap_bars must be 2, 4, 8, 16 or 32")
                 edges[pair]["overlap_bars"] = bars
+            if policy is not None:
+                if policy not in {"auto", "sync", "review"}:
+                    raise ValueError("transition_policy must be auto, sync or review")
+                edges[pair]["transition_policy"] = policy
             seen.add(pair)
     write_json(Path(args.work) / "plan.json", result)
     print(f"Planned {len(result['order'])} tracks; {result['tempo_ramp_count']} tempo ramps; {result['tempo_reset_count']} native-tempo bridges; {result['method']}", flush=True)
@@ -249,14 +254,14 @@ def _rendering(parser):
     parser.add_argument("--rubberband", required=True)
     parser.add_argument("--prepared", help="Private JSON of existing FLOAT preparations")
     parser.add_argument("--noise-profiles", help="Explicit noise-only reference files by track id")
-    parser.add_argument("--transition-bars", type=int, choices=(8, 16, 32), default=32)
+    parser.add_argument("--transition-bars", type=int, choices=(8, 16, 32), default=16)
     parser.add_argument("--max-intro-trim-seconds", type=float, default=32.0,
                         help="Maximum intro skipped to reach a stable musical transition window")
     parser.add_argument("--target-lufs", type=float, default=-14.0)
     parser.add_argument("--allow-unverified", action="store_true", help="Allow explicitly labelled free-time short transitions when grids are uncertain")
     parser.add_argument("--allow-hard-cut", action="store_true", help="Explicitly permit deliberate zero-overlap tempo resets; disabled by default")
-    parser.add_argument("--tempo-conflict-policy", choices=("sync", "adaptive", "shared_tempo", "review", "echo_bridge"), default="sync",
-                        help="SYNC shares beat phase and one changing BPM curve during overlap; creative exits require explicit selection")
+    parser.add_argument("--tempo-conflict-policy", choices=("auto", "sync", "adaptive", "shared_tempo", "review", "echo_bridge"), default="auto",
+                        help="Default auto preserves ordinary blends and uses long SYNC only if they fail; sync explicitly forces shared-phase mixing")
     parser.add_argument("--sync-max-change", type=float, default=0.40,
                         help="Temporary rate change cap during shared SYNC, not the main track sections")
     parser.add_argument("--sync-transition-bars", type=int, choices=(2, 4, 8, 16, 32), default=None,
