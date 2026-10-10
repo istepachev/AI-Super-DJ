@@ -26,8 +26,8 @@ def test_cli_plan_attaches_cue_locks_without_reordering(tmp_path):
     planned = json.loads((work / "plan.json").read_text(encoding="utf-8"))
     assert planned["order"] == ["a", "b"]
     assert planned["edges"][0]["cue_locks"] == locks
-    assert planned["edges"][0]["tempo"]["technique"] == "tempo_ramp"
-    assert planned["constraints"]["tempo_ramp_max_change_per_deck"] == .25
+    assert planned["edges"][0]["tempo"]["technique"] == "outgoing_only_vinyl"
+    assert planned["constraints"]["tempo_ramp_max_change_per_deck"] is None
     overrides.write_text(json.dumps([{"from": "b", "to": "a", "cue_locks": locks}]), encoding="utf-8")
     with pytest.raises(ValueError, match="existing adjacent pair"):
         main(["plan", "--records", str(records), "--mode", "fixed", "--work", str(work),

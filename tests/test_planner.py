@@ -96,7 +96,7 @@ class PlannerTests(unittest.TestCase):
 
     def test_large_tempo_gap_uses_minimax_common_tempo_with_visible_cap(self):
         result = plan_tracks([track("a", 174.066), track("b", 128.06)], mode="fixed",
-                             allow_tempo_reset=False)
+                             allow_tempo_reset=False, tempo_ramp_max_change=.25)
         tempo = result["edges"][0]["tempo"]
         self.assertEqual(tempo["technique"], "tempo_ramp")
         self.assertAlmostEqual(tempo["target_bpm"], 147.56023619, places=6)
@@ -108,7 +108,7 @@ class PlannerTests(unittest.TestCase):
 
     def test_large_tempo_gap_is_not_cheaper_than_modest_stretch(self):
         modest = transition_score(track("a", 120), track("b", 132))
-        large = transition_score(track("a", 174), track("b", 128))
+        large = transition_score(track("a", 174), track("b", 128), tempo_ramp_max_change=.25)
         self.assertGreater(large["components"]["tempo"], modest["components"]["tempo"])
 
     def test_beyond_ramp_cap_remains_native_tempo_bridge_candidate(self):
@@ -117,6 +117,15 @@ class PlannerTests(unittest.TestCase):
         self.assertFalse(result["edges"][0]["tempo"]["beatmatch_possible"])
         with self.assertRaises(ValueError):
             plan_tracks([track("a", 100), track("b", 180)], mode="fixed", allow_tempo_reset=False)
+
+    def test_default_large_gap_preserves_incoming_tempo_as_creative_exit(self):
+        planned = plan_tracks([track("a", 174.066), track("b", 128.06)], mode="fixed")
+        tempo = planned["edges"][0]["tempo"]
+        self.assertEqual(tempo["technique"], "outgoing_only_vinyl")
+        self.assertFalse(tempo["beatmatch_possible"])
+        self.assertEqual(tempo["incoming_rate"], 1.0)
+        self.assertEqual(tempo["target_bpm"], 128.06)
+        self.assertIsNone(planned["constraints"]["tempo_ramp_max_change_per_deck"])
 
     def test_seed_reproducible_and_no_duplicate_records(self):
         records = [track(str(i)) for i in range(7)]

@@ -146,7 +146,7 @@ class AdaptiveForwardSignalTests(unittest.TestCase):
                 frozen = copy.deepcopy((records, planned))
                 hashes = {r["path"]: hashlib.sha256(Path(r["path"]).read_bytes()).digest()
                           for r in records}
-                result = self.render(planned, records)
+                result = self.render(planned, records, tempo_conflict_policy="shared_tempo")
                 self.check_matched_output(result)
                 self.assertEqual(result["order"], ["first", "second"])
                 self.assertEqual(result["transitions"][0]["tempo_technique"], "tempo_ramp")
@@ -161,7 +161,7 @@ class AdaptiveForwardSignalTests(unittest.TestCase):
 
     def test_unreachable_tempo_uses_positive_echo_without_warp(self):
         records = self.fixtures(100.0, 180.0)
-        result = self.render(plan_tracks(records, mode="fixed"), records)
+        result = self.render(plan_tracks(records, mode="fixed"), records, tempo_conflict_policy="echo_bridge")
         self.assertEqual(result["transitions"][0]["mode"], "free_time_echo_bridge")
         self.assertGreater(result["transitions"][0]["overlap_frames"], 0)
         self.assertFalse(result["transitions"][0]["beatmatched"])
@@ -185,7 +185,7 @@ class AdaptiveForwardSignalTests(unittest.TestCase):
         self.assertFalse((self.directory / "set.wav").exists())
 
     def test_strict_native_fallback_constraint_rejected(self):
-        records = self.fixtures(100.0, 180.0)
+        records = self.fixtures(174.0, 128.0)
         planned = plan_tracks(records, mode="fixed")
         planned["constraints"]["allow_tempo_reset"] = False
         with self.assertRaisesRegex(RenderError, "forbids"):
@@ -195,11 +195,29 @@ class AdaptiveForwardSignalTests(unittest.TestCase):
     def test_stricter_declared_ramp_cap_is_not_silently_expanded(self):
         records = self.fixtures(174.0, 128.0)
         planned = plan_tracks(records, mode="fixed", tempo_ramp_max_change=0.10)
-        result = self.render(planned, records)
+        with self.assertRaises(RenderError):
+            self.render(planned, records, tempo_conflict_policy="shared_tempo")
+
+    def test_default_short_exit_keeps_incoming_native_and_effect_only_on_old_tail(self):
+        records = self.fixtures(174.0, 128.0)
+        result = self.render(plan_tracks(records, mode="fixed"), records)
         transition = result["transitions"][0]
-        self.assertFalse(transition["beatmatched"])
-        self.assertEqual(transition["mode"], "free_time_echo_bridge")
-        self.assertTrue(all(track["warp"] is None for track in result["tracks"]))
+        self.assertEqual(transition["mode"], "outgoing_only_vinyl")
+        self.assertEqual(transition["overlap_frames"], 8 * self.sample_rate)
+        self.assertTrue(transition["incoming_tempo_preserved"])
+        first, second = result["tracks"]
+        self.assertIsNone(second["warp"])
+        self.assertIsNone(second["creative_warp"])
+        self.assertEqual(first["creative_warp"]["ramp_output_seconds"], 6)
+        self.assertFalse(result["processing"]["time_stretch_executed"])
+        self.assertTrue(result["processing"]["playback_speed_effect_executed"])
+        self.assertGreater(transition["vinyl_gain_processing"]["both_decks_nonzero_upper_gain_fraction"], .95)
+        sr = self.sample_rate
+        source, _ = sf.read(records[1]["path"], always_2d=True, dtype="float32")
+        rendered, _ = sf.read(second["audio_path"], always_2d=True, dtype="float32")
+        start = round(second["trim_start_seconds"] * sr)
+        # The incoming clip is only trimmed and level-matched, with no remap.
+        np.testing.assert_allclose(rendered, source[start:start + len(rendered)] * 10 ** (second["gain_db"] / 20), atol=2e-7)
 
 
 if __name__ == "__main__":

@@ -116,8 +116,9 @@ def render(args, records=None, planned=None):
                            transition_bars=args.transition_bars, allow_unverified=args.allow_unverified,
                            allow_hard_cut=args.allow_hard_cut,
                            tempo_conflict_policy=args.tempo_conflict_policy,
-                           tempo_ramp_max_change=args.tempo_ramp_max_change,
+                           tempo_ramp_max_change=args.tempo_ramp_max_change if args.tempo_ramp_max_change is not None else 0.25,
                            tempo_ramp_seconds=args.tempo_ramp_seconds,
+                           native_exit_seconds=args.native_exit_seconds,
                            bridge_overlap_beats=args.bridge_overlap_beats,
                            progress=lambda s: print(s, flush=True))
     write_json(work / "render.json", rendered)
@@ -225,8 +226,8 @@ def _planning(parser, seed=True):
     parser.add_argument("--max-tempo-change", type=float, default=0.06)
     parser.add_argument("--no-tempo-reset", action="store_true", help="Require a bounded common tempo; disallow native-tempo fallback bridges")
     if "--tempo-ramp-max-change" not in parser._option_string_actions:
-        parser.add_argument("--tempo-ramp-max-change", type=float, default=0.25,
-                            help="Separate per-deck musical-change cap for tempo ramps; default 0.25")
+        parser.add_argument("--tempo-ramp-max-change", type=float, default=None,
+                            help="Opt in to wider shared-tempo plans; disabled by default")
     if seed:
         parser.add_argument("--seed", type=int, default=0)
 
@@ -246,13 +247,15 @@ def _rendering(parser):
     parser.add_argument("--target-lufs", type=float, default=-14.0)
     parser.add_argument("--allow-unverified", action="store_true", help="Allow explicitly labelled free-time short transitions when grids are uncertain")
     parser.add_argument("--allow-hard-cut", action="store_true", help="Explicitly permit deliberate zero-overlap tempo resets; disabled by default")
-    parser.add_argument("--tempo-conflict-policy", choices=("adaptive", "review", "echo_bridge"), default="adaptive",
-                        help="Adaptive: common-tempo ramp, then native-tempo echo fallback; review stops unresolved edges")
+    parser.add_argument("--tempo-conflict-policy", choices=("adaptive", "shared_tempo", "review", "echo_bridge"), default="adaptive",
+                        help="Adaptive preserves incoming native tempo with an outgoing-only vinyl exit; shared_tempo is an explicit experiment")
     if "--tempo-ramp-max-change" not in parser._option_string_actions:
-        parser.add_argument("--tempo-ramp-max-change", type=float, default=0.25,
-                            help="Separate per-deck musical-change cap for tempo ramps; default 0.25")
+        parser.add_argument("--tempo-ramp-max-change", type=float, default=None,
+                            help="Explicit shared-tempo cap; a supplied plan can restrict it further")
     parser.add_argument("--tempo-ramp-seconds", type=float, default=15.0,
                         help="Smooth tempo change in output seconds (10 to 20); default 15")
+    parser.add_argument("--native-exit-seconds", type=float, default=8.0,
+                        help="Short outgoing-only vinyl overlap with native incoming tempo (4 to 20 seconds)")
     parser.add_argument("--bridge-overlap-beats", type=float, default=8.0,
                         help="Echo bridge length in incoming beats (4 to 32), not a beatmatched phrase")
     parser.add_argument("--no-mp3", action="store_true")

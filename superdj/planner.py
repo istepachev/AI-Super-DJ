@@ -27,6 +27,7 @@ DEFAULT_WEIGHTS = {
     "uncertainty": 0.60,
     "vocal_overlap": 0.80,
     "tempo_reset": 8.0,
+    "creative_exit": 2.0,
 }
 _KEYS = {
     "B major": "1B", "F# major": "2B", "Gb major": "2B",
@@ -177,6 +178,12 @@ def _tempo(a: _Track, b: _Track, limit: float,
                         "max_change": change, "technique": "tempo_ramp",
                         "applied_limit": ramp_limit,
                         "reason": "common tempo with a bounded smooth tempo ramp"}
+        if 0.65 <= b.bpm / a.bpm < 1:
+            return {"beatmatch_possible": False, "target_bpm": b.bpm,
+                    "outgoing_rate": b.bpm / a.bpm, "incoming_rate": 1.0,
+                    "max_change": 1 - b.bpm / a.bpm,
+                    "technique": "outgoing_only_vinyl",
+                    "reason": "preserve incoming native tempo; outgoing exit needs a short creative speed effect"}
         return {"beatmatch_possible": False, "target_bpm": None,
                 "outgoing_rate": 1.0, "incoming_rate": 1.0,
                 "max_change": 0.0, "reason": "no common tempo inside stretch limit"}
@@ -209,6 +216,7 @@ def _edge(a: _Track, b: _Track, limit: float, weights: Mapping[str, float],
     vocal_overlap = min(outgoing_vocal, incoming_vocal)
     tempo_term = tempo["max_change"] / max(limit, 0.01)
     reset = not tempo["beatmatch_possible"]
+    creative_exit = tempo.get("technique") == "outgoing_only_vinyl"
     components = {
         "harmonic": harmonic * weights["harmonic"],
         "tempo": tempo_term * weights["tempo"],
@@ -216,7 +224,8 @@ def _edge(a: _Track, b: _Track, limit: float, weights: Mapping[str, float],
         "similarity": similarity * weights["similarity"],
         "uncertainty": uncertainty * weights["uncertainty"],
         "vocal_overlap": vocal_overlap * weights["vocal_overlap"],
-        "tempo_reset": weights["tempo_reset"] if reset else 0.0,
+        "tempo_reset": weights["tempo_reset"] if reset and not creative_exit else 0.0,
+        "creative_exit": weights["creative_exit"] if creative_exit else 0.0,
     }
     reasons = [harmonic_reason, tempo["reason"]]
     if confidence < 0.65:
@@ -228,7 +237,7 @@ def _edge(a: _Track, b: _Track, limit: float, weights: Mapping[str, float],
     if has_similarity:
         reasons.append("acoustic embedding similarity considered")
     if reset:
-        reasons.append("no bounded common tempo; select a continuous native-tempo bridge")
+        reasons.append("review the short outgoing-only effect cue" if creative_exit else "no bounded common tempo; select another continuous transition technique")
     cost = sum(components.values()) if allow_reset or not reset else math.inf
     return {"from": a.id, "to": b.id, "cost": cost, "components": components,
             "tempo": tempo, "tempo_reset": reset, "transition_review_required": reset,
@@ -241,7 +250,7 @@ def transition_score(a: Mapping[str, Any], b: Mapping[str, Any], *,
                      max_tempo_change: float = 0.06,
                      weights: Mapping[str, float] | None = None,
                      allow_tempo_reset: bool = True,
-                     tempo_ramp_max_change: float | None = 0.25) -> dict[str, Any]:
+                     tempo_ramp_max_change: float | None = None) -> dict[str, Any]:
     """Explain one edge with distinct ordinary and smooth-ramp tempo caps."""
     limit = _validate_limit(max_tempo_change)
     ramp_limit = _ramp_limit(tempo_ramp_max_change, limit)
@@ -435,7 +444,7 @@ def plan_tracks(records: Sequence[Mapping[str, Any]], *, mode: str = "auto",
                 energy_arc: str | Sequence[float] = "build", allow_tempo_reset: bool = True,
                 weights: Mapping[str, float] | None = None, exact_limit: int = 17,
                 beam_width: int = 256,
-                tempo_ramp_max_change: float | None = 0.25) -> dict[str, Any]:
+                tempo_ramp_max_change: float | None = None) -> dict[str, Any]:
     """Plan every input once, or diagnose a user-defined fixed order.
 
     ``id`` defaults to ``path``. BPM may be unknown; key accepts standard
@@ -544,7 +553,7 @@ def plan_tracks(records: Sequence[Mapping[str, Any]], *, mode: str = "auto",
     if low_confidence:
         warnings.append("Low-confidence musical analysis needs review; confidence is not a calibrated probability")
     if reset_count:
-        warnings.append(f"{reset_count} transitions require a native-tempo bridge; no common tempo within the declared limits")
+        warnings.append(f"{reset_count} transitions use or need a separately reviewed creative technique; they are not ordinary 1:1 common-tempo blends")
     warnings.append("This plan does not validate bar-one or phrase boundaries; verify them before rendering")
     return {
         "schema_version": 1, "mode": mode, "method": method,
