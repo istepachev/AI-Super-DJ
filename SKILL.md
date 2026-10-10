@@ -17,11 +17,11 @@ Treat beats, downbeats and phrases as separate evidence. Beat This! predicts bea
 
 ## Default mixing
 
-First use the existing ordinary beatmatched blend, common tempo and normal windows: usually sixteen bars, shorter when needed. Long F (`sync`) is the fallback when an ordinary blend cannot work and would otherwise leave a discontinuity. Successful ordinary blends and reviewed montages are not replaced wholesale.
+For newly built sets use F (`sync`) as the standard transition: both decks follow one integrated tempo curve and one beat phase throughout the overlap. Prefer long compatible windows, usually thirty-two bars, sixteen for large tempo changes. Reduce automatic windows when evidence or a short source requires it. Preserve reviewed montage decisions and explicit locks.
 
-F integrates one tempo curve with one beat phase for both decks throughout the overlap; matching BPM alone is insufficient. Main sections retain native tempo. Conflict F defaults to thirty-two bars, or sixteen above 20% temporary rate change. Short F is used when requested or approved for the pair. Preserve pair-specific preferences and cue locks. The F/E/C/cut ranking applies to unresolved transitions; see [references/transition-preferences.md](references/transition-preferences.md). The CLI automatically tries ordinary then F; later creative alternatives remain agent-directed. Unknown tempo or inadequate timing evidence must not be presented as verified alignment.
+Matching BPM alone is insufficient. Main sections retain native tempo. Choose the energetic central core using structural cues and audio features; do not play a whole extended intro/outro by default or assume numbered DJ cues exist. Target 180–240 seconds of solo play between overlaps, with a hard 300-second maximum. Retain at least 120 seconds including overlaps. Short sources need shorter solo play; a small minimum deficit can use a disclosed short, stable whole-bar repeat before the exit. Never invent beats or add silence to meet a duration. Bigger deficits or conflicting locks stop the run. Report exact solo, deck and overlap durations separately. See [references/transition-preferences.md](references/transition-preferences.md).
 
-Use separate bass, middle and high-frequency curves. Hand over bass without two full bass lines; open incoming mids gradually, initially quieter when contrasting timbres would cause abrupt entry. Do not compensate this attenuation by raising the entire incoming deck. These defaults apply to ordinary and F overlaps.
+Use separate bass, middle and high-frequency curves tied to the shared beat phase. Pass bass over four beats near the middle. Softly transfer mids over eight to sixteen beats; initially attenuate the incoming mids and avoid holding two dense mid parties together. Highs use a gentler cross throughout the overlap. Paired band gains never exceed unity. Do not compensate attenuation by raising the entire incoming deck.
 
 When local Demucs estimates are available, prefer cues with less competing vocal activity and selectively hand over foreground estimates. Apply the same timing and linear preparation to mixture and voice estimates. Bypass subtraction when estimates cannot be aligned or one voice is insignificant. Stems contain leakage; inspect vocal interference in the actual result.
 
@@ -29,7 +29,7 @@ Check rendered attacks independently of the intended map. The engine can compens
 
 ## Optional DJ Жилин
 
-Use `make --style zhilin` when requested. Select energetic structural source spans targeting three to four minutes and prefer long compatible overlaps. Preserve approved durations/cues ahead of that preference, including forty/forty-four bars and explicit partial-bar beat counts. Separate selected source span, rendered deck span and audible foreground duration. Source availability, protected material and harmony may require shorter overlap. This mode uses the same mixer; it does not guarantee a copy of a proprietary montage. Details are in [references/engines.md](references/engines.md).
+Use `make --style zhilin` when requested. Prefer forty-bar compatible overlaps with the same core selection, shared SYNC and separate frequency curves. Preserve approved durations/cues ahead of the preference, including forty/forty-four bars and explicit partial-bar beat counts. Source availability and protected material may require shorter overlap. This mode does not guarantee a copy of a proprietary montage. Details are in [references/engines.md](references/engines.md).
 
 ## Sound and delivery
 

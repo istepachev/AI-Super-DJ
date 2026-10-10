@@ -1149,8 +1149,9 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                       "duration_seconds": sf.info(clip_output).frames / sample_rate})
         if section:
             clips[-1]["section_policy"] = section
-            clips[-1]["rendered_selected_span_in_3_4_minutes"] = 180 <= clips[-1]["duration_seconds"] <= 240
-            if not clips[-1]["rendered_selected_span_in_3_4_minutes"]:
+            if 'target_solo_seconds' not in section:
+                clips[-1]["rendered_selected_span_in_3_4_minutes"] = 180 <= clips[-1]["duration_seconds"] <= 240
+            if 'target_solo_seconds' not in section and not clips[-1]["rendered_selected_span_in_3_4_minutes"]:
                 warnings.append(f"{identity}: rendered selected span outside 3–4 minutes; source/tempo/manual exception retained")
     temporary = output.with_name(output.stem + ".partial.wav")
     if temporary.exists():
@@ -1199,9 +1200,13 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                             transition["vocal_processing"] = voice_report
                             risk = any(float((transition.get(role) or {}).get("sustained_midband_proxy") or 0) > .5
                                        for role in ("outgoing_cue", "incoming_cue"))
+                            clock = transition.get('shared_clock')
+                            beat_phase = (np.interp(np.arange(incoming), clock['output_frames'], clock['phase']) / clock['beats']) if clock else None
+                            if beat_phase is not None:
+                                beat_phase[-1] = 1.
                             mixed, evidence = blend(previous_tail, block, sample_rate,
                                 bass_hz=bass_hz if mode == "beatmapped_bass_swap" else 0.0,
-                                beats=transition.get("beats", 64), tonal_conflict=risk)
+                                beats=transition.get("beats", 64), tonal_conflict=risk, beat_phase=beat_phase)
                             transition["frequency_processing"] = evidence
                             dest.write(mixed)
                         transitions[position - 1]["set_start_frame"] = cursor - incoming
@@ -1215,6 +1220,14 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                                                          "set_start_seconds": cursor / sample_rate,
                                                          "set_end_seconds": cursor / sample_rate})
                     body = clip["output_frames"] - incoming - outgoing
+                    clip['solo_seconds'] = body / sample_rate
+                    clip['solo_start_seconds'] = cursor / sample_rate
+                    clip['solo_end_seconds'] = (cursor + body) / sample_rate
+                    section = sections.get(clip['id']) or {}
+                    if section.get('maximum_solo_seconds') is not None and clip['solo_seconds'] > section['maximum_solo_seconds'] + 1 / sample_rate:
+                        raise RenderError(f"{clip['id']}: rendered solo exceeds its maximum duration")
+                    if section.get('predicted_solo_seconds') is not None and abs(clip['solo_seconds'] - section['predicted_solo_seconds']) > .05:
+                        raise RenderError(f"{clip['id']}: rendered solo disagrees with the section budget")
                     fade_in = not incoming
                     fade_out = not outgoing
                     _copy_region(original, dest, body, fade_in=fade_in, fade_out=fade_out)

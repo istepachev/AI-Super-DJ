@@ -90,11 +90,16 @@ def plan(args, records=None):
                     raise ValueError("transition_policy must be auto, sync or review")
                 edges[pair]["transition_policy"] = policy
             seen.add(pair)
-    if getattr(args, "style", "default") == "zhilin":
-        from .sections import arrange
-        result = arrange(result, records)
+    # Automatic sets have one shared-phase mixer and an explicit solo budget.
+    # Zhilin prefers 40-bar overlaps using the same core selection/mixer.
+    from .compact import arrange_sync
+    if all(row.get('downbeats') and row.get('duration', row.get('duration_seconds')) for row in records):
+        result = arrange_sync(result, records, zhilin=getattr(args, 'style', 'default') == 'zhilin')
+    else:
+        result['section_warnings'] = ['Order-only plan: audio analysis/grid required before compact SYNC rendering']
     write_json(Path(args.work) / "plan.json", result)
-    print(f"Planned {len(result['order'])} tracks; {result['tempo_ramp_count']} tempo ramps; {result['tempo_reset_count']} native-tempo bridges; {result['method']}", flush=True)
+    sync_count = sum(edge.get('transition_policy') == 'sync' for edge in result['edges'])
+    print(f"Planned {len(result['order'])} tracks; {sync_count} shared-phase SYNC transitions; {result['method']}", flush=True)
     return result
 
 
@@ -134,6 +139,10 @@ def render(args, records=None, planned=None):
             item["source_measurements"] = measured
             item["loudness_lufs"] = measured["integrated_lufs"]
         record["loudness_lufs"] = item["loudness_lufs"]
+    from .minimum import preserve_minimum
+    planned, records, prepared = preserve_minimum(planned, records, prepared, work / 'minimum_playback')
+    write_json(work / 'effective_plan.json', planned)
+    write_json(work / 'effective_records.json', records)
     write_json(work / "prepared.json", prepared)
     premix = work / "premix.wav"
     print("Rendering tempo maps and transitions", flush=True)
@@ -274,14 +283,14 @@ def _rendering(parser):
     parser.add_argument("--rubberband", required=True)
     parser.add_argument("--prepared", help="Private JSON of existing FLOAT preparations")
     parser.add_argument("--noise-profiles", help="Explicit noise-only reference files by track id")
-    parser.add_argument("--transition-bars", type=int, choices=(8, 16, 32), default=16)
+    parser.add_argument("--transition-bars", type=int, choices=(8, 16, 32), default=32)
     parser.add_argument("--max-intro-trim-seconds", type=float, default=32.0,
                         help="Maximum intro skipped to reach a stable musical transition window")
     parser.add_argument("--target-lufs", type=float, default=-14.0)
     parser.add_argument("--allow-unverified", action="store_true", help="Allow explicitly labelled free-time short transitions when grids are uncertain")
     parser.add_argument("--allow-hard-cut", action="store_true", help="Explicitly permit deliberate zero-overlap tempo resets; disabled by default")
-    parser.add_argument("--tempo-conflict-policy", choices=("auto", "sync", "adaptive", "shared_tempo", "review", "echo_bridge"), default="auto",
-                        help="Default auto preserves ordinary blends and uses long SYNC only if they fail; sync explicitly forces shared-phase mixing")
+    parser.add_argument("--tempo-conflict-policy", choices=("auto", "sync", "adaptive", "shared_tempo", "review", "echo_bridge"), default="sync",
+                        help="Default SYNC uses one integrated phase and tempo curve for both decks")
     parser.add_argument("--sync-max-change", type=float, default=0.40,
                         help="Temporary rate change cap during shared SYNC, not the main track sections")
     parser.add_argument("--sync-transition-bars", type=int, choices=(2, 4, 8, 16, 32), default=None,
