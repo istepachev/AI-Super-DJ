@@ -94,7 +94,7 @@ def plan(args, records=None):
     # Zhilin prefers 40-bar overlaps using the same core selection/mixer.
     from .compact import arrange_sync
     if all(row.get('downbeats') and row.get('duration', row.get('duration_seconds')) for row in records):
-        result = arrange_sync(result, records, zhilin=getattr(args, 'style', 'default') == 'zhilin')
+        result = arrange_sync(result, records, zhilin=getattr(args, 'style', 'default') == 'zhilin', ffmpeg=getattr(args, 'ffmpeg', None))
     else:
         result['section_warnings'] = ['Order-only plan: audio analysis/grid required before compact SYNC rendering']
     write_json(Path(args.work) / "plan.json", result)

@@ -23,6 +23,8 @@ Matching BPM alone is insufficient. Main sections retain native tempo. Choose th
 
 Use separate bass, middle and high-frequency curves tied to the shared beat phase. Pass bass over four beats near the middle. Softly transfer mids over eight to sixteen beats; initially attenuate the incoming mids and avoid holding two dense mid parties together. Highs use a gentler cross throughout the overlap. Paired band gains never exceed unity. Do not compensate attenuation by raising the entire incoming deck.
 
+Use measured bass availability when selecting automatic windows: the outgoing source should support the handoff and the incoming source should already carry bass there. Avoid bass-empty intro/outro regions while allowing short musical fills. The 35–180 Hz profile is an energy proxy, not a kick detector; reviewed quiet cues remain constraints. Check the actual rendered overlaps for energy holes before delivery.
+
 When local Demucs estimates are available, prefer cues with less competing vocal activity and selectively hand over foreground estimates. Apply the same timing and linear preparation to mixture and voice estimates. Bypass subtraction when estimates cannot be aligned or one voice is insignificant. Stems contain leakage; inspect vocal interference in the actual result.
 
 Check rendered attacks independently of the intended map. The engine can compensate measured isolated-transient drift with up to five re-renders from original float audio. Ambiguous dense attacks remain unverified; mathematical anchors do not certify acoustic perfection.

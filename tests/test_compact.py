@@ -1,5 +1,6 @@
 """Observable phase, duration and anti-layering checks for automatic sets."""
 import os
+import shutil
 import numpy as np
 import pytest
 import soundfile as sf
@@ -10,6 +11,7 @@ from superdj.planner import plan_tracks
 from superdj.render import render_plan
 from superdj.sync import shared_clock
 from superdj.minimum import preserve_minimum
+from superdj.rhythm import support
 from test_new_workflow import record
 
 
@@ -70,6 +72,55 @@ def test_explicit_review_is_not_silently_replaced_with_sync():
     plan['edges'][0]['transition_policy'] = 'review'
     with pytest.raises(ValueError, match='cannot be overwritten'):
         arrange_sync(plan, rows)
+
+
+def test_bass_support_uses_actual_duration_not_number_of_irregular_bins():
+    profile = {'executed': True, 'reference_dbfs': -10, 'threshold_dbfs': -22,
+               'rows': [{'time': 0., 'end': .1, 'bass_dbfs': -15},
+                        {'time': .1, 'end': 2., 'bass_dbfs': -100}]}
+    assert support(profile, 0, 2) == pytest.approx(.05)
+    assert support(profile, .2, 1) == 0
+
+
+def test_auto_entry_has_bass_at_handoff_but_explicit_quiet_cue_is_preserved(tmp_path):
+    from superdj.cues import runtime_config
+    ffmpeg = runtime_config().get('ffmpeg') or os.getenv('SUPERDJ_FFMPEG') or shutil.which('ffmpeg')
+    if not ffmpeg:
+        pytest.skip('FFmpeg required for actual bass-profile analysis')
+    sr = 8000
+    rows = [record('a', 420), record('b', 320)]
+    t = np.arange(320 * sr) / sr
+    signal = .1 * np.sin(2 * np.pi * 70 * t) * (t > 53) + .05 * np.sin(2 * np.pi * 700 * t)
+    source = tmp_path / 'b.wav'
+    sf.write(source, np.column_stack((signal, signal)), sr, subtype='FLOAT')
+    rows[1]['path'] = str(source)
+    plan = plan_tracks(rows, mode='fixed')
+    auto = arrange_sync(plan, rows)
+    start = auto['sections']['b']['start']
+    span = auto['edges'][0]['overlap_bars'] * 4 * 60 / rows[1]['bpm']
+    assert support(auto['rhythm_profiles']['b'], start + .48 * span, start + .70 * span) >= .90
+    assert start > .25
+    plan['edges'][0]['cue_locks'] = {'incoming_start_seconds': .25, 'outgoing_end_seconds': 260.25}
+    locked = arrange_sync(plan, rows)
+    assert locked['sections']['b']['start'] == .25
+
+
+def test_strong_cue_does_not_choose_late_intro_bass_hole(tmp_path):
+    from superdj.cues import runtime_config
+    if not (runtime_config().get('ffmpeg') or os.getenv('SUPERDJ_FFMPEG') or shutil.which('ffmpeg')):
+        pytest.skip('FFmpeg required for actual bass-profile analysis')
+    sr = 8000
+    rows = [record('a', 420), record('b', 320)]
+    rows[1]['cue_candidates'] = [{'time': 32.25, 'confidence': 1., 'novelty': 1.}]
+    t = np.arange(320 * sr) / sr
+    signal = .1 * np.sin(2 * np.pi * 70 * t) * ~((t > 91) & (t < 96))
+    source = tmp_path / 'late_break.wav'
+    sf.write(source, np.column_stack((signal, signal)), sr, subtype='FLOAT')
+    rows[1]['path'] = str(source)
+    planned = arrange_sync(plan_tracks(rows, mode='fixed'), rows)
+    section = planned['sections']['b']
+    assert section['start'] != 32.25
+    assert section['incoming_posthandoff_weak_bass_maximum_seconds'] < 1.
 
 
 def test_curves_never_boost_layered_bands_and_mids_handoff_faster_than_highs():

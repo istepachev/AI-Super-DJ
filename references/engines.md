@@ -37,6 +37,8 @@ Original fusion considers RMS, bass and high-band changes around bar-grid candid
 
 ## Voice and frequencies
 
+Automatic windows also use source 35–180 Hz RMS for each detected beat, from a complete mono 8 kHz decode. A seventieth-percentile reference minus 16 dB marks relative bass availability. Require at least 80% supported duration in the relevant parts of each window and no weak run longer than 0.8 seconds near the bass handoff. These heuristic guards permit short fills and avoid taking bass-empty intro/outro regions. They do not classify kicks or certify alignment; bassless sources and explicit quiet locks retain separate judgment. Cache keys include source path/stat and the beat grid.
+
 Demucs estimates vocals using joint mixture standardization, no per-stem peak normalization, zero shifts, 7.8-second segments and 25% overlap. One-second energy profiles inform candidate/section scoring; these are leakage-prone estimates, not calibrated speech probabilities.
 
 Prepared vocals receive the mixture's linear DC/EQ processing and time map. With both prominent estimates available, outgoing voice is suppressed before incoming voice opens; backing remains in the original mixture. Unsupported creative warp or incompatible preparation bypasses subtraction with a recorded reason. Instrumental material does not receive a placebo vocal effect.

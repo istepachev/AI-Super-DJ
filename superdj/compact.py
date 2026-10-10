@@ -6,10 +6,11 @@ import numpy as np
 
 from .render import RenderError, _Window, _grid, _beat_window, _local_window_evidence, _local_validation_possible
 from .sync import shared_clock
+from .rhythm import bass_profile, support, weak_gap
 
 
 def arrange_sync(plan, records, *, target_solo_seconds=210., maximum_solo_seconds=300.,
-                 minimum_play_seconds=120., sample_rate=48000, zhilin=False):
+                 minimum_play_seconds=120., sample_rate=48000, zhilin=False, ffmpeg=None):
     """Choose energetic cores and stable overlap windows without project timings.
 
     Solo means neither adjacent overlap, not the full deck span. Short sources
@@ -27,6 +28,7 @@ def arrange_sync(plan, records, *, target_solo_seconds=210., maximum_solo_second
     if set(order) != set(by_id) or len(set(order)) != len(order):
         raise ValueError("SYNC selection must retain every unique input")
     windows = {}
+    profiles = {identity: bass_profile(by_id[identity], ffmpeg=ffmpeg) for identity in order}
 
     def candidates(identity, count, native=False):
         key = identity, count, native
@@ -99,8 +101,16 @@ def arrange_sync(plan, records, *, target_solo_seconds=210., maximum_solo_second
         tails = candidates(identity, counts[position], natives[position]) if position < len(counts) else [(t, t, 0, {}) for t in endpoints + [duration]]
         if start_lock is not None:
             heads = [w for w in heads if abs(w[0] - start_lock) < 1 / sample_rate]
+        elif position:
+            heads = [w for w in heads if support(profiles[identity], w[0] + .40 * (w[1] - w[0]), w[1]) >= .80
+                     and support(profiles[identity], w[0] + .48 * (w[1] - w[0]), w[0] + .70 * (w[1] - w[0])) >= .80
+                     and weak_gap(profiles[identity], w[0] + .48 * (w[1] - w[0]), w[0] + .70 * (w[1] - w[0])) <= .80]
         if end_lock is not None:
             tails = [w for w in tails if abs(w[1] - end_lock) < 1 / sample_rate]
+        elif position < len(counts):
+            tails = [w for w in tails if support(profiles[identity], w[0], w[0] + .65 * (w[1] - w[0])) >= .80
+                     and support(profiles[identity], w[0] + .40 * (w[1] - w[0]), w[0] + .60 * (w[1] - w[0])) >= .80
+                     and weak_gap(profiles[identity], w[0] + .40 * (w[1] - w[0]), w[0] + .60 * (w[1] - w[0])) <= .80]
         structure = row.get('structure', [])
         ts = np.array([s['time'] for s in structure])
         energy = np.array([s['energy'] for s in structure])
@@ -133,6 +143,12 @@ def arrange_sync(plan, records, *, target_solo_seconds=210., maximum_solo_second
                 score -= 4 * mean_between(cumulative, core_start, core_end)
                 score -= .5 * (cue_scores.get(round(start, 4), 0) + cue_scores.get(round(end, 4), 0))
                 score += .7 * (mean_between(activity_sum, start, core_start) + mean_between(activity_sum, core_end, end))
+                # After bass has transferred, a late intro break is no longer
+                # covered by the old deck. Prefer windows that avoid a sustained
+                # hole there; brief native fills remain permissible.
+                if position and start_lock is None:
+                    gap = weak_gap(profiles[identity], start + .55 * (core_start - start), core_start)
+                    score += 5 * max(0., gap - .8)
                 # Avoid selecting only an intro when an energetic central core
                 # scores equally. This is not a claim of a known Cue ordinal.
                 score += .15 * abs((core_start + core_end) / 2 - duration / 2) / max(duration, 1)
@@ -186,6 +202,7 @@ def arrange_sync(plan, records, *, target_solo_seconds=210., maximum_solo_second
             'minimum_play_seconds': minimum_play_seconds,
             'selection': 'energetic source core; CUE-DETR/structure candidates and valid beat/bar windows; no project timing',
             'head_local_evidence': head[3], 'tail_local_evidence': tail[3],
+            'incoming_posthandoff_weak_bass_maximum_seconds': weak_gap(profiles[identity], start + .55 * (head[1] - start), head[1]) if position else 0.,
             'locked_start': (result['edges'][position - 1].get('cue_locks') or {}).get('incoming_start_seconds') is not None if position else False,
             'locked_end': (result['edges'][position].get('cue_locks') or {}).get('outgoing_end_seconds') is not None if position < len(result['edges']) else False,
             'duration_exception': played < minimum_play_seconds or solo < 180}
@@ -199,6 +216,6 @@ def arrange_sync(plan, records, *, target_solo_seconds=210., maximum_solo_second
             edge['overlap_bars'] = counts[i]
         edge.setdefault('cue_locks', {}).update(outgoing_end_seconds=sections[edge['from']]['end'],
                                                incoming_start_seconds=sections[edge['to']]['start'])
-    result.update(sections=sections, section_warnings=warnings, style='zhilin' if zhilin else 'default',
+    result.update(sections=sections, section_warnings=warnings, rhythm_profiles=profiles, style='zhilin' if zhilin else 'default',
         section_policy='shared-phase SYNC; target 180–240s solo, maximum 300s; minimum 120s including overlaps required before export; short solo exceptions recorded')
     return result
