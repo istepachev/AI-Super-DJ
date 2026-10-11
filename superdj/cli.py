@@ -496,7 +496,7 @@ def main(argv=None):
     lp = subs.add_parser("harmonize-learn", help="Fit local next-track controls; validate on held-out playlists")
     lp.add_argument("--examples", required=True, help="Private JSON list of {name, records, order}; paths relative to this manifest")
     lp.add_argument("--work", required=True)
-    lp.add_argument("--min-candidates", type=int, default=5)
+    lp.add_argument("--min-candidates", type=int, default=4)
     lp.add_argument("--learner", choices=("controls", "ranker", "modes"), default="controls", help=argparse.SUPPRESS)
     lp.add_argument("--harmonic-mode", choices=("fuzzy", "mood"), default="fuzzy", help=argparse.SUPPRESS)
     nlp = subs.add_parser("harmonize-rank", help="Experimental local next-track ranks; keeps independent harmony checks")

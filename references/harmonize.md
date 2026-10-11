@@ -195,7 +195,7 @@ and seeded ties. Locked chains use their real incoming head and outgoing tail;
 a reserved last block stays last. Fixed incompatible edges inside user locks
 remain disclosed obligations. The exact result covers that suffix's key
 allowance only, not the full route or audio quality. The ranker's displayed
-Top7 is not silently replaced by this assembly guard.
+Top3 is not silently replaced by this assembly guard.
 
 A separate bounded directed repair pass then reopens provisional adjacencies
 when it can strictly reduce unaccepted final boundaries. It preserves endpoints
@@ -219,13 +219,15 @@ choice. These controls do not retune the fitted utilities or create a hard
 tempo constraint. Use the global route search when directly adjusting its
 declared BPM/key weights; record demonstration settings when learning a profile.
 
-Use a shortlist of at most seven allowed tracks, shrinking when fewer remain.
-For the main Top7 comparison require at least eight unplayed candidates; report
-smaller final pools separately, since including every remaining track is trivial
-coverage. Validation retains Top3 as a secondary diagnostic. Report exact unique
-Top1, tied-best, fractional tie credit, optimistic Top7 and guaranteed Top7
-separately. A competition rank at most seven can contain more than seven tracks
-at a tied boundary; the literal shortlist is capped at seven and flags that tie.
+Use a shortlist of at most three allowed tracks, shrinking when fewer remain.
+For the main Top3 comparison require at least four unplayed candidates; report
+final pools of at most three separately, since including every remaining track
+is trivial coverage. Top7 remains a historical diagnostic on pools of at least
+eight. Report unique Top1, literal capped Top3, tied-best, fractional tie credit,
+optimistic Top3 and guaranteed Top3 separately. Competition rank at most three
+can contain more than three tracks at a tied boundary; the literal shortlist is
+capped at three and flags that tie. The Python ranker accepts an explicit
+`shortlist_limit` from one to seven for reproducing earlier experiments.
 Repeated DJ.Studio orders can themselves differ; examine
 that variation without converting it into a claim that our predictions match.
 Tracks with identical BPM/key cannot be distinguished by these features.
@@ -250,12 +252,28 @@ shortest-path navigation, which can skip or revisit vertices, cannot certify
 this requirement. Sparse harmony rules reduce branching without guaranteeing
 a cheap exhaustive search over hundreds of tracks.
 
-The pair-cost engine already searches complete routes with exact small-pool
-optimization and bounded beam/MILP methods described above. The learned
-remaining-pool engine recomputes its preferences step by step, calculates
-unrestricted compatibility bounds for the final twelve blocks exactly and
-repairs final bridges with a bounded directed pass. More general dynamic beam
-and backtracking methods remain experimental until separately validated.
+The pair-cost engine searches complete routes with exact small-pool
+optimization and bounded beam/MILP methods described above. With a learned
+profile, the default complete-prefix beam retains up to thirty-two prefixes
+and up to seven successors per prefix through the final block. Each hypothesis
+uses its own actual current tail and unplayed track mask. Equal tail/unplayed
+states are merged; endpoints and indivisible locked chains remain constraints.
+The branch cap is separate from the displayed Top3: truncating all search to
+three immediate recommendations can discard useful route continuations.
+Mode allowance is independent of fitted utility. Prefixes first prefer fewer
+unaccepted inter-block boundaries, then normalized log weights over allowed
+playable heads. When none is allowed, a native-BPM-distance fallback retains
+all music. Locked internal links are not discretionary choices.
+
+The older sequential policy with exact bounds for the final twelve blocks
+remains a safety candidate. Both complete routes receive the same bounded
+directed repair. Use the beam route unless it has more unaccepted final links;
+the diagnostic full fitted loss does not select the final route. The report
+retains both orders, original local decisions, selected method, prefix progress,
+search budgets and separate post-repair scores. The default expansion cap is
+100,000; a stopped beam receives a disclosed greedy completion instead of
+dropping sources. The Python API `route_search="local"` reproduces the prior
+policy for comparisons. Budgets and safety do not prove a global optimum.
 Normalize learned utilities within each hypothetical remaining-pool
 query before adding them along a path; raw conditional utilities have arbitrary
 query offsets. Do not claim a fixed-initial-pool approximation is full dynamic
@@ -282,6 +300,30 @@ as improved independent audio detection.
 Different good orders are expected. One match or mismatch does not prove
 algorithm equivalence or error; finite beam search can also miss a lower-cost
 path. Do not tune rules on one playlist and call that general validation.
+
+## Chain and recurrence evidence
+
+`compare_orders` includes exact contiguous windows of two, three and four
+tracks when both orders have complete identical membership. The advanced
+`chain_agreement` helper compares multiple same-pool reference variants, with
+per-reference matches, union coverage and recurrence-weighted hits. Three/four
+tracks means two/three edges, not three/four future search steps. Windows must
+be adjacent and keep their direction; reversed or interrupted chains do not
+match. Recurrence across different remaining pools is not the same as repeated
+identical current/unplayed states and does not establish a predictability
+ceiling. Group repeated backups by sources and mode, check their metadata and
+historical controls, and inspect stable missed musical classes separately from
+equivalent alternatives. An inferred expressive preference is not knowledge
+of the proprietary algorithm's intention.
+
+Freeze the existing profile and search before ingesting a new source cohort.
+Score that independent cohort before fitting, then retain nested whole-cohort
+validation and a separately labelled final profile for the next test. A final
+profile fitted on current files is not held out on those files. Shared source
+hashes are conservative grouping evidence, not proof that different encodings
+of the same composition are independent songs. Keep semantic-alias sensitivity
+separate from ID/name musical features. Learned weights and user archives stay
+outside the public source repository.
 
 Official sources checked 2026-10-11:
 [Harmonize](https://help.dj.studio/en/articles/7878402-harmonize-previously-automix),

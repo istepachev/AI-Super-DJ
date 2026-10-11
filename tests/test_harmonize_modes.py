@@ -202,14 +202,40 @@ def test_empty_pool_has_explicit_no_recommendation(profile):
     assert result['shortlist_ids'] == []
 
 
-def test_shortlist_caps_at_seven_and_discloses_a_tied_boundary(profile):
+def test_shortlist_caps_at_three_and_discloses_a_tied_boundary(profile):
     tied = [track(f'candidate-{i}', bpm=120) for i in range(12)]
     ranked = rank_mode_candidates(track('current', bpm=120), tied, profile)
-    assert len(ranked['shortlist_ids']) == 7
+    assert len(ranked['shortlist_ids']) == 3
+    assert ranked['shortlist_limit'] == 3
     assert ranked['shortlist_boundary_tied']
-    small = rank_mode_candidates(track('current', bpm=120), tied[:4], profile)
-    assert len(small['shortlist_ids']) == 4
+    legacy = rank_mode_candidates(track('current', bpm=120), tied, profile,
+                                  shortlist_limit=7)
+    assert len(legacy['shortlist_ids']) == 7
+    assert legacy['shortlist_boundary_tied']
+    small = rank_mode_candidates(track('current', bpm=120), tied[:3], profile)
+    assert len(small['shortlist_ids']) == 3
     assert not small['shortlist_boundary_tied']
+
+
+@pytest.mark.parametrize('limit', [0, 8, -1, True, 3.0, None])
+def test_shortlist_rejects_invalid_limits(profile, limit):
+    with pytest.raises(ValueError, match='shortlist_limit'):
+        rank_mode_candidates(track('current'), [track('next')], profile,
+                             shortlist_limit=limit)
+
+
+def test_main_top3_excludes_trivial_final_pools(profile):
+    from superdj.harmonize_modes import _matrices, _metrics
+    prepared = _prepare([example('one')], 2)
+    matrices = _matrices(prepared, profile['feature_family'], profile['sharing'])
+    row = _metrics(matrices, profile['coefficients'], profile['sharing'])[0]
+    assert row['top3_informative_steps'] == 2
+    assert row['top3_small_pool_steps'] == 2
+    assert row['steps'] == 4
+    aggregate = _aggregate([row])
+    assert aggregate['primary_shortlist_size'] == 3
+    assert aggregate['top3_informative_rate'] == row['top3_informative_count'] / 2
+    assert row['top3_small_pool_count'] == row['top3_small_pool_steps']
 
 
 def test_unknown_training_keys_allowed_without_inventing_key():

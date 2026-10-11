@@ -1,7 +1,8 @@
-"""Assemble an auditable playlist with a trained remaining-pool mode ranker.
+"""Assemble an auditable playlist with dynamic complete-prefix search.
 
-This sequential policy recomputes musical connectivity after each choice. It
-does not claim the global optimum of the separate pair-cost route optimizer.
+The released local policy remains a harmonic safety candidate and its choice
+evidence is retained separately. Neither bounded search nor directed repair
+claims the global optimum of the separate pair-cost route optimizer.
 """
 from __future__ import annotations
 
@@ -12,6 +13,7 @@ import numpy as np
 from .harmonize import _settings, _track, harmonic_relation, summarize_order
 from .harmonize_modes import rank_mode_candidates, validate_mode_ranker_profile
 from .harmonize_modes_repair import repair_mode_order
+from .harmonize_modes_search import search_mode_route, rescore_mode_order
 
 
 TAIL_GUARD_LIMIT = 12
@@ -75,7 +77,8 @@ def _tail_guard(remaining, blocks, by_id, mode, last):
 
 def sequence_mode_tracks(records, profile, *, mode="fuzzy", first_id=None,
                          last_id=None, locked_chains=None, seed=0,
-                         priority=.5, direction="ascending", bpm_tolerance=None):
+                         priority=.5, direction="ascending", bpm_tolerance=None,
+                         route_search="beam", search_max_expansions=100000):
     """Retain every input/lock; explicitly flag unavoidable out-of-mode links.
 
     Learned utility only ranks allowed block heads. With at most 12 remaining
@@ -85,7 +88,16 @@ def sequence_mode_tracks(records, profile, *, mode="fuzzy", first_id=None,
     executing policy, which continues to prefer allowed heads. If none passes the mode
     gate, a declared BPM/key fallback retains the music and records a review
     requirement. A forbidden head is never called a learned recommendation.
+    By default, a bounded complete-prefix beam builds a second full route with
+    normalized weights on each actual unplayed pool. Both routes receive the
+    same directed repair. The beam is retained when its final harmonic count
+    is no worse; local choice evidence continues to describe only the initial
+    local incumbent. ``route_search='local'`` reproduces the before policy.
     """
+    if route_search not in {"beam", "local"}:
+        raise ValueError("route_search must be beam or local")
+    if (type(search_max_expansions) is not int or not 0 <= search_max_expansions <= 1000000):
+        raise ValueError("search_max_expansions must be an integer from zero to one million")
     profile = validate_mode_ranker_profile(profile)
     settings = dict(zip(("mode", "priority", "direction", "bpm_tolerance"),
                         _settings(mode, priority, direction, bpm_tolerance)))
@@ -184,6 +196,36 @@ def sequence_mode_tracks(records, profile, *, mode="fuzzy", first_id=None,
     repair = repair_mode_order(records, order, **settings,
         first_id=blocks[first][0], last_id=last_id, locked_chains=locked_chains)
     order = repair["order"]
+    local_repaired_order, local_route_repair = list(order), repair
+    search, candidates = None, []
+    selected_method = "local_suffix_guard_and_repair"
+    if route_search == "beam":
+        search = search_mode_route(records, profile, mode=mode,
+            first_id=blocks[first][0], last_id=last_id, locked_chains=locked_chains,
+            seed=seed, max_expansions=search_max_expansions)
+        beam_repair = repair_mode_order(records, search["order"], **settings,
+            first_id=blocks[first][0], last_id=last_id, locked_chains=locked_chains)
+        local_bad = len(records)-1-summarize_order(records, order, **settings)["harmonic_matches"]
+        beam_bad = len(records)-1-summarize_order(records, beam_repair["order"], **settings)["harmonic_matches"]
+        # Preserve the released local route as a harmonic safety candidate.
+        # Model loss is a diagnostic, never a selector fitted to teacher scores.
+        if beam_bad <= local_bad:
+            order, repair = beam_repair["order"], beam_repair
+            selected_method = "complete_path_beam_and_repair"
+        candidates = [dict(method="local_suffix_guard_and_repair", order=local_repaired_order,
+            selected=selected_method == "local_suffix_guard_and_repair",
+            repaired_harmonic_violations=local_bad),
+            dict(method="complete_path_beam_and_repair", order=beam_repair["order"],
+                selected=selected_method == "complete_path_beam_and_repair",
+                repaired_harmonic_violations=beam_bad)]
+        for candidate in candidates:
+            candidate["final_route_score"] = rescore_mode_order(records, profile, candidate["order"], mode=mode)
+        search.update(selected_method=selected_method,
+            selection="use the complete-path beam after equal bounded repair unless its harmonic violation count is worse than the released local candidate; normalized loss does not select",
+            local_safety_harmonic_violations=local_bad,
+            beam_repaired_harmonic_violations=beam_bad,
+            beam_route_repair=beam_repair,
+            final_selected_route_score=next(c["final_route_score"] for c in candidates if c["selected"]))
     summary = summarize_order(records, order, **settings)
     warnings = []
     locked_pairs = {pair for chain in blocks for pair in zip(chain, chain[1:])}
@@ -193,8 +235,9 @@ def sequence_mode_tracks(records, profile, *, mode="fuzzy", first_id=None,
             warnings.append(f"{edge['from']} -> {edge['to']}: preserved locked adjacency is outside the harmonic mode")
         elif not edge["harmonic"]["accepted"]:
             warnings.append(f"{edge['from']} -> {edge['to']}: final route remains outside the harmonic mode after bounded search; explicit fallback bridge needs review")
-    summary.update(schema_version=1, version="superdj-mode-sequence-3", mode="harmonize",
-        method="sequential mode-aware remaining-pool utility; independent harmonic gate; exact small-tail guard; bounded directed complete-route repair",
+    summary.update(schema_version=1, version="superdj-mode-sequence-4", mode="harmonize",
+        method="dynamic complete-path beam with local suffix-guard safety candidate and bounded directed repair" if search else
+            "sequential mode-aware remaining-pool utility; independent harmonic gate; exact small-tail guard; bounded directed complete-route repair",
         order=order, ordered_paths=[by_id[identity].get("path") for identity in order], settings=settings,
         optimal_for_declared_objective=False, order_objective="mode_pool",
         objective_details=dict(strategy="mode_pool", feature_family=profile["feature_family"], sharing=profile["sharing"],
@@ -205,17 +248,23 @@ def sequence_mode_tracks(records, profile, *, mode="fuzzy", first_id=None,
             route_repair=dict(version=repair["version"], changed=repair["changed"],
                 objective=repair["objective"], candidate_budget=repair["candidate_budget"],
                 scope=repair["scope"]),
-            scope="sequential policy plus bounded whole-route repair; not a complete-route minimum or DJ.Studio implementation"),
-        control_scope=dict(priority="diagnostic summary, explicit fallback and static complete-route repair tie cost; not fitted utility",
-            bpm_tolerance="diagnostic summary, explicit fallback and static route-repair tie cost; not a learned-candidate constraint",
+            route_search=dict(policy=route_search, selected_method=selected_method,
+                version=search["version"] if search else None,
+                scope="bounded whole-route alternative prefixes; independent harmonic safety; no global optimum or DJ.Studio implementation"),
+            scope="bounded complete-route search and repair; not a complete-route minimum or DJ.Studio implementation"),
+        control_scope=dict(priority="diagnostic summary, local safety fallback and static complete-route repair tie cost; not fitted utility or beam normalization",
+            bpm_tolerance="diagnostic summary, local safety fallback and static route-repair tie cost; not a learned-candidate constraint",
             direction="automatic first choice, diagnostic summary, explicit fallback and static route-repair tie cost",
-            learned_choice="musical utilities learned from supplied demonstrations; independent harmonic mode gate"),
+            learned_choice="initial choices retain local learned utility; complete-prefix beam recomputes each actual pool and normalizes playable-head log weights; independent mode gate"),
         constraints=dict(first_id=first_id, last_id=last_id, locked_chains=locked_chains or [],
                          all_tracks_once=True, seed=seed),
         choices=choices, incumbent_order=incumbent_order,
-        choices_scope="initial sequential decisions on incumbent_order and its actual remaining pools; not decisions on a repaired final order",
+        choices_scope="initial sequential decisions on incumbent_order and its actual remaining pools; not decisions on a searched or repaired final order",
         incumbent_fallback_count=sum(choice["fallback"] for choice in choices),
         incumbent_uncertainty=dict(warnings=incumbent_warnings), route_repair=repair,
+        local_repaired_order=local_repaired_order, local_route_repair=local_route_repair,
+        route_search=search if search else dict(enabled=False, policy="local", selected_method=selected_method),
+        search_candidates=candidates,
         fallback_count=sum(not edge["harmonic"]["accepted"] and not edge["locked_adjacency"] for edge in summary["edges"]),
         fallback_count_scope="unlocked final route bridges outside the mode; separate from initial sequential fallback decisions",
         initial_choice_scope="locked first" if first_id is not None else "BPM direction or harmonic connectivity heuristic",

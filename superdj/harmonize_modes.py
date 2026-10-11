@@ -314,11 +314,16 @@ def _metrics(examples, coefficients, sharing, *, gated=False):
         best = unique = top3 = guaranteed = blocked = feature_ceiling = 0
         top7 = guaranteed7 = early_steps = early7 = early_guaranteed7 = 0
         late_steps = late7 = late_guaranteed7 = 0
+        early3_steps = early3 = early_guaranteed3 = 0
+        late3_steps = late3 = late_guaranteed3 = 0
         reciprocal = credit = nll = 0.
         for (current, pool), matrix in zip(example["queries"], example["matrices"]):
             informative = len(pool) >= 8
             early_steps += informative
             late_steps += not informative
+            informative3 = len(pool) >= 4
+            early3_steps += informative3
+            late3_steps += not informative3
             logits = matrix @ weights
             feature_ceiling += int(np.sum(np.max(abs(matrix - matrix[0]), axis=1) < 1e-10) == 1)
             if gated:
@@ -335,6 +340,10 @@ def _metrics(examples, coefficients, sharing, *, gated=False):
             unique += rank == tie_count == 1
             top3 += rank <= 3
             guaranteed += rank + tie_count - 1 <= 3
+            early3 += informative3 and rank <= 3
+            early_guaranteed3 += informative3 and rank + tie_count - 1 <= 3
+            late3 += not informative3 and rank <= 3
+            late_guaranteed3 += not informative3 and rank + tie_count - 1 <= 3
             in7, guaranteed_in7 = rank <= 7, rank + tie_count - 1 <= 7
             top7 += in7
             guaranteed7 += guaranteed_in7
@@ -350,6 +359,10 @@ def _metrics(examples, coefficients, sharing, *, gated=False):
         rows.append(dict(name=example["name"], cohort_group=example["group"], mode=example["mode"],
                          steps=count, best_count=int(best), unique_best_count=int(unique), top3_count=int(top3),
                          guaranteed_top3_count=int(guaranteed), demonstrated_next_blocked=blocked,
+                         top3_informative_steps=int(early3_steps), top3_informative_count=int(early3),
+                         guaranteed_top3_informative_count=int(early_guaranteed3),
+                         top3_small_pool_steps=int(late3_steps), top3_small_pool_count=int(late3),
+                         guaranteed_top3_small_pool_count=int(late_guaranteed3),
                          top7_count=int(top7), guaranteed_top7_count=int(guaranteed7),
                          top7_informative_steps=int(early_steps), top7_informative_count=int(early7),
                          guaranteed_top7_informative_count=int(early_guaranteed7),
@@ -363,6 +376,8 @@ def _metrics(examples, coefficients, sharing, *, gated=False):
 def _aggregate(rows):
     keys = ("steps", "best_count", "unique_best_count", "top3_count", "guaranteed_top3_count",
             "demonstrated_next_blocked", "fractional_top1_credit", "reciprocal_midrank_sum", "nll_sum", "unique_feature_ceiling",
+            "top3_informative_steps", "top3_informative_count", "guaranteed_top3_informative_count",
+            "top3_small_pool_steps", "top3_small_pool_count", "guaranteed_top3_small_pool_count",
             "top7_count", "guaranteed_top7_count", "top7_informative_steps", "top7_informative_count",
             "guaranteed_top7_informative_count", "top7_small_pool_steps", "top7_small_pool_count", "guaranteed_top7_small_pool_count")
     result = {key: sum(row.get(key, 0) for row in rows) for key in keys}
@@ -373,6 +388,11 @@ def _aggregate(rows):
                   mean_nll=result["nll_sum"] / count if count and not result["demonstrated_next_blocked"] else None,
                   nll_scope="Full mean NLL is undefined when demonstrated choices are blocked; conditional mean uses supported choices only")
     early = result["top7_informative_steps"]
+    early3 = result["top3_informative_steps"]
+    result.update(top3_informative_rate=result["top3_informative_count"] / early3 if early3 else None,
+                  guaranteed_top3_informative_rate=result["guaranteed_top3_informative_count"] / early3 if early3 else None,
+                  primary_shortlist_size=3,
+                  top3_scope="Main Top3 comparison requires at least four remaining candidates; final pools of at most three are reported separately")
     result.update(top7_informative_rate=result["top7_informative_count"] / early if early else None,
                   guaranteed_top7_informative_rate=result["guaranteed_top7_informative_count"] / early if early else None,
                   top7_scope="Main Top7 comparison requires at least eight remaining candidates; smaller pools reported separately")
@@ -445,7 +465,7 @@ def _profile(examples, selected, options, coefficients, minimum):
 
 
 def fit_mode_ranker(examples, *, feature_families=("pool",), sharing_options=SHARING_OPTIONS,
-                    l2_candidates=(.1, 1.), min_candidates=5):
+                    l2_candidates=(.1, 1.), min_candidates=4):
     """Select and fit experimental JSON coefficients using inner cohorts only."""
     minimum = _minimum(min_candidates)
     prepared = _prepare(examples, minimum)
@@ -454,7 +474,7 @@ def fit_mode_ranker(examples, *, feature_families=("pool",), sharing_options=SHA
 
 
 def cross_validate_mode_ranker(examples, *, feature_families=("pool",), sharing_options=SHARING_OPTIONS,
-                              l2_candidates=(.1, 1.), min_candidates=5):
+                              l2_candidates=(.1, 1.), min_candidates=4):
     """Outer source cohort holdout, with all variants excluded from inner fit."""
     minimum = _minimum(min_candidates)
     prepared = _prepare(examples, minimum)
@@ -519,13 +539,16 @@ def validate_mode_ranker_profile(profile):
     return dict(profile, coefficients=validated)
 
 
-def rank_mode_candidates(current, candidates, profile, *, mode="fuzzy", tie_tolerance=1e-8):
+def rank_mode_candidates(current, candidates, profile, *, mode="fuzzy", tie_tolerance=1e-8,
+                         shortlist_limit=3):
     """Rank remaining candidates with pool context and an independent mode gate."""
     profile = validate_mode_ranker_profile(profile)
     mode = _mode(mode)
     tolerance = _number(tie_tolerance, "tie_tolerance")
     if tolerance < 0:
         raise ValueError("tie_tolerance must be nonnegative")
+    if type(shortlist_limit) is not int or not 1 <= shortlist_limit <= 7:
+        raise ValueError("shortlist_limit must be an integer from one to seven")
     candidates = _list(candidates, "Candidates")
     matrix = remaining_features(current, candidates, mode=mode, family=profile["feature_family"], sharing=profile["sharing"])
     coefficients = profile["coefficients"][mode if profile["sharing"] == "separate" else "all"]
@@ -545,15 +568,15 @@ def rank_mode_candidates(current, candidates, profile, *, mode="fuzzy", tie_tole
     ranks, ties = _rank([row["utility"] for row in eligible], tolerance)
     for index, row in enumerate(eligible):
         row.update(rank=ranks[index], tie_count=ties[index])
-    limit = min(7, len(eligible))
+    limit = min(shortlist_limit, len(eligible))
     boundary_tied = bool(limit and limit < len(eligible)
                         and eligible[limit-1]["rank"] == eligible[limit]["rank"])
     return dict(model_version=MODEL_VERSION, experimental=True, mode=mode, utility_warning=UTILITY_WARNING,
                 ranking_scope="local pool-aware musical utility with independent mode gate",
                 candidate_count=len(candidates), eligible_count=len(eligible), blocked_count=len(blocked),
                 best_candidate_ids=[row["id"] for row in eligible if row["rank"] == 1],
-                shortlist_ids=[row["id"] for row in eligible[:limit]], shortlist_limit=7,
+                shortlist_ids=[row["id"] for row in eligible[:limit]], shortlist_limit=shortlist_limit,
                 shortlist_boundary_tied=boundary_tied,
-                shortlist_scope="At most seven allowed choices, fewer when the pool is small; boundary ties are illustrative, not unique predictions",
+                shortlist_scope=f"At most {shortlist_limit} allowed choices, fewer when the pool is small; boundary ties are illustrative, not unique predictions",
                 candidates=eligible + blocked,
                 no_recommendation_reason=None if eligible else "No remaining candidate passes the caller mode")

@@ -361,6 +361,53 @@ def _analysis_records(value: Any) -> dict[str, dict[str, Any]]:
     return _records(value) if value else {}
 
 
+def chain_agreement(our_order: Sequence[str], reference_orders: Sequence[Sequence[str]],
+                    *, lengths: Sequence[int] = (2, 3, 4)) -> dict[str, Any]:
+    """Compare exact directed contiguous windows against same-pool variants.
+
+    Three/four means total tracks, not three/four future steps. References are
+    evaluation evidence only. A recurring pair/chain need not have occurred
+    with the same remaining pool; recurrence is not a prediction ceiling.
+    """
+    from collections import Counter
+
+    ours = _unique(our_order, "our chain order")
+    if isinstance(reference_orders, (str, bytes)) or not isinstance(reference_orders, (list, tuple)) or not reference_orders:
+        raise OrderMatchError("Chain comparison requires at least one reference order")
+    references = [_unique(order, "reference chain order") for order in reference_orders]
+    if any(set(order) != set(ours) for order in references):
+        raise OrderMatchError("Chain comparison requires identical track membership")
+    if (isinstance(lengths, (str, bytes)) or not isinstance(lengths, (list, tuple))
+            or not lengths or any(type(length) is not int or length < 2 for length in lengths)):
+        raise OrderMatchError("Chain lengths must be integers of at least two tracks")
+
+    def windows(order, length):
+        return {tuple(order[index:index+length]) for index in range(max(0, len(order)-length+1))}
+
+    rows = []
+    for length in dict.fromkeys(lengths):
+        our_windows = windows(ours, length)
+        reference_windows = [windows(order, length) for order in references]
+        counts = Counter(window for batch in reference_windows for window in batch)
+        repeated = {window for window, count in counts.items() if count >= 2}
+        hits = our_windows & counts.keys()
+        denominator = max(0, len(ours)-length+1)
+        rows.append(dict(track_count=length, edge_count=length-1,
+            our_window_count=denominator, reference_variant_count=len(references),
+            matches_per_reference=[len(our_windows & batch) for batch in reference_windows],
+            any_reference_count=len(hits),
+            any_reference_rate=len(hits)/denominator if denominator else None,
+            repeated_reference_window_count=len(repeated),
+            repeated_reference_hit_count=len(our_windows & repeated),
+            repeated_reference_hit_rate=len(our_windows & repeated)/len(repeated) if repeated else None,
+            reference_frequency_weighted_hits=sum(counts[window] for window in hits),
+            shared_windows=[list(window) for window in sorted(hits)]))
+    return dict(schema_version=1, scope="exact directed contiguous windows on identical source pools",
+        definition="A chain of three/four total tracks contains two/three edges; no skipped tracks or reversed order",
+        recurrence_scope="same-pool reference recurrence, not identical current/remaining-set evidence or a predictability ceiling",
+        track_count=len(ours), references=len(references), lengths=rows)
+
+
 def compare_orders(reference_records: Sequence[Mapping[str, Any]], our_order: Sequence[str],
                    other_order: Sequence[str], harmonic_mode: str = "fuzzy", priority: float = 0.5,
                    direction: str = "ascending", bpm_tolerance: float | None = None,
@@ -482,6 +529,7 @@ def compare_orders(reference_records: Sequence[Mapping[str, Any]], our_order: Se
                           "common_directed_count": len(shared_edges),
                           "shared_pairs": [list(pair) for pair in sorted(shared_edges)],
                           "jaccard": len(shared_edges) / len(union_edges) if union_edges else 1.0},
+            "chain_agreement": chain_agreement(our_order, [other_order]) if complete else None,
             "evaluations": {"our": our_eval, "other": other_eval,
                             "other_minus_our_cost": cost_delta,
                             "costs_comparable": complete},

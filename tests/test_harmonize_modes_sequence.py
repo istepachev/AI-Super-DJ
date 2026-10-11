@@ -62,8 +62,8 @@ def test_each_choice_uses_only_actual_unplayed_pool(monkeypatch):
     rows = tracks(['8B', '8B', '9B', '9A'])
     result = sequence_mode_tracks(rows, profile(), first_id='0')
     for position, (current, pool) in enumerate(calls):
-        assert current == result['order'][position]
-        assert pool == set(result['order'][position+1:])
+        assert current == result['incumbent_order'][position]
+        assert pool == set(result['incumbent_order'][position+1:])
 
 
 def test_seeded_ties_do_not_use_title_or_identity_as_musical_features():
@@ -99,7 +99,7 @@ def test_complete_route_repair_keeps_original_choice_evidence_separate(monkeypat
     rows = tracks(['8B', '9B', '7B', '10B', '8B'])
     for row in rows:
         row['bpm'] = 130 if row['id'] == '4' else 120
-    result = sequence_mode_tracks(rows, p, first_id='0')
+    result = sequence_mode_tracks(rows, p, first_id='0', route_search='local')
     assert result['incumbent_order'][:3] == ['0', '1', '3']
     assert result['route_repair']['changed']
     assert result['order'] != result['incumbent_order']
