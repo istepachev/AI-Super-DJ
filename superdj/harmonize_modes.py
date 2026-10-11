@@ -22,11 +22,21 @@ from .harmonize_ranker import _rank
 MODEL_VERSION = "superdj-mode-pool-ranker-2"
 FEATURE_VERSION = "musical-pool-2"
 SHARING_OPTIONS = ("shared", "interactions", "separate")
-FAMILIES = ("relation", "circle", "tonal", "pool", "tempo_pool")
+FAMILIES = ("relation", "circle", "tonal", "pool", "tempo_pool", "tempo_rank_density", "tempo_rank_graph")
+POOL_FAMILIES = frozenset(("pool", "tempo_pool", "tempo_rank_density", "tempo_rank_graph"))
+TEMPO_FAMILIES = frozenset(("tempo_pool", "tempo_rank_density", "tempo_rank_graph"))
+DEFAULT_FEATURE_FAMILIES = ("pool", "tempo_pool", "tempo_rank_density", "tempo_rank_graph")
 TRAINING_SUPPORTS = ("all_candidates", "allowed_candidates")
 RELATIONS = ("same_key", "relative_major_minor", "perfect_boost", "perfect_drop",
              "diagonal", "reverse_diagonal", "energy_boost", "parallel_major_minor",
              "semitone_lift", "incompatible", "unknown")
+RANK_CONTEXT_NAMES = ("pool_bpm_signed_percentile", "allowed_bpm_signed_percentile",
+    "same_key_bpm_signed_percentile", "same_key_minimum_bpm", "pool_bpm_rank_distance_from_current",
+    "pool_density_2bpm", "pool_density_5bpm", "current_allowed_density_2bpm") + tuple(
+    "relation_" + relation + "*pool_bpm_percentile" for relation in RELATIONS)
+GRAPH_CONTEXT_NAMES = ("successor_mean_bpm_percentile", "successor_mean_abs_bpm_jump",
+    "successor_mean_degree_after_candidate", "successor_min_degree_after_candidate",
+    "successor_fraction_at_most_one_exit_after_candidate")
 UTILITY_WARNING = "Relative musical choice utility; not confidence, probability or audible quality"
 
 
@@ -92,23 +102,27 @@ def feature_names(family="pool", sharing="shared"):
     names += ["abs_bpm_delta/10", "signed_delta/10", "positive_delta/10",
               "negative_delta/10", "clipped_abs_delta/10", "large_delta/10",
               "squared_delta/1000", "same_bpm", "absolute_log_ratio*10"]
-    if family in {"circle", "tonal", "pool", "tempo_pool"}:
+    if family in {"circle", "tonal"} | POOL_FAMILIES:
         names += [f"circle:{interval};mode_change:{flipped}"
                   for flipped in (0, 1) for interval in range(12)]
         names.append("minor_to_major")
-    if family in {"tonal", "pool", "tempo_pool"}:
+    if family in {"tonal"} | POOL_FAMILIES:
         names += [f"tonic_interval:{interval}" for interval in range(12)]
         names += ["scale_overlap", "source_tonic_in_target", "target_tonic_in_source",
                   "source_minor", "target_minor", "mode_change"]
-    if family == "tempo_pool":
+    if family in TEMPO_FAMILIES:
         names += [f"relation:{relation}*{movement}" for relation in RELATIONS
                   for movement in ("abs_bpm_delta/10", "signed_delta/10")]
-    if family in {"pool", "tempo_pool"}:
+    if family in POOL_FAMILIES:
         names += ["same_key_fraction", "log_same_key_count", "out_degree_fraction",
                   "in_degree_fraction", "inverse_out_degree", "no_successor",
                   "residual_stranded_fraction", "sole_successor_fraction",
                   "nearest_successor_delta/10", "pool_median_distance/10",
-                  "pool_min_bpm", "pool_max_bpm"]
+                    "pool_min_bpm", "pool_max_bpm"]
+    if family in {"tempo_rank_density", "tempo_rank_graph"}:
+        names += list(RANK_CONTEXT_NAMES)
+        if family == "tempo_rank_graph":
+            names += list(GRAPH_CONTEXT_NAMES)
     if sharing == "interactions":
         names += ["mood*" + name for name in list(names)]
     return names
@@ -124,7 +138,7 @@ def _pair(a, b, mode, family):
     values += [absolute, delta, max(delta, 0), max(-delta, 0), min(absolute, 1),
                max(absolute - 1, 0), delta ** 2 / 10, float(absolute < .001),
                abs(math.log(bpm_b / bpm_a)) * 10]
-    if family in {"circle", "tonal", "pool", "tempo_pool"}:
+    if family in {"circle", "tonal"} | POOL_FAMILIES:
         if key_a and key_b:
             interval, flip = (key_b[0] - key_a[0]) % 12, key_a[1] != key_b[1]
             values += [float(flip == f and interval == i)
@@ -132,7 +146,7 @@ def _pair(a, b, mode, family):
             values.append(float(key_a[1] == "A" and key_b[1] == "B"))
         else:
             values += [0.] * 25
-    if family in {"tonal", "pool", "tempo_pool"}:
+    if family in {"tonal"} | POOL_FAMILIES:
         if key_a and key_b:
             tonic_a, scale_a = _tonal(key_a)
             tonic_b, scale_b = _tonal(key_b)
@@ -143,9 +157,85 @@ def _pair(a, b, mode, family):
                        float(key_b[1] == "A"), float(key_a[1] != key_b[1])]
         else:
             values += [0.] * 18
-    if family == "tempo_pool":
+    if family in TEMPO_FAMILIES:
         values += [float(relation == name) * movement for name in RELATIONS
                    for movement in (absolute, delta)]
+    return values
+
+
+def _signed_bpm_percentile(values, peers):
+    """Signed empirical rank; native BPM differences <=.01 are neutral."""
+    delta = np.asarray(values)[:, None] - np.asarray(peers)[None, :]
+    return ((delta > .01).sum(axis=1) - (delta < -.01).sum(axis=1)) / max(1, len(peers) - 1)
+
+
+def _rank_pool_context(bpms, keys, mode, *, adjacency=None, include_graph=False):
+    """Mask-only rank/density/continuation terms for cached dynamic search.
+
+    Current-dependent columns 1, 4, 7 and 8:19 are zero; add the matrix
+    returned by _rank_current_context. No identities or pool order features.
+    Graph columns are uniform allowed-successor aggregates, not an optimum
+    future route. Unknown keys have no same-key rank or minimum evidence.
+    """
+    bpms = np.asarray(bpms, dtype=float)
+    count = len(bpms)
+    values = np.zeros((count, 24 if include_graph else 19))
+    if not count:
+        return values
+    rank = _signed_bpm_percentile(bpms, bpms)
+    values[:, 0] = rank
+    for key in set(keys):
+        if key is None:
+            continue
+        mask = np.asarray([candidate == key for candidate in keys])
+        values[mask, 2] = _signed_bpm_percentile(bpms[mask], bpms[mask])
+        values[mask, 3] = (bpms[mask] <= bpms[mask].min() + .01).astype(float)
+    distance = np.abs(bpms[:, None] - bpms[None, :])
+    other = ~np.eye(count, dtype=bool)
+    values[:, 5] = ((distance <= 2) & other).sum(axis=1) / max(1, count - 1)
+    values[:, 6] = ((distance <= 5) & other).sum(axis=1) / max(1, count - 1)
+    if include_graph:
+        if adjacency is None:
+            adjacency = np.asarray([[_allowed(a, b, mode) for b in keys] for a in keys], dtype=float)
+            np.fill_diagonal(adjacency, 0)
+        degree = adjacency.sum(axis=1)
+        for index in range(count):
+            successors = adjacency[index] > 0
+            if not successors.any():
+                continue
+            # Removing the candidate also removes successor->candidate exits.
+            residual_degree = degree[successors] - adjacency[successors, index]
+            values[index, 19:] = [math.fsum(rank[successors]) / degree[index],
+                math.fsum(np.minimum(distance[index, successors] / 10, 3)) / degree[index],
+                int(residual_degree.sum()) / degree[index] / max(1, count - 2),
+                int(residual_degree.min()) / max(1, count - 2),
+                int((residual_degree <= 1).sum()) / degree[index]]
+    return values
+
+
+def _rank_current_context(current_bpm, current_key, bpms, keys, mode, pool_context):
+    """Current-dependent additive columns; pair relation × cached pool rank.
+
+    The allowed density follows the training feature definition, normalized
+    by max(1, allowed_count-1), including ineligible candidate rows. Those
+    rows remain independently blocked in recommendation/validation.
+    """
+    bpms = np.asarray(bpms, dtype=float)
+    values = np.zeros_like(pool_context)
+    count = len(bpms)
+    if not count:
+        return values
+    eligible = np.asarray([_allowed(current_key, key, mode) for key in keys], dtype=bool)
+    if eligible.any():
+        values[eligible, 1] = _signed_bpm_percentile(bpms[eligible], bpms[eligible])
+    current_rank = ((current_bpm - bpms > .01).sum() - (current_bpm - bpms < -.01).sum()) / max(1, count)
+    rank = pool_context[:, 0]
+    values[:, 4] = np.abs(rank - current_rank) / 2
+    distance = np.abs(bpms[:, None] - bpms[None, :])
+    other = ~np.eye(count, dtype=bool)
+    values[:, 7] = (((distance <= 2) & other) & eligible[None, :]).sum(axis=1) / max(1, int(eligible.sum()) - 1)
+    for index, key in enumerate(keys):
+        values[index, 8 + RELATIONS.index(_relation(current_key, key, mode))] = rank[index]
     return values
 
 
@@ -153,7 +243,7 @@ def remaining_features(current, candidates, *, mode="fuzzy", family="pool", shar
     """Musical feature matrix; permutation equivariant, no identity columns."""
     mode = _mode(mode)
     feature_names(family, sharing)
-    current_id, _, _ = _musical(current)
+    current_id, current_bpm, current_key = _musical(current)
     candidates = _list(candidates, "Candidates")
     musical = [_musical(candidate) for candidate in candidates]
     ids = [row[0] for row in musical]
@@ -164,7 +254,7 @@ def remaining_features(current, candidates, *, mode="fuzzy", family="pool", shar
     if not count:
         return np.empty((0, len(feature_names(family, sharing))))
     adjacency = None
-    if family in {"pool", "tempo_pool"}:
+    if family in POOL_FAMILIES:
         adjacency = np.asarray([[_allowed(a, b, mode) for b in keys] for a in keys], dtype=float)
         np.fill_diagonal(adjacency, 0)
         outgoing, incoming = adjacency.sum(axis=1), adjacency.sum(axis=0)
@@ -172,10 +262,15 @@ def remaining_features(current, candidates, *, mode="fuzzy", family="pool", shar
         sole_successors = adjacency[outgoing == 1].sum(axis=0)
         indices = np.arange(count)
         median, minimum, maximum = float(np.median(bpms)), bpms.min(), bpms.max()
+    rank_context = None
+    if family in {"tempo_rank_density", "tempo_rank_graph"}:
+        rank_context = _rank_pool_context(bpms, keys, mode, adjacency=adjacency,
+                                         include_graph=family == "tempo_rank_graph")
+        rank_context += _rank_current_context(current_bpm, current_key, bpms, keys, mode, rank_context)
     values = []
     for index, candidate in enumerate(candidates):
         row = _pair(current, candidate, mode, family)
-        if family in {"pool", "tempo_pool"}:
+        if family in POOL_FAMILIES:
             degree, in_degree = outgoing[index], incoming[index]
             same = sum(k == keys[index] for i, k in enumerate(keys) if i != index)
             residual_degree = total_degree - adjacency[index] - adjacency[:, index]
@@ -189,6 +284,8 @@ def remaining_features(current, candidates, *, mode="fuzzy", family="pool", shar
                     stranded / denominator, sole / denominator, min(next_gap, 3),
                     abs(bpms[index] - median) / 10,
                     float(bpms[index] == minimum), float(bpms[index] == maximum)]
+        if rank_context is not None:
+            row += rank_context[index].tolist()
         if sharing == "interactions":
             row += [value * float(mode == "mood") for value in list(row)]
         values.append(row)
@@ -521,7 +618,7 @@ def _profile(examples, selected, options, coefficients, minimum):
                 harmony_gate="Caller mode is enforced independently; blocked demonstrations stay in validation denominator")
 
 
-def fit_mode_ranker(examples, *, feature_families=("pool", "tempo_pool"), sharing_options=SHARING_OPTIONS,
+def fit_mode_ranker(examples, *, feature_families=DEFAULT_FEATURE_FAMILIES, sharing_options=SHARING_OPTIONS,
                     l2_candidates=(.01, .1, 1.), min_candidates=4, training_supports=TRAINING_SUPPORTS):
     """Select and fit experimental JSON coefficients using inner cohorts only."""
     minimum = _minimum(min_candidates)
@@ -530,7 +627,7 @@ def fit_mode_ranker(examples, *, feature_families=("pool", "tempo_pool"), sharin
     return _profile(prepared, selected, options, coefficients, minimum)
 
 
-def cross_validate_mode_ranker(examples, *, feature_families=("pool", "tempo_pool"), sharing_options=SHARING_OPTIONS,
+def cross_validate_mode_ranker(examples, *, feature_families=DEFAULT_FEATURE_FAMILIES, sharing_options=SHARING_OPTIONS,
                               l2_candidates=(.01, .1, 1.), min_candidates=4, training_supports=TRAINING_SUPPORTS):
     """Outer source cohort holdout, with all variants excluded from inner fit."""
     minimum = _minimum(min_candidates)

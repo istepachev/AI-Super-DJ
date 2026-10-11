@@ -297,6 +297,10 @@ query before adding them along a path; raw conditional utilities have arbitrary
 query offsets. Do not claim a fixed-initial-pool approximation is full dynamic
 lookahead. Compare local next-track accuracy and freely generated route
 compatibility separately; improvement in one does not establish the other.
+If a newly fitted profile improves local Top3 but regresses the user's required
+complete-route agreement, retain the approved working profile. Deliver the new
+profile and its test playlists as a labelled experiment; do not silently replace
+the active profile or claim whole-route superiority from the local metric.
 
 For future bounded routing, preserve multiple candidate continuations, test
 remaining connectivity, reopen provisional pairs/triples when stitching fails,
@@ -309,6 +313,12 @@ Our relation-table allowance is not DJ.Studio's Solve status. If an imported
 test requires frequent Solve, record that as a failed application check and
 inspect detector differences before promoting the order. Do not infer a
 probability of a successful audible mix from edge cost or agreement alone.
+When a demonstrated next track is blocked by our table, compare its native
+BPM distance with the nearest allowed and nearest overall remaining track.
+Report the resulting gate-only agreement ceiling separately from measured
+accuracy. A tempo association does not establish a saved wizard priority or
+justify relabelling a disallowed key relation as compatible. Retain unknown
+wizard controls as unknown even when all persisted settings are identical.
 The saved DJS `mix.incompatible` field is not a count of Solve warnings. A
 backup retaining the original imported order is useful analysis evidence, not
 a demonstrated Harmonize route to learn from. When importing complete native
@@ -355,6 +365,18 @@ better constrained route or closer DJ.Studio agreement. Compare alternative
 supports end to end before changing the policy; retain blocked demonstrations
 in validation denominators even if an experimental fitter omits unsupported
 targets from its training objective.
+
+Additional selectable families `tempo_rank_density` and `tempo_rank_graph`
+extend `tempo_pool` with nineteen and twenty-four remaining-pool terms.
+They measure signed BPM position, nearby tempo density, position within a
+key class, and directed-relation interactions; the graph family also measures
+the tempo and residual connectivity of allowed successors. Native differences
+within .01 BPM are neutral in percentile terms. These descriptors use the
+current track and the unordered remaining metadata, never the teacher's
+future route. They are continuation summaries, not a proof of lookahead
+optimality. Dynamic rendering of rankings must recompute both mask-only and
+current-dependent terms for every hypothetical pool; fixed full-pool values
+are a different policy. Keep old feature layouts/profile loading intact.
 
 Official sources checked 2026-10-11:
 [Harmonize](https://help.dj.studio/en/articles/7878402-harmonize-previously-automix),

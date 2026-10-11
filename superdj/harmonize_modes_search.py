@@ -15,7 +15,7 @@ import time
 import numpy as np
 
 from .harmonize import _settings
-from .harmonize_modes import (_allowed, _musical, _pair, feature_names,
+from .harmonize_modes import (_allowed, _musical, _pair, _rank_pool_context, feature_names,
                               validate_mode_ranker_profile)
 from .harmonize_ranker import _rank
 
@@ -23,6 +23,8 @@ from .harmonize_ranker import _rank
 VERSION = "superdj-mode-route-search-1"
 LOSS_SCOPE = ("sum of per-step normalized fitted musical log weights; "
               "not calibrated confidence, human preference or sound quality")
+POOL_FAMILIES = {"pool", "tempo_pool", "tempo_rank_density", "tempo_rank_graph"}
+RANK_FAMILIES = {"tempo_rank_density", "tempo_rank_graph"}
 
 
 def _integer(value, label, maximum=None):
@@ -40,10 +42,11 @@ def _finite(value, label):
 class DynamicModePool:
     """Exact public musical features with bounded caches, without ID features.
 
-    Pair terms and the directed key table are reusable. The twelve pool terms
-    are recomputed for each actual unplayed mask, including every track inside
-    a remaining locked block. Source IDs address records only; input positions
-    provide the seeded tie permutation.
+    Pair terms and the directed key table are reusable. Pool connectivity,
+    tempo ranks/densities and continuation descriptors are recomputed for each
+    actual unplayed mask, including every track inside a remaining locked
+    block. Current-dependent eligible tempo ranks use that prefix's current
+    track. Source IDs address records only; input positions provide seeded ties.
     """
 
     def __init__(self, records, profile, *, mode="fuzzy", seed=0, cache_limit=3000):
@@ -76,24 +79,36 @@ class DynamicModePool:
                 weights = weights[:base_count] + float(mode == "mood") * weights[base_count:]
         if not np.all(np.isfinite(weights)):
             raise ValueError("Combined mode coefficients are non-finite")
-        self.context_weights = weights[-12:] if self.family in {"pool", "tempo_pool"} else None
+        pair_count = len(_pair(self.records[0], self.records[0], mode, self.family))
+        self.context_weights = weights[pair_count:pair_count + 12] if self.family in POOL_FAMILIES else None
+        self.rank_weights = weights[pair_count + 12:pair_count + 31] if self.family in RANK_FAMILIES else None
+        self.graph_weights = weights[pair_count + 31:pair_count + 36] if self.family == "tempo_rank_graph" else None
         self.allowed = np.array([[_allowed(a, b, mode) for b in self.keys] for a in self.keys])
         np.fill_diagonal(self.allowed, False)
         self.pair_utility = np.empty((self.count, self.count))
+        self.relation_rank_utility = np.empty((self.count, self.count)) if self.rank_weights is not None else None
         for source, a in enumerate(self.records):
             for target, b in enumerate(self.records):
                 values = _pair(a, b, mode, self.family)
                 with np.errstate(over="ignore", invalid="ignore"):
                     self.pair_utility[source, target] = np.array(values) @ weights[:len(values)]
+                    if self.relation_rank_utility is not None:
+                        self.relation_rank_utility[source, target] = np.array(values[:11]) @ self.rank_weights[8:]
         if not np.all(np.isfinite(self.pair_utility)):
             raise ValueError("Reused pair utility is non-finite")
+        if self.relation_rank_utility is not None and not np.all(np.isfinite(self.relation_rank_utility)):
+            raise ValueError("Reused relation tempo-rank utility is non-finite")
         self.same = np.array([[a == b for b in self.keys] for a in self.keys])
         self.gaps = np.abs(self.bpms[:, None] - self.bpms[None, :]) / 10
+        self.tempo_delta = self.bpms[:, None] - self.bpms[None, :] if self.rank_weights is not None else None
+        self.close2 = np.abs(self.tempo_delta) <= 2 if self.tempo_delta is not None else None
+        if self.close2 is not None:
+            np.fill_diagonal(self.close2, False)
         permutation = list(range(self.count))
         random.Random(seed).shuffle(permutation)
         self.tie = np.empty(self.count, dtype=int)
         self.tie[permutation] = np.arange(self.count)
-        self.cache, self.calls, self.cache_hits = {}, 0, 0
+        self.cache, self.rank_cache, self.calls, self.cache_hits = {}, {}, 0, 0
 
     def _context(self, mask):
         if mask in self.cache:
@@ -103,7 +118,7 @@ class DynamicModePool:
         count = len(indices)
         if not count:
             return indices, np.empty(0)
-        if self.family not in {"pool", "tempo_pool"}:
+        if self.family not in POOL_FAMILIES:
             result = indices, np.zeros(count)
         else:
             adjacency = self.allowed[np.ix_(indices, indices)]
@@ -128,7 +143,47 @@ class DynamicModePool:
         if self.cache_limit:
             if len(self.cache) >= self.cache_limit:
                 self.cache.clear()
+                self.rank_cache.clear()
             self.cache[mask] = result
+        return result
+
+    def _rank_context(self, current, mask, indices):
+        """Exact rank-family columns without rebuilding Python key tables.
+
+        Mask-only quantities can be reused. Allowed signed ranks, distance
+        from current's signed rank and allowed-peer density must be recomputed
+        for the actual current track. All peers retain their multiplicity.
+        """
+        cached = self.rank_cache.get(mask)
+        if cached is None:
+            bpms = self.bpms[indices]
+            pool_columns = _rank_pool_context(bpms, [self.keys[index] for index in indices], self.mode,
+                adjacency=self.allowed[np.ix_(indices, indices)], include_graph=self.graph_weights is not None)
+            weights = self.rank_weights if self.graph_weights is None else np.concatenate((self.rank_weights, self.graph_weights))
+            with np.errstate(over="ignore", invalid="ignore"):
+                fixed_utility = pool_columns @ weights
+            # The common feature helper defines mask-only columns. Cache
+            # vectors only, not an n-by-n matrix or every feature column.
+            cached = bpms, pool_columns[:, 0], fixed_utility
+            if self.cache_limit:
+                if len(self.rank_cache) >= self.cache_limit:
+                    self.rank_cache.clear()
+                self.rank_cache[mask] = cached
+        bpms, rank, fixed_utility = cached
+        eligible = self.allowed[current, indices]
+        allowed_rank = np.zeros(len(indices))
+        if eligible.any():
+            allowed_delta = self.tempo_delta[np.ix_(indices[eligible], indices[eligible])]
+            allowed_rank[eligible] = ((allowed_delta > .01).sum(1) - (allowed_delta < -.01).sum(1)) / max(1, int(eligible.sum()) - 1)
+        current_delta = self.bpms[current] - bpms
+        current_rank = ((current_delta > .01).sum() - (current_delta < -.01).sum()) / max(1, len(indices))
+        rank_distance = np.abs(rank - current_rank) / 2
+        allowed_density = self.close2[np.ix_(indices, indices[eligible])].sum(1) / max(1, int(eligible.sum()) - 1)
+        columns = np.column_stack([allowed_rank, rank_distance, allowed_density])
+        with np.errstate(over="ignore", invalid="ignore"):
+            result = fixed_utility + columns @ self.rank_weights[[1, 4, 7]] + rank * self.relation_rank_utility[current, indices]
+        if not np.all(np.isfinite(result)):
+            raise ValueError("Actual remaining-pool tempo-rank utility is non-finite")
         return result
 
     def scores(self, current, mask):
@@ -141,6 +196,8 @@ class DynamicModePool:
         indices, context = self._context(mask)
         with np.errstate(over="ignore", invalid="ignore"):
             utilities = self.pair_utility[current, indices] + context
+            if self.rank_weights is not None and len(indices):
+                utilities = utilities + self._rank_context(current, mask, indices)
         if not np.all(np.isfinite(utilities)):
             raise ValueError("Actual remaining-pool utility is non-finite")
         return indices, utilities, self.allowed[current, indices]

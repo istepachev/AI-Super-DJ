@@ -27,7 +27,8 @@ def tracks(keys=("8B", "9B", "8A", "2B", None)):
     return [dict(id=str(i), bpm=110+7*i, key_camelot=key) for i,key in enumerate(keys)]
 
 
-@pytest.mark.parametrize('family', ('relation', 'circle', 'tonal', 'pool', 'tempo_pool'))
+@pytest.mark.parametrize('family', ('relation', 'circle', 'tonal', 'pool', 'tempo_pool',
+    'tempo_rank_density', 'tempo_rank_graph'))
 @pytest.mark.parametrize('sharing', ('shared', 'interactions', 'separate'))
 @pytest.mark.parametrize('mode', ('fuzzy', 'mood'))
 def test_reused_features_match_public_ranker_for_every_actual_small_pool(family, sharing, mode):
@@ -66,6 +67,58 @@ def test_tempo_pool_reuses_relation_specific_tempo_terms_and_actual_context():
     reduced, values, _ = engine.scores(0, 0b10010)
     assert dict(zip(reduced, values))[1] == pytest.approx(5.)
     assert engine.context_weights is not None and len(engine.context_weights) == 12
+
+
+@pytest.mark.parametrize('family', ('tempo_rank_density', 'tempo_rank_graph'))
+def test_cached_rank_pool_recomputes_current_allowed_ranks_and_removed_peers(family):
+    rows = [dict(id=str(i), bpm=bpm, key_camelot=key) for i, (bpm, key) in enumerate((
+        (120, '8B'), (128, '10B'), (122, '9B'), (120, '8A'),
+        (124, '10A'), (110, '2B'), (120, None)))]
+    p = profile(family)
+    p['coefficients']['all'] = [0.] * len(p['feature_names'])
+    p['coefficients']['all'][p['feature_names'].index('allowed_bpm_signed_percentile')] = 1.
+    engine = DynamicModePool(rows, p)
+    mask = 0b1111100  # Both possible current tracks are outside this same pool.
+    idx, first, _ = engine.scores(0, mask)
+    _, second, _ = engine.scores(1, mask)
+    assert dict(zip(idx, first))[2] == pytest.approx(1.)
+    assert dict(zip(idx, second))[2] == pytest.approx(-1.)
+    assert mask in engine.rank_cache
+    reduced, values, _ = engine.scores(0, mask ^ (1 << 3))
+    assert dict(zip(reduced, values))[2] == pytest.approx(0.)
+    assert engine.rank_weights.shape == (19,)
+    assert (engine.graph_weights is not None) == (family == 'tempo_rank_graph')
+
+
+@pytest.mark.parametrize('family', ('tempo_rank_density', 'tempo_rank_graph'))
+def test_dense_rank_features_match_public_with_aliases_noise_boundaries_and_no_allowed_heads(family):
+    rows = [dict(id=str(i), bpm=bpm, key_camelot=key) for i, (bpm, key) in enumerate((
+        (120, '8B'), (122, '9B'), (122, '9B'), (122.005, '9B'),
+        (124, '9A'), (127, '10B'), (115, '2B'), (120, None)))]
+    p = profile(family, 'interactions')
+    for mode in ('mood', 'fuzzy'):
+        engine = DynamicModePool(rows, p, mode=mode, cache_limit=2)
+        for current, mask in ((0, 0b11111110), (0, 0b11101110), (6, 0b10111111),
+                              (7, 0b00111111), (0, 0b10000010)):
+            idx, utility, allowed = engine.scores(current, mask)
+            expected = {r['id']:r for r in rank_mode_candidates(rows[current],
+                [rows[i] for i in idx], p, mode=mode)['candidates']}
+            for i, value, eligible in zip(idx, utility, allowed):
+                assert value == pytest.approx(expected[rows[i]['id']]['utility'], abs=1e-11)
+                assert eligible == expected[rows[i]['id']]['eligible']
+            if 1 in idx and 2 in idx:
+                assert utility[list(idx).index(1)] == utility[list(idx).index(2)]
+            assert len(engine.cache) <= 2 and len(engine.rank_cache) <= 2
+
+
+def test_finite_graph_coefficients_cannot_overflow_actual_continuation_features():
+    rows = [dict(id=str(i), bpm=bpm, key_camelot='8B') for i, bpm in enumerate((100, 120, 160))]
+    p = profile('tempo_rank_graph')
+    p['coefficients']['all'] = [0.] * len(p['feature_names'])
+    p['coefficients']['all'][p['feature_names'].index('successor_mean_abs_bpm_jump')] = 1e308
+    engine = DynamicModePool(rows, p)
+    with pytest.raises(ValueError, match='tempo-rank utility is non-finite'):
+        engine.scores(0, 0b110)
 
 
 @pytest.mark.parametrize('support', ('all_candidates', 'allowed_candidates'))
