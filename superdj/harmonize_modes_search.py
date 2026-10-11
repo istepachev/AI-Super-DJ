@@ -76,7 +76,7 @@ class DynamicModePool:
                 weights = weights[:base_count] + float(mode == "mood") * weights[base_count:]
         if not np.all(np.isfinite(weights)):
             raise ValueError("Combined mode coefficients are non-finite")
-        self.context_weights = weights[-12:] if self.family == "pool" else None
+        self.context_weights = weights[-12:] if self.family in {"pool", "tempo_pool"} else None
         self.allowed = np.array([[_allowed(a, b, mode) for b in self.keys] for a in self.keys])
         np.fill_diagonal(self.allowed, False)
         self.pair_utility = np.empty((self.count, self.count))
@@ -103,7 +103,7 @@ class DynamicModePool:
         count = len(indices)
         if not count:
             return indices, np.empty(0)
-        if self.family != "pool":
+        if self.family not in {"pool", "tempo_pool"}:
             result = indices, np.zeros(count)
         else:
             adjacency = self.allowed[np.ix_(indices, indices)]
@@ -175,8 +175,9 @@ class DynamicModePool:
     def rescore_order(self, order):
         """Diagnostic fit loss on every actual prefix, including forced links.
 
-        Normalization uses all remaining candidates, as during model fitting.
-        This diagnostic is not a probability of the constrained block policy.
+        Normalization uses all remaining candidates independently of the
+        declared fitting support. This diagnostic is not a probability of the
+        constrained block policy or an allowed-support fitting objective.
         It never selects between the local safety order and the beam order.
         """
         if len(order) != self.count or len(set(order)) != self.count or set(order) != set(self.by_id):
@@ -194,7 +195,8 @@ class DynamicModePool:
             blocked += not self.allowed[current, successor]
         return dict(normalized_musical_loss=float(loss), harmonic_violations=int(blocked),
                     loss_scope=LOSS_SCOPE,
-                    normalization="all actual unplayed candidates per prefix, same support as fitting; forced links included; diagnostic only")
+                    training_support=self.profile.get("training_support", "all_candidates"),
+                    normalization="all actual unplayed candidates per prefix, regardless of fitting support; forced links included; diagnostic only")
 
 
 def search_mode_route(records, profile, *, mode="fuzzy", first_id, last_id=None,

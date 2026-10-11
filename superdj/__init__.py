@@ -1,2 +1,2 @@
 """SuperDJ: original planning and orchestration, external audio backends."""
-__version__ = "0.12.0"
+__version__ = "0.13.0"

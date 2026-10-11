@@ -22,7 +22,8 @@ from .harmonize_ranker import _rank
 MODEL_VERSION = "superdj-mode-pool-ranker-2"
 FEATURE_VERSION = "musical-pool-2"
 SHARING_OPTIONS = ("shared", "interactions", "separate")
-FAMILIES = ("relation", "circle", "tonal", "pool")
+FAMILIES = ("relation", "circle", "tonal", "pool", "tempo_pool")
+TRAINING_SUPPORTS = ("all_candidates", "allowed_candidates")
 RELATIONS = ("same_key", "relative_major_minor", "perfect_boost", "perfect_drop",
              "diagonal", "reverse_diagonal", "energy_boost", "parallel_major_minor",
              "semitone_lift", "incompatible", "unknown")
@@ -91,15 +92,18 @@ def feature_names(family="pool", sharing="shared"):
     names += ["abs_bpm_delta/10", "signed_delta/10", "positive_delta/10",
               "negative_delta/10", "clipped_abs_delta/10", "large_delta/10",
               "squared_delta/1000", "same_bpm", "absolute_log_ratio*10"]
-    if family in {"circle", "tonal", "pool"}:
+    if family in {"circle", "tonal", "pool", "tempo_pool"}:
         names += [f"circle:{interval};mode_change:{flipped}"
                   for flipped in (0, 1) for interval in range(12)]
         names.append("minor_to_major")
-    if family in {"tonal", "pool"}:
+    if family in {"tonal", "pool", "tempo_pool"}:
         names += [f"tonic_interval:{interval}" for interval in range(12)]
         names += ["scale_overlap", "source_tonic_in_target", "target_tonic_in_source",
                   "source_minor", "target_minor", "mode_change"]
-    if family == "pool":
+    if family == "tempo_pool":
+        names += [f"relation:{relation}*{movement}" for relation in RELATIONS
+                  for movement in ("abs_bpm_delta/10", "signed_delta/10")]
+    if family in {"pool", "tempo_pool"}:
         names += ["same_key_fraction", "log_same_key_count", "out_degree_fraction",
                   "in_degree_fraction", "inverse_out_degree", "no_successor",
                   "residual_stranded_fraction", "sole_successor_fraction",
@@ -120,7 +124,7 @@ def _pair(a, b, mode, family):
     values += [absolute, delta, max(delta, 0), max(-delta, 0), min(absolute, 1),
                max(absolute - 1, 0), delta ** 2 / 10, float(absolute < .001),
                abs(math.log(bpm_b / bpm_a)) * 10]
-    if family in {"circle", "tonal", "pool"}:
+    if family in {"circle", "tonal", "pool", "tempo_pool"}:
         if key_a and key_b:
             interval, flip = (key_b[0] - key_a[0]) % 12, key_a[1] != key_b[1]
             values += [float(flip == f and interval == i)
@@ -128,7 +132,7 @@ def _pair(a, b, mode, family):
             values.append(float(key_a[1] == "A" and key_b[1] == "B"))
         else:
             values += [0.] * 25
-    if family in {"tonal", "pool"}:
+    if family in {"tonal", "pool", "tempo_pool"}:
         if key_a and key_b:
             tonic_a, scale_a = _tonal(key_a)
             tonic_b, scale_b = _tonal(key_b)
@@ -139,6 +143,9 @@ def _pair(a, b, mode, family):
                        float(key_b[1] == "A"), float(key_a[1] != key_b[1])]
         else:
             values += [0.] * 18
+    if family == "tempo_pool":
+        values += [float(relation == name) * movement for name in RELATIONS
+                   for movement in (absolute, delta)]
     return values
 
 
@@ -157,7 +164,7 @@ def remaining_features(current, candidates, *, mode="fuzzy", family="pool", shar
     if not count:
         return np.empty((0, len(feature_names(family, sharing))))
     adjacency = None
-    if family == "pool":
+    if family in {"pool", "tempo_pool"}:
         adjacency = np.asarray([[_allowed(a, b, mode) for b in keys] for a in keys], dtype=float)
         np.fill_diagonal(adjacency, 0)
         outgoing, incoming = adjacency.sum(axis=1), adjacency.sum(axis=0)
@@ -168,7 +175,7 @@ def remaining_features(current, candidates, *, mode="fuzzy", family="pool", shar
     values = []
     for index, candidate in enumerate(candidates):
         row = _pair(current, candidate, mode, family)
-        if family == "pool":
+        if family in {"pool", "tempo_pool"}:
             degree, in_degree = outgoing[index], incoming[index]
             same = sum(k == keys[index] for i, k in enumerate(keys) if i != index)
             residual_degree = total_degree - adjacency[index] - adjacency[:, index]
@@ -268,19 +275,34 @@ def _matrices(examples, family, sharing):
             family=family, sharing=sharing) for current, pool in example["queries"]]) for example in examples]
 
 
-def _fit(examples, penalty):
-    queries = [matrix for example in examples for matrix in example["matrices"]]
+def _fit(examples, penalty, *, training_support="all_candidates"):
+    if training_support not in TRAINING_SUPPORTS:
+        raise ValueError("Unsupported mode-ranker training support")
+    supported = []
+    for example in examples:
+        queries = []
+        for (current, pool), matrix in zip(example["queries"], example["matrices"]):
+            if training_support == "allowed_candidates":
+                key = _musical(current)[2]
+                eligible = np.asarray([_allowed(key, _musical(r)[2], example["mode"]) for r in pool])
+                if not eligible[0]:
+                    continue
+                matrix = matrix[eligible]
+            queries.append(matrix)
+        if queries:
+            supported.append((example, queries))
+    queries = [matrix for _, matrices in supported for matrix in matrices]
     if not queries:
-        raise ValueError("No mode-specific training queries are available")
+        raise ValueError("No supported mode-specific training queries are available")
     matrix = np.vstack(queries)
     starts = np.r_[0, np.cumsum([len(query) for query in queries])[:-1]]
     query_index = np.repeat(np.arange(len(queries)), [len(query) for query in queries])
     masses = {}
-    for example in examples:
+    for example, _ in supported:
         token = example["group"], example["mode"]
         masses[token] = masses.get(token, 0) + 1
-    weights = np.asarray([1 / (masses[example["group"], example["mode"]] * len(example["matrices"]))
-                          for example in examples for _ in example["matrices"]])
+    weights = np.asarray([1 / (masses[example["group"], example["mode"]] * len(matrices))
+                          for example, matrices in supported for _ in matrices])
     weights /= weights.sum()
     def objective(coefficients):
         logits = matrix @ coefficients
@@ -300,11 +322,11 @@ def _fit(examples, penalty):
     return fitted.x
 
 
-def _fit_sharing(examples, penalty, sharing):
+def _fit_sharing(examples, penalty, sharing, *, training_support="all_candidates"):
     if sharing == "separate":
-        return {mode: _fit([e for e in examples if e["mode"] == mode], penalty)
+        return {mode: _fit([e for e in examples if e["mode"] == mode], penalty, training_support=training_support)
                 for mode in ("fuzzy", "mood")}
-    return {"all": _fit(examples, penalty)}
+    return {"all": _fit(examples, penalty, training_support=training_support)}
 
 
 def _metrics(examples, coefficients, sharing, *, gated=False):
@@ -316,6 +338,7 @@ def _metrics(examples, coefficients, sharing, *, gated=False):
         late_steps = late7 = late_guaranteed7 = 0
         early3_steps = early3 = early_guaranteed3 = 0
         late3_steps = late3 = late_guaranteed3 = 0
+        literal3 = early_literal3 = late_literal3 = 0
         reciprocal = credit = nll = 0.
         for (current, pool), matrix in zip(example["queries"], example["matrices"]):
             informative = len(pool) >= 8
@@ -336,6 +359,15 @@ def _metrics(examples, coefficients, sharing, *, gated=False):
             # Blocked candidates have -inf utility; rank finite rows only.
             ranks, ties = _rank(logits[np.isfinite(logits)])
             rank, tie_count = ranks[0], ties[0]
+            # The demonstrated successor is pool[0]. Do not break a tie by
+            # its teacher position: use the same utility/ID ordering as the
+            # public ranker's actual capped list. IDs resolve ties only.
+            finite = np.flatnonzero(np.isfinite(logits))
+            shortlist = sorted(finite, key=lambda i: (-float(logits[i]), _musical(pool[i])[0]))[:3]
+            literal_hit = 0 in shortlist
+            literal3 += literal_hit
+            early_literal3 += informative3 and literal_hit
+            late_literal3 += not informative3 and literal_hit
             best += rank == 1
             unique += rank == tie_count == 1
             top3 += rank <= 3
@@ -359,6 +391,9 @@ def _metrics(examples, coefficients, sharing, *, gated=False):
         rows.append(dict(name=example["name"], cohort_group=example["group"], mode=example["mode"],
                          steps=count, best_count=int(best), unique_best_count=int(unique), top3_count=int(top3),
                          guaranteed_top3_count=int(guaranteed), demonstrated_next_blocked=blocked,
+                         literal_top3_count=int(literal3),
+                         literal_top3_informative_count=int(early_literal3),
+                         literal_top3_small_pool_count=int(late_literal3),
                          top3_informative_steps=int(early3_steps), top3_informative_count=int(early3),
                          guaranteed_top3_informative_count=int(early_guaranteed3),
                          top3_small_pool_steps=int(late3_steps), top3_small_pool_count=int(late3),
@@ -374,7 +409,9 @@ def _metrics(examples, coefficients, sharing, *, gated=False):
 
 
 def _aggregate(rows):
+    literal_available = bool(rows) and all("literal_top3_count" in row for row in rows)
     keys = ("steps", "best_count", "unique_best_count", "top3_count", "guaranteed_top3_count",
+            "literal_top3_count", "literal_top3_informative_count", "literal_top3_small_pool_count",
             "demonstrated_next_blocked", "fractional_top1_credit", "reciprocal_midrank_sum", "nll_sum", "unique_feature_ceiling",
             "top3_informative_steps", "top3_informative_count", "guaranteed_top3_informative_count",
             "top3_small_pool_steps", "top3_small_pool_count", "guaranteed_top3_small_pool_count",
@@ -390,30 +427,37 @@ def _aggregate(rows):
     early = result["top7_informative_steps"]
     early3 = result["top3_informative_steps"]
     result.update(top3_informative_rate=result["top3_informative_count"] / early3 if early3 else None,
+                  literal_top3_informative_rate=result["literal_top3_informative_count"] / early3 if literal_available and early3 else None,
                   guaranteed_top3_informative_rate=result["guaranteed_top3_informative_count"] / early3 if early3 else None,
                   primary_shortlist_size=3,
-                  top3_scope="Main Top3 comparison requires at least four remaining candidates; final pools of at most three are reported separately")
+                  primary_top3_metric="literal_top3_informative_rate",
+                  literal_top3_metrics_available=literal_available,
+                  literal_top3_scope="Actual list capped at three; descending utility then lexical ID resolves ties, as in rank_mode_candidates; no teacher-position tie credit",
+                  top3_scope="Legacy top3 fields use optimistic competition rank, which can include more than three tied tracks; main literal comparison requires at least four remaining candidates; final pools of at most three are separate")
     result.update(top7_informative_rate=result["top7_informative_count"] / early if early else None,
                   guaranteed_top7_informative_rate=result["guaranteed_top7_informative_count"] / early if early else None,
                   top7_scope="Main Top7 comparison requires at least eight remaining candidates; smaller pools reported separately")
     if count:
         result.update(unique_best_rate=result["unique_best_count"] / count, top3_rate=result["top3_count"] / count,
+                      literal_top3_rate=result["literal_top3_count"] / count if literal_available else None,
                       mean_reciprocal_midrank=result["reciprocal_midrank_sum"] / count)
     return result
 
 
-def _options(families, sharing_options, penalties):
+def _options(families, sharing_options, penalties, training_supports):
     families = list(dict.fromkeys(_list(families, "Feature families")))
     sharing_options = list(dict.fromkeys(_list(sharing_options, "Sharing options")))
     penalties = list(dict.fromkeys(_number(value, "L2 penalty") for value in _list(penalties, "L2 penalties")))
+    supports = list(dict.fromkeys(_list(training_supports, "Training supports")))
     if (not families or any(family not in FAMILIES for family in families) or not sharing_options
             or any(sharing not in SHARING_OPTIONS for sharing in sharing_options)
-            or not penalties or any(penalty <= 0 for penalty in penalties)):
+            or not penalties or any(penalty <= 0 for penalty in penalties)
+            or not supports or any(support not in TRAINING_SUPPORTS for support in supports)):
         raise ValueError("Unsupported feature, sharing or penalty options")
-    return families, sharing_options, penalties
+    return families, sharing_options, penalties, supports
 
 
-def _select(examples, families, sharings, penalties):
+def _select(examples, families, sharings, penalties, supports):
     groups = sorted({example["group"] for example in examples})
     if len(groups) < 2:
         raise ValueError("Inner selection requires two independent source cohorts")
@@ -427,24 +471,33 @@ def _select(examples, families, sharings, penalties):
                 prepared = [dict(example, matrices=[np.c_[matrix, matrix * float(example["mode"] == "mood")]
                     for matrix in example["matrices"]]) for example in shared]
             cache[family, sharing] = prepared
-            for penalty in penalties:
+            for support, penalty in ((s, p) for s in supports for p in penalties):
                 rows, available = [], True
                 for group in groups:
                     training = [e for e in prepared if e["group"] != group]
                     if sharing == "separate" and {e["mode"] for e in training} != {"fuzzy", "mood"}:
                         available = False
                         break
-                    coefficients = _fit_sharing(training, penalty, sharing)
-                    rows += _metrics([e for e in prepared if e["group"] == group], coefficients, sharing)
+                    try:
+                        coefficients = _fit_sharing(training, penalty, sharing, training_support=support)
+                    except ValueError as error:
+                        if support != "allowed_candidates" or "No supported" not in str(error):
+                            raise
+                        available = False
+                        break
+                    rows += _metrics([e for e in prepared if e["group"] == group], coefficients, sharing, gated=True)
                 if available:
-                    choices.append(dict(feature_family=family, sharing=sharing, l2_penalty=penalty,
+                    choices.append(dict(feature_family=family, sharing=sharing, l2_penalty=penalty, training_support=support,
                                         inner_validation=_aggregate(rows)))
     if not choices:
         raise ValueError("No model option has sufficient independent training cohorts")
-    selected = max(choices, key=lambda option:(option["inner_validation"]["mean_reciprocal_midrank"],
-        option["inner_validation"]["unique_best_count"], -option["inner_validation"]["mean_nll"], option["l2_penalty"]))
+    selected = max(choices, key=lambda option:(option["inner_validation"]["literal_top3_informative_rate"],
+        option["inner_validation"]["unique_best_rate"], option["inner_validation"]["mean_reciprocal_midrank"],
+        -(option["inner_validation"]["conditional_mean_nll"]
+          if option["inner_validation"]["conditional_mean_nll"] is not None else math.inf),
+        option["l2_penalty"]))
     prepared = cache[selected["feature_family"], selected["sharing"]]
-    coefficients = _fit_sharing(prepared, selected["l2_penalty"], selected["sharing"])
+    coefficients = _fit_sharing(prepared, selected["l2_penalty"], selected["sharing"], training_support=selected["training_support"])
     return selected, choices, coefficients
 
 
@@ -455,33 +508,37 @@ def _profile(examples, selected, options, coefficients, minimum):
                 sharing=selected["sharing"], feature_names=feature_names(selected["feature_family"], selected["sharing"]),
                 coefficients={mode:list(map(float, values)) for mode, values in coefficients.items()},
                 l2_penalty=selected["l2_penalty"], min_candidates=minimum,
-                selection=dict(method="leave-one-training-source-cohort-out", selected=selected, options=options),
+                training_support=selected["training_support"],
+                selection=dict(method="leave-one-training-source-cohort-out", selected=selected, options=options,
+                    criterion="gated literal Top3 on at least four remaining candidates, unique Top1, reciprocal rank, supported NLL; blocked targets remain in every validation denominator"),
                 training_provenance=[dict(name=e["name"], cohort_group=e["group"], mode=e["mode"],
-                                         track_count=len(e["records"]), metadata_sha256=e["metadata_sha256"]) for e in examples],
+                                         track_count=len(e["records"]), metadata_sha256=e["metadata_sha256"],
+                                         queries=len(e["queries"]), training_skipped_queries=(sum(not _allowed(_musical(c)[2], _musical(p[0])[2], e["mode"]) for c,p in e["queries"])
+                                             if selected["training_support"] == "allowed_candidates" else 0)) for e in examples],
                 grouping_scope="shared track IDs/source hashes and explicit cohort labels form connected components",
                 feature_inputs=["BPM", "musical key", "remaining-pool musical connectivity"],
                 ranking_scope="teacher-forced local successor utility, not a complete path or audible quality model",
                 harmony_gate="Caller mode is enforced independently; blocked demonstrations stay in validation denominator")
 
 
-def fit_mode_ranker(examples, *, feature_families=("pool",), sharing_options=SHARING_OPTIONS,
-                    l2_candidates=(.1, 1.), min_candidates=4):
+def fit_mode_ranker(examples, *, feature_families=("pool", "tempo_pool"), sharing_options=SHARING_OPTIONS,
+                    l2_candidates=(.01, .1, 1.), min_candidates=4, training_supports=TRAINING_SUPPORTS):
     """Select and fit experimental JSON coefficients using inner cohorts only."""
     minimum = _minimum(min_candidates)
     prepared = _prepare(examples, minimum)
-    selected, options, coefficients = _select(prepared, *_options(feature_families, sharing_options, l2_candidates))
+    selected, options, coefficients = _select(prepared, *_options(feature_families, sharing_options, l2_candidates, training_supports))
     return _profile(prepared, selected, options, coefficients, minimum)
 
 
-def cross_validate_mode_ranker(examples, *, feature_families=("pool",), sharing_options=SHARING_OPTIONS,
-                              l2_candidates=(.1, 1.), min_candidates=4):
+def cross_validate_mode_ranker(examples, *, feature_families=("pool", "tempo_pool"), sharing_options=SHARING_OPTIONS,
+                              l2_candidates=(.01, .1, 1.), min_candidates=4, training_supports=TRAINING_SUPPORTS):
     """Outer source cohort holdout, with all variants excluded from inner fit."""
     minimum = _minimum(min_candidates)
     prepared = _prepare(examples, minimum)
     groups = sorted({example["group"] for example in prepared})
     if len(groups) < 3:
         raise ValueError("Nested validation requires three independent source cohorts")
-    options = _options(feature_families, sharing_options, l2_candidates)
+    options = _options(feature_families, sharing_options, l2_candidates, training_supports)
     folds = []
     for group in groups:
         training = [e for e in prepared if e["group"] != group]
@@ -523,6 +580,8 @@ def validate_mode_ranker_profile(profile):
         validated[mode] = [_number(value, "Coefficient") for value in values]
     if _number(profile.get("l2_penalty"), "L2 penalty") <= 0:
         raise ValueError("L2 penalty must be positive")
+    if profile.get("training_support", "all_candidates") not in TRAINING_SUPPORTS:
+        raise ValueError("Unsupported mode-ranker training support")
     _minimum(profile.get("min_candidates"))
     provenance = _list(profile.get("training_provenance"), "Training provenance")
     groups = set()

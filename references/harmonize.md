@@ -176,8 +176,19 @@ a musical feature; identifiers are grouping and matching evidence only.
 
 The model considers directed tonal relations, tonic/scale overlap, BPM movement
 and the remaining pool's key connectivity, rare-key exits and viable successors.
-Inner training cohorts select regularization and shared, mode-interacted or
-separate utilities. Repeated orders do not gain extra fitting weight simply by
+The optional `tempo_pool` family additionally lets the cost of absolute/signed
+BPM movement depend on the tonal relation, retaining the actual twelve pool
+context terms. It has 97 base columns; old 75-column `pool` profiles still load.
+Inner training cohorts select feature family, regularization, mode sharing and
+training support using gated literal Top3, then unique Top1, reciprocal rank and
+supported likelihood. A weaker .01 regularization candidate is included.
+`all_candidates` retains the legacy training softmax; `allowed_candidates`
+fits only independently allowed candidates and omits unsupported target queries
+from fitting. Both options keep every demonstration, including blocked targets,
+in validation denominators. Profiles declare support and skipped fitting counts;
+legacy profiles without the new field use the all-candidate convention. The
+selected profile may retain the simpler family/support: new options are not
+automatically active on every input. Repeated orders do not gain extra fitting weight simply by
 being saved more often. Unknown keys remain explicit and in the validation
 denominator. Profile versions reject stale feature layouts.
 
@@ -228,6 +239,13 @@ optimistic Top3 and guaranteed Top3 separately. Competition rank at most three
 can contain more than three tracks at a tied boundary; the literal shortlist is
 capped at three and flags that tie. The Python ranker accepts an explicit
 `shortlist_limit` from one to seven for reproducing earlier experiments.
+Validation now exposes `literal_top3_informative_rate` as the primary capped
+metric. Legacy `top3_*` fields remain optimistic competition-rank counts for
+compatibility and may include more than three tied tracks. Literal validation
+uses the public ranker's descending utility and lexical-ID tie order, never
+the demonstrated successor's first position in a training query. Keep a
+separately seeded research tie policy labelled rather than merging its counts
+with this metric; missing literal metrics in legacy rows are unavailable.
 Repeated DJ.Studio orders can themselves differ; examine
 that variation without converting it into a claim that our predictions match.
 Tracks with identical BPM/key cannot be distinguished by these features.
@@ -324,6 +342,19 @@ hashes are conservative grouping evidence, not proof that different encodings
 of the same composition are independent songs. Keep semantic-alias sensitivity
 separate from ID/name musical features. Learned weights and user archives stay
 outside the public source repository.
+Recompute connected source groups when new archives arrive: a new combined
+pool can join formerly separate training groups. New orderings of previously
+trained sources are order tests, not independent source tests. Exclude the
+entire newly connected component, including its older variants, in an outer
+holdout; do not reuse an old fold that trained on part of that component.
+
+The fitted all-candidate softmax and a route policy conditioned on playable,
+allowed heads have different declared supports. Conditioning is not by itself
+a scoring error. A lower all-candidate diagnostic loss does not establish a
+better constrained route or closer DJ.Studio agreement. Compare alternative
+supports end to end before changing the policy; retain blocked demonstrations
+in validation denominators even if an experimental fitter omits unsupported
+targets from its training objective.
 
 Official sources checked 2026-10-11:
 [Harmonize](https://help.dj.studio/en/articles/7878402-harmonize-previously-automix),

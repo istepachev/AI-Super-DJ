@@ -238,9 +238,125 @@ def test_main_top3_excludes_trivial_final_pools(profile):
     assert row['top3_small_pool_count'] == row['top3_small_pool_steps']
 
 
+def test_literal_validation_does_not_credit_teacher_first_at_a_tied_boundary(profile):
+    from superdj.harmonize_modes import _matrices, _metrics
+    neutral = deepcopy(profile)
+    neutral['coefficients']['all'] = [0.] * len(neutral['feature_names'])
+    current = track('current')
+    # The teacher target is first in the query, but outside the actual list.
+    pool = [track(identity) for identity in ('z-target', 'a', 'b', 'c', 'd')]
+    prepared = dict(name='tied', group='g', mode='fuzzy', queries=[(current, pool)])
+    matrices = _matrices([prepared], neutral['feature_family'], neutral['sharing'])
+    row = _metrics(matrices, neutral['coefficients'], neutral['sharing'], gated=True)[0]
+    ranked = rank_mode_candidates(current, pool, neutral)
+    assert ranked['shortlist_ids'] == ['a', 'b', 'c']
+    assert row['top3_informative_count'] == 1  # optimistic rank, five tied tracks
+    assert row['guaranteed_top3_informative_count'] == 0
+    assert row['literal_top3_informative_count'] == row['literal_top3_count'] == 0
+    summary = _aggregate([row])
+    assert summary['literal_top3_metrics_available']
+    assert summary['primary_top3_metric'] == 'literal_top3_informative_rate'
+    assert summary['literal_top3_informative_rate'] == 0
+
+
+def test_literal_validation_matches_capped_ranker_and_keeps_blocked_targets(profile):
+    from superdj.harmonize_modes import _matrices, _metrics
+    current = track('current')
+    pools = [
+        [track('target', '9B', 123), track('a', '8A', 126), track('b', '7B', 121), track('c', '8B', 120)],
+        [track('blocked', None), track('a', '8B'), track('b', '9B'), track('c', '7B')],
+        [track('short-target', '8B'), track('last', '8B')],
+    ]
+    prepared = dict(name='literal', group='g', mode='fuzzy', queries=[(current, p) for p in pools])
+    matrices = _matrices([prepared], profile['feature_family'], profile['sharing'])
+    row = _metrics(matrices, profile['coefficients'], profile['sharing'], gated=True)[0]
+    hits = [p[0]['id'] in rank_mode_candidates(current, p, profile)['shortlist_ids'] for p in pools]
+    assert row['literal_top3_count'] == sum(hits)
+    assert row['literal_top3_informative_count'] == sum(hits[:2])
+    assert row['literal_top3_small_pool_count'] == hits[2]
+    assert row['demonstrated_next_blocked'] == 1
+    assert row['top3_informative_steps'] == 2
+    assert _aggregate([row])['literal_top3_informative_rate'] == sum(hits[:2]) / 2
+
+
+def test_legacy_metric_rows_do_not_invent_literal_coverage():
+    old = dict(steps=4, best_count=1, unique_best_count=1, top3_count=2,
+        guaranteed_top3_count=2, demonstrated_next_blocked=0, fractional_top1_credit=1.,
+        reciprocal_midrank_sum=1., nll_sum=2., unique_feature_ceiling=4,
+        top3_informative_steps=4, top3_informative_count=2)
+    summary = _aggregate([old])
+    assert not summary['literal_top3_metrics_available']
+    assert summary['literal_top3_rate'] is summary['literal_top3_informative_rate'] is None
+
+
 def test_unknown_training_keys_allowed_without_inventing_key():
     examples = synthetic()
     for example_ in examples:
         example_["records"][0]["key_camelot"] = None
     result = fit_mode_ranker(examples, sharing_options=("shared",), l2_candidates=(.1,), min_candidates=2)
     assert validate_mode_ranker_profile(result)
+
+
+def test_supported_training_skips_only_fit_queries_and_keeps_validation_denominators():
+    examples = synthetic()
+    for item in examples:
+        item['records'][0]['key_camelot'] = None
+    options = dict(feature_families=('pool',), sharing_options=('shared',),
+                   l2_candidates=(.1,), training_supports=('allowed_candidates',), min_candidates=2)
+    profile = fit_mode_ranker(examples, **options)
+    assert profile['training_support'] == 'allowed_candidates'
+    assert all(row['training_skipped_queries'] >= 1 for row in profile['training_provenance'])
+    validation = cross_validate_mode_ranker(examples, **options)
+    assert validation['gated_summary']['steps'] == 24
+    assert validation['gated_summary']['demonstrated_next_blocked'] >= 6
+    assert validation['gated_summary']['literal_top3_metrics_available']
+    assert validation['gated_summary']['mean_nll'] is None
+
+
+def test_supported_only_option_with_no_legal_targets_is_not_fitted():
+    examples = synthetic()
+    for item in examples:
+        for record in item['records']:
+            record['key_camelot'] = None
+    with pytest.raises(ValueError, match='No model option'):
+        fit_mode_ranker(examples, feature_families=('pool',), sharing_options=('shared',),
+            l2_candidates=(.1,), training_supports=('allowed_candidates',), min_candidates=2)
+    # The explicit all-candidate diagnostic learner still accepts unknown keys.
+    profile = fit_mode_ranker(examples, feature_families=('pool',), sharing_options=('shared',),
+        l2_candidates=(.1,), training_supports=('all_candidates',), min_candidates=2)
+    assert profile['training_support'] == 'all_candidates'
+    assert not any(p['training_skipped_queries'] for p in profile['training_provenance'])
+
+
+@pytest.mark.parametrize('support', [None, '', 'invalid', True])
+def test_profile_rejects_unknown_fit_support(profile, support):
+    changed = deepcopy(profile)
+    changed['training_support'] = support
+    with pytest.raises(ValueError, match='training support'):
+        validate_mode_ranker_profile(changed)
+
+
+def test_legacy_profile_without_training_support_remains_loadable(profile):
+    legacy = deepcopy(profile)
+    legacy.pop('training_support', None)
+    assert validate_mode_ranker_profile(legacy)['model_version'] == MODEL_VERSION
+    assert rank_mode_candidates(track('current'), [track('next')], legacy)['shortlist_ids'] == ['next']
+
+
+@pytest.mark.parametrize('supports', [(), ('invalid',), 'allowed_candidates'])
+def test_fit_rejects_invalid_training_support_options(supports):
+    with pytest.raises(ValueError):
+        fit_mode_ranker(synthetic(), training_supports=supports)
+
+
+def test_selection_uses_actual_gated_capped_lists_and_records_its_scope():
+    profile = fit_mode_ranker(synthetic(), feature_families=('pool', 'tempo_pool'),
+        sharing_options=('interactions',), l2_candidates=(.01, .1), min_candidates=2)
+    selected = profile['selection']['selected']
+    scores = selected['inner_validation']
+    assert scores['primary_top3_metric'] == 'literal_top3_informative_rate'
+    assert scores['literal_top3_informative_rate'] <= scores['top3_informative_rate']
+    assert selected['training_support'] == profile['training_support']
+    assert all(row['inner_validation']['demonstrated_next_blocked'] > 0
+               for row in profile['selection']['options'])
+    assert len(profile['feature_names']) == len(feature_names(profile['feature_family'], profile['sharing']))

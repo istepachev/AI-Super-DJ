@@ -5,8 +5,8 @@ import math
 import numpy as np
 import pytest
 
-from superdj.harmonize_modes import (FEATURE_VERSION, MODEL_VERSION, UTILITY_WARNING,
-    feature_names, rank_mode_candidates)
+from superdj.harmonize_modes import (FEATURE_VERSION, MODEL_VERSION, RELATIONS, UTILITY_WARNING,
+    _pair, feature_names, rank_mode_candidates)
 from superdj.harmonize_modes_search import DynamicModePool, search_mode_route
 from superdj.harmonize_modes_sequence import sequence_mode_tracks
 
@@ -27,7 +27,7 @@ def tracks(keys=("8B", "9B", "8A", "2B", None)):
     return [dict(id=str(i), bpm=110+7*i, key_camelot=key) for i,key in enumerate(keys)]
 
 
-@pytest.mark.parametrize('family', ('relation', 'circle', 'tonal', 'pool'))
+@pytest.mark.parametrize('family', ('relation', 'circle', 'tonal', 'pool', 'tempo_pool'))
 @pytest.mark.parametrize('sharing', ('shared', 'interactions', 'separate'))
 @pytest.mark.parametrize('mode', ('fuzzy', 'mood'))
 def test_reused_features_match_public_ranker_for_every_actual_small_pool(family, sharing, mode):
@@ -43,6 +43,45 @@ def test_reused_features_match_public_ranker_for_every_actual_small_pool(family,
             for index, utility, accepted in zip(indices, utilities, allowed):
                 assert utility == pytest.approx(expected[rows[index]['id']]['utility'], abs=1e-11)
                 assert accepted == expected[rows[index]['id']]['eligible']
+
+
+def test_tempo_pool_reuses_relation_specific_tempo_terms_and_actual_context():
+    rows = [dict(id=str(i), bpm=bpm, key_camelot=key) for i, (bpm, key) in
+        enumerate(((120, '8B'), (130, '9B'), (140, '9B'), (110, '9B'), (130, '8A')))]
+    p = profile('tempo_pool')
+    p['coefficients']['all'] = [0.] * len(p['feature_names'])
+    pair_count = len(_pair(rows[0], rows[1], 'fuzzy', 'pool'))
+    # One pair's tempo effect depends on its relation, including tempo sign.
+    relation = RELATIONS.index('perfect_boost')
+    p['coefficients']['all'][pair_count + 2 * relation] = 2.
+    p['coefficients']['all'][pair_count + 2 * relation + 1] = 3.
+    p['coefficients']['all'][p['feature_names'].index('log_same_key_count')] = 4.
+    engine = DynamicModePool(rows, p)
+    indices, utilities, _ = engine.scores(0, 0b11110)
+    scores = dict(zip(indices, utilities))
+    assert scores[1] == pytest.approx(5 + 4 * math.log(3))
+    assert scores[2] == pytest.approx(10 + 4 * math.log(3))
+    assert scores[3] == pytest.approx(-1 + 4 * math.log(3))
+    assert scores[4] == pytest.approx(0.)
+    reduced, values, _ = engine.scores(0, 0b10010)
+    assert dict(zip(reduced, values))[1] == pytest.approx(5.)
+    assert engine.context_weights is not None and len(engine.context_weights) == 12
+
+
+@pytest.mark.parametrize('support', ('all_candidates', 'allowed_candidates'))
+def test_training_support_is_declared_without_changing_constrained_policy_or_diagnostic(support):
+    rows, p = tracks(('8B', '9B', '2B', None)), profile()
+    legacy = DynamicModePool(rows, p)
+    p['training_support'] = support
+    declared = DynamicModePool(rows, p)
+    assert declared.normalized_choices(0, 0b1110, [1, 2, 3]) == legacy.normalized_choices(0, 0b1110, [1, 2, 3])
+    result = declared.rescore_order(['0', '1', '2', '3'])
+    assert result['normalized_musical_loss'] == legacy.rescore_order(['0', '1', '2', '3'])['normalized_musical_loss']
+    assert result['training_support'] == support
+    assert 'all actual unplayed candidates' in result['normalization']
+    assert 'regardless of fitting support' in result['normalization']
+    assert 'same support as fitting' not in result['normalization']
+    assert legacy.rescore_order(['0', '1', '2', '3'])['training_support'] == 'all_candidates'
 
 
 def test_dynamic_pool_changes_after_consumption_and_matches_new_normalization():
