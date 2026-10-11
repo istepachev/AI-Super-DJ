@@ -256,6 +256,133 @@ def _source(parser):
     parser.add_argument("--grid-json", help="Explicit imported grid overrides keyed by track id")
 
 
+def _harmonic_options(parser):
+    parser.add_argument("--harmonic-mode", choices=("fuzzy", "mood"), default="fuzzy")
+    parser.add_argument("--priority", type=float, default=.5, help="0=BPM, 1=key; our explicit weighting")
+    parser.add_argument("--direction", choices=("ascending", "descending", "none"), default="ascending")
+    parser.add_argument("--bpm-tolerance", type=float, help="Soft absolute adjacent-BPM tolerance, independent of render stretch caps")
+
+
+def _harmonic_search_options(parser):
+    parser.add_argument("--order-objective", choices=("compatible_first", "weighted"),
+                        default="compatible_first", help=argparse.SUPPRESS)
+    parser.add_argument("--search-seconds", type=float, default=20., help=argparse.SUPPRESS)
+
+
+def harmonize(args):
+    from .harmonize import harmonize_tracks
+    from .harmonize_report import export_order_pack
+    records = _records(args.records)
+    result = harmonize_tracks(records, mode=args.harmonic_mode, priority=args.priority,
+        direction=args.direction, bpm_tolerance=args.bpm_tolerance, first_id=args.first,
+        last_id=args.last, locked_chains=read_json(args.locked_chains) if args.locked_chains else None,
+        seed=args.seed, beam_width=args.beam_width, order_objective=args.order_objective,
+        search_seconds=args.search_seconds)
+    exported = export_order_pack(records, result, args.work)
+    print(f"Harmonized {len(result['order'])} tracks; report: {exported['report']}", flush=True)
+    return result
+
+
+def harmonize_compare(args):
+    from .harmonize_compare import compare_orders, load_order, load_analysis
+    from .harmonize import harmonize_tracks, harmonic_relation
+    records = _records(args.records)
+    our_order = load_order(args.our_order, records)
+    other_order = load_order(args.other_order, records)
+    other_analysis = load_analysis(args.other_order, records, djs_key_source=args.djs_key_source)
+    settings = dict(harmonic_mode=args.harmonic_mode, priority=args.priority,
+                    direction=args.direction, bpm_tolerance=args.bpm_tolerance)
+    result = compare_orders(records, our_order, other_order, other_analysis=other_analysis, **settings)
+    # A second search uses exported DJ metadata only when ALL keys/BPM exist.
+    if other_analysis:
+        by_id = {str(r.get('id') or r.get('path')): r for r in records}
+        dj_rows = [{'id': r['id'], 'path': by_id[r['id']].get('path'), **r} for r in other_analysis]
+        if len(dj_rows) == len(records) and all(r.get('bpm') and harmonic_relation(r.get('key_camelot') or r.get('key'), r.get('key_camelot') or r.get('key'))['key_from'] for r in other_analysis):
+            rerun = harmonize_tracks(dj_rows, mode=args.harmonic_mode, priority=args.priority,
+                direction=args.direction, bpm_tolerance=args.bpm_tolerance, seed=args.seed,
+                first_id=args.first, last_id=args.last, order_objective=args.order_objective,
+                search_seconds=args.search_seconds)
+            result['replanned_on_other_metadata'] = rerun
+            result['comparison_on_other_metadata'] = compare_orders(dj_rows, rerun['order'], other_order, **settings)
+        else:
+            result['replanned_on_other_metadata'] = None
+            result['replan_reason'] = 'Complete unambiguous exported BPM and key required; no numeric key encoding is guessed'
+    result['experiment_controls'] = {'seed': args.seed, 'first_id': args.first, 'last_id': args.last,
+                                    'order_objective': args.order_objective, 'search_seconds': args.search_seconds,
+                                    'djs_key_source': args.djs_key_source,
+                                    'dj_settings': read_json(args.dj_settings) if args.dj_settings else None}
+    if Path(args.our_order).suffix.lower() == '.json':
+        original = read_json(args.our_order)
+        if isinstance(original, dict) and original.get('settings'):
+            expected = dict(mode=args.harmonic_mode, priority=args.priority,
+                            direction=args.direction, bpm_tolerance=args.bpm_tolerance)
+            result['input_plan_settings'] = original['settings']
+            result['comparison_objective_differs_from_input_plan'] = original['settings'] != expected
+            result['comparison_search_differs_from_input_plan'] = original.get('order_objective', 'weighted') != args.order_objective
+    write_json(Path(args.work) / 'harmonize_comparison.json', result)
+    print(f"Comparison written: {Path(args.work) / 'harmonize_comparison.json'}", flush=True)
+    return result
+
+
+def _harmonize_examples(manifest_path):
+    from .harmonize_compare import load_order
+    manifest = Path(manifest_path)
+    examples = []
+    for entry in read_json(manifest):
+        source = entry['records']
+        if isinstance(source, str):
+            source = manifest.parent / source
+            records = _records(source)
+        else:
+            records = source
+        order = entry['order']
+        if isinstance(order, str):
+            order = load_order(manifest.parent / order, records)
+        examples.append(dict(name=entry['name'], records=records, order=order))
+    return examples
+
+
+def harmonize_learn(args):
+    examples = _harmonize_examples(args.examples)
+    if args.learner == 'ranker':
+        from .harmonize_ranker import cross_validate_ranker, fit_ranker
+        result = cross_validate_ranker(examples, min_candidates=args.min_candidates,
+                                       mode=args.harmonic_mode)
+        write_json(Path(args.work) / 'successor_ranker_validation.json', result)
+        profile = fit_ranker(examples, min_candidates=args.min_candidates)
+        write_json(Path(args.work) / 'successor_ranker_profile.json', profile)
+        print(f"Experimental local ranker and held-out validation written: {args.work}; defaults unchanged", flush=True)
+        return result
+    from .harmonize_calibration import cross_validate_successor_controls
+    result = cross_validate_successor_controls(examples, min_candidates=args.min_candidates)
+    write_json(Path(args.work) / 'successor_calibration.json', result)
+    print(f"Held-out successor calibration written: {Path(args.work) / 'successor_calibration.json'}", flush=True)
+    return result
+
+
+def harmonize_rank(args):
+    from .harmonize_ranker import rank_remaining_candidates
+    records = _records(args.records)
+    by_id = {str(r.get('id') or r.get('path')): r for r in records}
+    if len(by_id) != len(records):
+        raise ValueError('Track IDs must be unique')
+    prefix = read_json(args.played_prefix) if args.played_prefix else [args.current]
+    if (not isinstance(prefix, list) or not prefix or any(not isinstance(i, str) for i in prefix)
+            or len(set(prefix)) != len(prefix) or not set(prefix) <= set(by_id)
+            or prefix[-1] != args.current):
+        raise ValueError('Played prefix must contain distinct known IDs and end with the current track')
+    played = set(prefix)
+    remaining = [r for i, r in by_id.items() if i not in played]
+    result = rank_remaining_candidates(by_id[args.current], remaining,
+                read_json(args.profile), mode=args.harmonic_mode)
+    result.update(current_id=args.current, played_prefix=prefix,
+                  remaining_ids=[str(r.get('id') or r.get('path')) for r in remaining],
+                  whole_path_optimized=False)
+    write_json(Path(args.work) / 'next_track_rankings.json', result)
+    print(f"Experimental remaining-track ranks written: {args.work}; whole-path order unchanged", flush=True)
+    return result
+
+
 def _planning(parser, seed=True):
     parser.add_argument("--style", choices=("default", "zhilin"), default="default")
     parser.add_argument("--mode", choices=("auto", "fixed"), default="auto")
@@ -324,6 +451,35 @@ def main(argv=None):
     pp = subs.add_parser("plan")
     pp.add_argument("--work", required=True); pp.add_argument("--records", required=True)
     _planning(pp)
+    hp = subs.add_parser("harmonize", help="Experimental whole-playlist BPM/key ordering and DJ.Studio test pack")
+    hp.add_argument("--records", required=True); hp.add_argument("--work", required=True)
+    _harmonic_options(hp)
+    _harmonic_search_options(hp)
+    hp.add_argument("--first"); hp.add_argument("--last")
+    hp.add_argument("--locked-chains", help="Private JSON array of disjoint adjacent id chains")
+    hp.add_argument("--seed", type=int, default=0)
+    hp.add_argument("--beam-width", type=int, default=512)
+    cp = subs.add_parser("harmonize-compare", help="Compare orders on identical metadata; distinguish detector disagreements")
+    _harmonic_search_options(cp)
+    cp.add_argument("--records", required=True); cp.add_argument("--work", required=True)
+    cp.add_argument("--our-order", required=True); cp.add_argument("--other-order", required=True)
+    cp.add_argument("--dj-settings", help="Private JSON recording actual app version, slider and locks")
+    cp.add_argument("--djs-key-source", choices=("djstudio", "mixedinkey", "original"), default="djstudio",
+                    help="Explicit exported key source; unavailable alternate indices fall back with provenance")
+    _harmonic_options(cp)
+    cp.add_argument("--seed", type=int, default=0)
+    cp.add_argument("--first"); cp.add_argument("--last")
+    lp = subs.add_parser("harmonize-learn", help="Fit local next-track controls; validate on held-out playlists")
+    lp.add_argument("--examples", required=True, help="Private JSON list of {name, records, order}; paths relative to this manifest")
+    lp.add_argument("--work", required=True)
+    lp.add_argument("--min-candidates", type=int, default=5)
+    lp.add_argument("--learner", choices=("controls", "ranker"), default="controls", help=argparse.SUPPRESS)
+    lp.add_argument("--harmonic-mode", choices=("fuzzy", "mood"), default="fuzzy", help=argparse.SUPPRESS)
+    nlp = subs.add_parser("harmonize-rank", help="Experimental local next-track ranks; keeps independent harmony checks")
+    nlp.add_argument("--records", required=True); nlp.add_argument("--profile", required=True)
+    nlp.add_argument("--current", required=True); nlp.add_argument("--work", required=True)
+    nlp.add_argument("--played-prefix", help="Private JSON array of played IDs ending with current; omitted means current only")
+    nlp.add_argument("--harmonic-mode", choices=("fuzzy", "mood"), default="fuzzy")
     rp = subs.add_parser("render")
     rp.add_argument("--work", required=True); rp.add_argument("--records", required=True); rp.add_argument("--plan", required=True)
     _audio(rp); _rendering(rp)
@@ -351,6 +507,14 @@ def main(argv=None):
         analyze(args)
     elif args.command == "plan":
         plan(args)
+    elif args.command == "harmonize":
+        harmonize(args)
+    elif args.command == "harmonize-compare":
+        harmonize_compare(args)
+    elif args.command == "harmonize-learn":
+        harmonize_learn(args)
+    elif args.command == "harmonize-rank":
+        harmonize_rank(args)
     elif args.command == "render":
         render(args)
     elif args.command == "run":
