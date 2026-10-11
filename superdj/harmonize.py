@@ -14,7 +14,7 @@ from typing import Any, Mapping, Sequence
 from .planner import _KEYS, _beam, _exact, _greedy, _order_cost
 
 
-VERSION = "superdj-harmonize-3"
+VERSION = "superdj-harmonize-4"
 RELATION_COSTS = {
     "same_key": 0.0, "relative_major_minor": 0.10,
     "perfect_boost": 0.15, "perfect_drop": 0.15,
@@ -72,6 +72,12 @@ def _track(record):
 
 
 def harmonic_relation(key_a, key_b, *, mode="fuzzy"):
+    """Classify a directed key change using the declared mode table.
+
+    Fuzzy ignores the letter for adjacent Camelot numbers. Mood's traditional
+    diagonal is narrower: B->A +1 or A->B -1. Its additional expressive moves
+    do not make Mood a superset of the wider Fuzzy table.
+    """
     if mode not in {"fuzzy", "mood"}:
         raise ValueError("mode must be fuzzy or mood")
     a, b = _key(key_a), _key(key_b)
@@ -85,7 +91,8 @@ def harmonic_relation(key_a, key_b, *, mode="fuzzy"):
             relation, accepted = "relative_major_minor", True
         elif same_letter and step in {1, 11}:
             relation, accepted = ("perfect_boost" if step == 1 else "perfect_drop"), True
-        elif not same_letter and step in {1, 11}:
+        elif (not same_letter and step in {1, 11}
+              and (mode == "fuzzy" or step == (1 if a[1] == "B" else 11))):
             relation, accepted = "diagonal", True
         elif mode == "mood" and same_letter and step == 2:
             relation, accepted = "energy_boost", True
@@ -181,17 +188,20 @@ def _relocate_blocks(order, costs, first, last, *, passes=8):
     return path
 
 
-def _search_matrix(pairs, order_objective):
+def _search_matrix(pairs, order_objective, *, mode="fuzzy"):
     """Encode declared priorities without exchanging a bad key for a small BPM gain.
 
     At n blocks the complete normalized tertiary score is at most n-1.
-    A review edge costs n, and an unaccepted edge costs n**2. Therefore
+    In Fuzzy a review edge costs n; Mood permits its expressive relations
+    without a categorical review penalty. An unaccepted edge costs n**2. Therefore
     neither lower tier can compensate for one extra violation of the tier
     above. Internal edges in locked chains are constant for every route.
     """
     if order_objective not in {"compatible_first", "weighted"}:
         raise ValueError("order_objective must be compatible_first or weighted")
     n = len(pairs)
+    if mode not in {"fuzzy", "mood"}:
+        raise ValueError("mode must be fuzzy or mood")
     raw = [[pair["cost"] for pair in row] for row in pairs]
     if any(not math.isfinite(cost) or cost < 0 for row in raw for cost in row):
         raise ValueError("Pair costs must remain finite and nonnegative")
@@ -199,13 +209,14 @@ def _search_matrix(pairs, order_objective):
         return raw, {"strategy": order_objective, "weighted_scale": 1.0}
     scale = max(1., max((raw[i][j] for i in range(n) for j in range(n) if i != j), default=0.))
     matrix = [[n*n * (not pair["harmonic"]["accepted"])
-               + n * (pair["harmonic"]["accepted"] and pair["harmonic"]["risk"] != "lower")
+               + (n if mode == "fuzzy" else 0) * (pair["harmonic"]["accepted"] and pair["harmonic"]["risk"] != "lower")
                + pair["cost"] / scale for pair in row] for row in pairs]
     return matrix, {"strategy": order_objective, "weighted_scale": scale,
-                    "unaccepted_weight": n*n, "accepted_review_weight": n,
-                    "priority_order": ["fewest unaccepted/unknown key edges",
-                                       "fewest accepted review/high-risk key edges",
-                                       "lowest declared weighted BPM/key cost"]}
+                    "unaccepted_weight": n*n, "accepted_review_weight": n if mode == "fuzzy" else 0,
+                    "harmonic_mode": mode,
+                    "priority_order": (["fewest unaccepted/unknown key edges"]
+                                       + (["fewest accepted review/high-risk key edges"] if mode == "fuzzy" else [])
+                                       + ["lowest declared weighted BPM/key cost"])}
 
 
 def harmonize_tracks(records: Sequence[Mapping[str, Any]], *, mode="fuzzy", priority=.5,
@@ -270,7 +281,7 @@ def harmonize_tracks(records: Sequence[Mapping[str, Any]], *, mode="fuzzy", prio
         raise ValueError("Different endpoint blocks are required")
     settings = dict(mode=mode, priority=priority, direction=direction, bpm_tolerance=bpm_tolerance)
     pairs = [[score_pair(by_id[a[-1]], by_id[b[0]], **settings) for b in groups] for a in groups]
-    costs, objective_details = _search_matrix(pairs, order_objective)
+    costs, objective_details = _search_matrix(pairs, order_objective, mode=mode)
     nodes = [[0.] * len(groups) for _ in groups]
     tied = list(range(len(groups)))
     random.Random(seed).shuffle(tied)
@@ -317,11 +328,12 @@ def harmonize_tracks(records: Sequence[Mapping[str, Any]], *, mode="fuzzy", prio
         search_cost=search_cost, baseline_search_cost=baseline_search_cost,
         search_cost_scope="block-boundary objective; comparable only with identical group partition and scaling",
         search_improvement=baseline_search_cost-search_cost,
-        objective_tuple=[len(result['edges'])-result['harmonic_matches'], result['adventurous_matches'], result['total_cost']],
+        objective_tuple=[len(result['edges'])-result['harmonic_matches'],
+                         result['adventurous_matches'] if mode == "fuzzy" else 0, result['total_cost']],
         baseline_objective_tuple=[len(baseline_summary['edges'])-baseline_summary['harmonic_matches'],
-                                  baseline_summary['adventurous_matches'], baseline_summary['total_cost']],
+                                  baseline_summary['adventurous_matches'] if mode == "fuzzy" else 0, baseline_summary['total_cost']],
         solver=solver, search_seconds=search_seconds,
-        objective=("fewest unaccepted key edges, then fewest accepted review/high-risk edges, then weighted BPM/key cost"
+        objective=("fewest unaccepted key edges, " + ("then fewest accepted review/high-risk edges, " if mode == "fuzzy" else "") + "then weighted BPM/key cost"
                    if order_objective == "compatible_first" else
                    "2*priority*harmonic + 2*(1-priority)*(abs(deltaBPM)/10 + .5*direction_reversalBPM/10) + tolerance_excess/tolerance"),
         constraints={"first_id": first_id, "last_id": last_id, "locked_chains": locked_chains or [],

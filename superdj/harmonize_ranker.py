@@ -2,8 +2,9 @@
 
 The model learns relative choice utility from BPM and musical-key pairs.
 Neither identifiers nor playlist positions enter its features. Inner model
-selection holds out whole training playlists; outer validation never selects
-on its held-out playlist. This is not a global path optimizer, an audible
+selection holds out whole track-pool cohorts, including every repeated order
+and mode variant; outer validation never selects on its held-out cohort. This
+is not a global path optimizer, an audible
 quality model, or a reproduction of DJ.Studio's proprietary algorithm.
 """
 from __future__ import annotations
@@ -20,7 +21,7 @@ from scipy.special import logsumexp
 from .harmonize import _number, _track, harmonic_relation
 
 
-MODEL_VERSION = "superdj-conditional-ranker-1"
+MODEL_VERSION = "superdj-conditional-ranker-2"
 FEATURE_FAMILIES = ("relation", "circle")
 RELATIONS = ("same_key", "relative_major_minor", "perfect_boost", "perfect_drop",
              "diagonal", "energy_boost", "parallel_major_minor", "semitone_lift",
@@ -100,10 +101,25 @@ def _examples(examples):
     for index, example in enumerate(examples):
         if not isinstance(example, Mapping):
             raise ValueError("Every example requires records and order")
+        if example.get("training_eligible") is False:
+            continue
         name = str(example.get("name", index))
+        if not name.strip():
+            raise ValueError("Example names must be nonempty")
         if name in names:
             raise ValueError("Example names must be unique")
         names.add(name)
+        group = example.get("cohort_group", example.get("cohortgroup"))
+        if group is None:
+            group = name
+            group_source = "example_name_fallback"
+        else:
+            if not isinstance(group, str) or not group.strip():
+                raise ValueError("cohort_group must be a nonempty string")
+            group_source = "explicit_cohort_group"
+        mode = example.get("mode")
+        if mode is not None and mode not in {"fuzzy", "mood"}:
+            raise ValueError("Example mode must be fuzzy or mood")
         records = _sequence(example.get("records"), "Example records")
         order = _sequence(example.get("order"), "Example order")
         by_id = {}
@@ -125,10 +141,17 @@ def _examples(examples):
         pairs = [(by_id[current], [by_id[i] for i in order[position+1:]])
                  for position, current in enumerate(order[:-1])]
         prepared.append(dict(name=name, records=records, order=order, pairs=pairs,
-                             metadata_sha256=fingerprint))
+                             metadata_sha256=fingerprint, cohort_group=group,
+                             cohort_group_source=group_source, mode=mode,
+                             mode_provenance=example.get("mode_provenance")))
     if not prepared:
         raise ValueError("At least one example is required")
     return prepared
+
+
+def _cohorts(examples):
+    """Stable grouping uses provenance labels, never an identity feature."""
+    return list(dict.fromkeys(example["cohort_group"] for example in examples))
 
 
 def _queries(examples, family, minimum):
@@ -211,16 +234,18 @@ def _options(feature_families, l2_candidates):
 
 
 def _select(examples, families, penalties, minimum):
-    if len(examples) < 2:
-        raise ValueError("Model selection requires at least two whole training playlists")
+    groups = _cohorts(examples)
+    if len(groups) < 2:
+        raise ValueError("Model selection requires at least two whole training cohorts")
     options = []
     for family in families:
         for penalty in penalties:
             validations = []
-            for heldout in range(len(examples)):
-                training = [e for i,e in enumerate(examples) if i != heldout]
+            for heldout in groups:
+                training = [e for e in examples if e["cohort_group"] != heldout]
+                validation = [e for e in examples if e["cohort_group"] == heldout]
                 weights, _ = _fit_weights(training, family, penalty, minimum)
-                validations.append(_metrics([examples[heldout]], weights, family, minimum))
+                validations.append(_metrics(validation, weights, family, minimum))
             steps = sum(row["steps"] for row in validations)
             options.append(dict(feature_family=family, l2_penalty=penalty,
                 inner_mean_reciprocal_midrank=sum(row["steps"]*row["mean_reciprocal_midrank"]
@@ -240,10 +265,22 @@ def _profile(examples, selected, options, minimum):
                 coefficients=list(map(float,weights)), l2_penalty=penalty,
                 min_candidates=minimum, utility_warning=UTILITY_WARNING,
                 feature_inputs=["BPM", "musical key"], identifier_features=False,
-                selection=dict(method="leave-one-training-playlist-out",
+                selection=dict(method="leave-one-training-cohort-out",
+                    holdout_scope="all order and mode variants of one track-pool cohort",
+                    training_cohort_groups=_cohorts(examples),
+                    inner_splits=[dict(heldout_cohort_group=group,
+                        heldout_examples=[e["name"] for e in examples if e["cohort_group"] == group],
+                        training_cohort_groups=[g for g in _cohorts(examples) if g != group])
+                        for group in _cohorts(examples)],
                     objective="reciprocal midpoint rank", selected=selected, options=options),
                 training_provenance=[dict(name=e["name"], track_count=len(e["records"]),
-                    metadata_sha256=e["metadata_sha256"]) for e in examples],
+                    metadata_sha256=e["metadata_sha256"], cohort_group=e["cohort_group"],
+                    cohort_group_source=e["cohort_group_source"], mode=e["mode"],
+                    mode_provenance=e["mode_provenance"]) for e in examples],
+                cohort_grouping=dict(training_group_count=len(_cohorts(examples)),
+                    fallback_example_names=[e["name"] for e in examples
+                        if e["cohort_group_source"] == "example_name_fallback"],
+                    warning="Missing cohort_group falls back to the example name; callers must group repeated track pools explicitly"),
                 convergence=convergence, default_changed=False,
                 harmony_gate="Caller harmonic mode is enforced independently of learned utility")
 
@@ -252,8 +289,10 @@ def fit_ranker(examples, *, feature_families=FEATURE_FAMILIES,
                l2_candidates=DEFAULT_L2_CANDIDATES, min_candidates=5):
     """Fit a JSON-compatible experimental profile; training-only model selection.
 
-    ``examples`` contain ``name``, ``records`` and a complete ``order`` of IDs.
-    Two or more complete playlists are required. Each demonstration supplies
+    ``examples`` contain ``name``, ``records``, a complete ``order`` of IDs and
+    ``cohort_group`` for repeated orders of one track pool. At least two cohorts
+    are required; older manifests fall back to names and disclose that limit.
+    Each demonstration supplies
     only its actual remaining pool; late forced choices are excluded by the
     requested minimum. Calling this function never installs a default.
     """
@@ -293,6 +332,11 @@ def validate_ranker_profile(profile):
         if (not isinstance(digest,str) or len(digest)!=64
                 or any(character not in "0123456789abcdef" for character in digest)):
             raise ValueError("Training provenance requires SHA256 metadata fingerprints")
+    groups = [row.get("cohort_group", row.get("name")) for row in provenance]
+    if any(not isinstance(group, str) or not group.strip() for group in groups):
+        raise ValueError("Training provenance requires nonempty cohort groups or legacy example names")
+    if len(set(groups)) < 2:
+        raise ValueError("Training provenance requires at least two track-pool cohorts")
     return dict(profile, coefficients=coefficients)
 
 
@@ -365,31 +409,45 @@ def _gated_metrics(example, profile, mode, minimum):
 
 def cross_validate_ranker(examples, *, feature_families=FEATURE_FAMILIES,
                           l2_candidates=DEFAULT_L2_CANDIDATES, min_candidates=5, mode="fuzzy"):
-    """Outer whole-playlist holdout with model selection confined to inner train.
+    """Outer whole-cohort holdout with model selection confined to inner train.
 
     Raw immediate rankings and harmony-gated recommendations are reported
-    separately. No profile is trained on the held-out order in its fold.
+    separately. No profile is trained on any variant of the held-out track pool.
     The returned profiles are private experiment artifacts, not defaults.
     """
     prepared = _examples(examples)
-    if len(prepared)<3:
-        raise ValueError("Nested validation requires at least three whole playlists")
+    groups = _cohorts(prepared)
+    if len(groups)<3:
+        raise ValueError("Nested validation requires at least three whole track-pool cohorts")
     if mode not in {"fuzzy","mood"}:
         raise ValueError("mode must be fuzzy or mood")
     minimum = _minimum(min_candidates)
     families,penalties = _options(feature_families,l2_candidates)
     folds=[]
-    for heldout,example in enumerate(prepared):
-        training=[e for i,e in enumerate(prepared) if i!=heldout]
-        selected,options=_select(training,families,penalties,minimum)
-        profile=_profile(training,selected,options,minimum)
+    profiles = {}
+    for example in prepared:
+        group = example["cohort_group"]
+        if group not in profiles:
+            training=[e for e in prepared if e["cohort_group"]!=group]
+            selected,options=_select(training,families,penalties,minimum)
+            profiles[group]=_profile(training,selected,options,minimum)
+        profile=profiles[group]
         weights=np.asarray(profile["coefficients"])
         metrics=_metrics([example],weights,profile["feature_family"],minimum)
+        harmonic_mode = example["mode"] or mode
         folds.append(dict(heldout=example["name"], heldout_metadata_sha256=example["metadata_sha256"],
+                          heldout_cohort_group=group,
+                          heldout_cohort_examples=[e["name"] for e in prepared if e["cohort_group"]==group],
+                          harmonic_mode=harmonic_mode,
                           profile=profile, raw_local_audit=metrics,
-                          gated_recommendation=_gated_metrics(example,profile,mode,minimum)))
+                          gated_recommendation=_gated_metrics(example,profile,harmonic_mode,minimum)))
     return dict(schema_version=1, model_version=MODEL_VERSION, experimental=True,
-                validation="nested leave-one-whole-playlist-out",
+                validation="nested leave-one-whole-cohort-out",
+                holdout_scope="all order and mode variants of one track-pool cohort",
+                cohort_group_count=len(groups), cohort_groups=groups,
+                fallback_example_names=[e["name"] for e in prepared
+                    if e["cohort_group_source"] == "example_name_fallback"],
                 min_candidates=minimum, harmonic_mode=mode, folds=folds,
+                harmonic_mode_scope="explicit per-example mode, with caller mode as fallback",
                 utility_warning=UTILITY_WARNING, default_changed=False,
                 scope="Local next-track learning only; no whole-order or audible quality claim")

@@ -138,3 +138,19 @@ def test_learning_manifest_paths_are_relative_and_defaults_unchanged(tmp_path):
                                                   dict(name='two',records=refs,order=['d','c','b','a'])],min_candidates=1)
     assert result == expected
     assert result['defaults_changed'] is False
+
+
+def test_manifest_preserves_cohort_mode_metadata_and_skips_ineligible_sources(tmp_path):
+    from superdj.cli import _harmonize_examples
+    refs = tracks()
+    dump(tmp_path/'records.json', refs)
+    dump(tmp_path/'order.json', ['a', 'b', 'c', 'd'])
+    entry = dict(name='demonstration', records='records.json', order='order.json',
+                 mode='mood', cohort_group='same-track-pool', training_eligible=True,
+                 mode_provenance='user_filename', metadata={'direction': 'unknown'})
+    excluded = dict(name='excluded', records='missing.json', order='also-missing.json',
+                    training_eligible=False)
+    manifest = dump(tmp_path/'manifest.json', [entry, excluded])
+    values = _harmonize_examples(manifest)
+    assert len(values) == 1
+    assert values[0] == dict(entry, records=refs, order=['a', 'b', 'c', 'd'])

@@ -67,3 +67,18 @@ def test_near_ties_are_anchored_not_transitive_during_fitting():
     audit=evaluate_successors(e['records'],e['order'],**fit['settings'])
     assert audit['edges'][0]['actual_rank']==3
     assert fit['training']['mean_midpoint_reciprocal_rank']==pytest.approx(1/3)
+
+
+def test_cohort_variants_are_never_used_to_fit_their_heldout_group():
+    a = dict(example('one', '1'), cohort_group='a')
+    a2 = dict(example('one-alternative', '1'), cohort_group='a')
+    a2['order'] = a2['order'][::-1]
+    b = dict(example('two', '2'), cohort_group='b')
+    cv = cross_validate_successor_controls([a, a2, b], candidates=[{}], min_candidates=1)
+    assert cv['validation'] == 'leave-one-cohort-out'
+    for fold in cv['folds']:
+        expected = ['two'] if fold['heldout_cohort_group'] == 'a' else ['one', 'one-alternative']
+        assert fold['training_example_names'] == expected
+        assert fold['previously_seen_directed_pairs'] == 0
+    with pytest.raises(ValueError, match='two independent'):
+        cross_validate_successor_controls([a, a2], candidates=[{}], min_candidates=1)

@@ -23,6 +23,8 @@ DEFAULT_WEIGHTS = {
     "tempo": 1.0,
     "energy_step": 0.25,
     "energy_arc": 0.60,
+    "tempo_arc": 1.0,
+    "bass_arc": 0.60,
     "similarity": 0.35,
     "uncertainty": 0.60,
     "vocal_overlap": 0.80,
@@ -52,6 +54,10 @@ class _Track:
     bpm: float | None
     key: tuple[int, str] | None
     energy: float
+    energy_observed: bool
+    energy_method: str
+    bass_intensity: float | None
+    bass_method: str
     key_confidence: float
     bpm_confidence: float
     embedding: tuple[float, ...] | None
@@ -108,11 +114,23 @@ def _normalise(record: Mapping[str, Any]) -> _Track:
         key_conf = 0.0
     if bpm is None:
         bpm_conf = 0.0
-    if record.get("energy") is None:
-        energy = 0.5
-        notices.append("Energy missing; neutral heuristic 0.5 used")
+    intensity = record.get("intensity", record.get("energy"))
+    energy_method = str(record.get("energy_method") or
+                        ("caller-supplied intensity/energy" if intensity is not None else "unavailable"))
+    energy_observed = intensity is not None
+    if intensity is not None:
+        energy = _unit(intensity, f"{identity}.intensity")
     else:
-        energy = _unit(record["energy"], f"{identity}.energy")
+        energy = 0.5
+        notices.append("Intensity evidence missing; no intensity preference applied")
+    if record.get("intensity") is None and "RMS level proxy" in energy_method:
+        energy_observed = False
+        notices.append("Legacy RMS level is not musical intensity; no intensity preference applied")
+    bass = record.get("bass_intensity")
+    if bass is not None:
+        bass = _unit(bass, f"{identity}.bass_intensity")
+    else:
+        notices.append("Bass evidence missing; no bass preference applied")
     embedding = record.get("embedding", record.get("emb"))
     if isinstance(embedding, Mapping):
         embedding = embedding.get("values", embedding.get("vector"))
@@ -125,7 +143,10 @@ def _normalise(record: Mapping[str, Any]) -> _Track:
         raise ValueError("boundary_features must be an object")
     return _Track(
         identity, str(record["path"]) if record.get("path") else None,
-        bpm, key, energy, key_conf, bpm_conf, embedding, boundary, tuple(notices),
+        bpm, key, energy, energy_observed, energy_method, bass,
+        str(record.get("bass_intensity_method") or
+            ("caller-supplied bass_intensity" if bass is not None else "unavailable")),
+        key_conf, bpm_conf, embedding, boundary, tuple(notices),
     )
 
 
@@ -204,7 +225,7 @@ def _edge(a: _Track, b: _Track, limit: float, weights: Mapping[str, float],
     harmonic = confidence * harmonic_base + (1 - confidence) * 0.75
     bpm_confidence = min(a.bpm_confidence, b.bpm_confidence)
     uncertainty = (2 - confidence - bpm_confidence) / 2
-    energy_step = abs(a.energy - b.energy)
+    energy_step = abs(a.energy - b.energy) if a.energy_observed and b.energy_observed else 0.0
     similarity = 0.0
     has_similarity = bool(a.embedding and b.embedding and len(a.embedding) == len(b.embedding))
     if has_similarity:
@@ -274,30 +295,39 @@ def _ramp_limit(value: float | None, regular: float) -> float | None:
     return result
 
 
-def _targets(tracks: Sequence[_Track], arc: str | Sequence[float]) -> list[float]:
+def _arc_fraction(fraction: float, arc: str) -> float:
+    if arc == "release":
+        return 1 - fraction
+    if arc == "wave":
+        # An early climb, a breathing valley, then the strongest ending.
+        for start, end, low, high in ((0, .42, 0, .82), (.42, .65, .82, .35), (.65, 1, .35, 1)):
+            if fraction <= end:
+                return low + (high-low) * (fraction-start) / (end-start)
+    return fraction
+
+
+def _targets(tracks: Sequence[_Track], arc: str | Sequence[float],
+             feature: str = "energy") -> list[float]:
     count = len(tracks)
     if not isinstance(arc, str):
+        if feature != "energy":
+            return []
         result = [_unit(v, "energy_arc") for v in arc]
         if len(result) != count:
             raise ValueError("Custom energy_arc needs one target per track")
         return result
-    energies = sorted(t.energy for t in tracks)
-    low, high = energies[0], energies[-1]
-    if arc == "flat":
-        return [energies[count // 2]] * count
-    if arc not in {"build", "release", "wave", "none"}:
+    if arc not in {"build", "release", "wave", "none", "flat"}:
         raise ValueError("energy_arc must be build, release, wave, flat, none or a target list")
     if arc == "none":
         return []
-    result = []
-    for position in range(count):
-        fraction = position / max(1, count - 1)
-        if arc == "release":
-            fraction = 1 - fraction
-        elif arc == "wave":
-            fraction = fraction / 0.72 if fraction <= 0.72 else 1 - 0.5 * (fraction - 0.72) / 0.28
-        result.append(low + (high - low) * fraction)
-    return result
+    values = sorted(getattr(t, feature) for t in tracks
+                    if getattr(t, feature) is not None and (feature != "energy" or t.energy_observed))
+    if not values:
+        return []
+    if arc == "flat":
+        return [values[len(values) // 2]] * count
+    low, high = values[0], values[-1]
+    return [low + (high-low) * _arc_fraction(p / max(1, count-1), arc) for p in range(count)]
 
 
 def _order_cost(order: Sequence[int], costs: Sequence[Sequence[float]],
@@ -448,7 +478,9 @@ def plan_tracks(records: Sequence[Mapping[str, Any]], *, mode: str = "auto",
     """Plan every input once, or diagnose a user-defined fixed order.
 
     ``id`` defaults to ``path``. BPM may be unknown; key accepts standard
-    Camelot or names such as ``C# minor``. Energy/confidences must be [0, 1].
+    Camelot or names such as ``C# minor``. Intensity/energy, bass_intensity
+    and confidences must be [0, 1]. Measured intensity takes precedence over
+    energy; legacy analysis RMS energy is excluded from musical preferences.
     Confidences are caller-supplied heuristic scores, not calibrated odds.
     Optional embedding and boundary_features.intro_vocal/outro_vocal improve
     pair costs. Auto does not change tracks or discard difficult tracks.
@@ -458,7 +490,11 @@ def plan_tracks(records: Sequence[Mapping[str, Any]], *, mode: str = "auto",
     pairs become explicit, expensive native-tempo bridge candidates at rate 1, or
     make the path infeasible when allow_tempo_reset=False. Candidates in each
     edge report are ranked by immediate cost, not by a promised alternate
-    globally optimal playlist. Seed resolves equal-cost choices only.
+    globally optimal playlist. Named build/wave arcs prefer slower, lighter
+    starts and faster, stronger endings within the measured input range;
+    wave includes an intervening valley. Missing evidence has zero position
+    cost. Targets are preferences, not edits to playback tempo or audio.
+    Seed resolves equal-cost choices only.
     """
     if mode not in {"auto", "fixed"}:
         raise ValueError("mode must be auto or fixed")
@@ -488,8 +524,19 @@ def plan_tracks(records: Sequence[Mapping[str, Any]], *, mode: str = "auto",
     ramp_limit = _ramp_limit(tempo_ramp_max_change, limit)
     objective_weights = _weights(weights)
     targets = _targets(tracks, energy_arc)
-    nodes = [[abs(t.energy - targets[p]) * objective_weights["energy_arc"]
-              if targets else 0.0 for t in tracks] for p in range(len(tracks))]
+    tempo_targets = _targets(tracks, energy_arc, "bpm")
+    bass_targets = _targets(tracks, energy_arc, "bass_intensity")
+    known_bpms = [t.bpm for t in tracks if t.bpm is not None]
+    tempo_span = max(known_bpms)-min(known_bpms) if known_bpms else 0.0
+    position_parts = [[{
+        "intensity": abs(t.energy-targets[p]) * objective_weights["energy_arc"]
+                     if targets and t.energy_observed else 0.0,
+        "tempo": abs(t.bpm-tempo_targets[p]) / tempo_span * objective_weights["tempo_arc"]
+                 if tempo_targets and t.bpm is not None and tempo_span > 0 else 0.0,
+        "bass": abs(t.bass_intensity-bass_targets[p]) * objective_weights["bass_arc"]
+                if bass_targets and t.bass_intensity is not None else 0.0,
+    } for t in tracks] for p in range(len(tracks))]
+    nodes = [[sum(parts.values()) for parts in row] for row in position_parts]
     edges = [[_edge(a, b, limit, objective_weights, allow_tempo_reset, ramp_limit)
               for b in tracks] for a in tracks]
     costs = [[edge["cost"] for edge in row] for row in edges]
@@ -510,7 +557,7 @@ def plan_tracks(records: Sequence[Mapping[str, Any]], *, mode: str = "auto",
         optimal = None
     elif len(tracks) <= exact_limit:
         order = _exact(costs, nodes, first, last, ranks)
-        method = "exact Held-Karp with position energy costs"
+        method = "exact Held-Karp with position intensity, tempo and bass costs"
         optimal = True
     else:
         try:
@@ -532,19 +579,23 @@ def plan_tracks(records: Sequence[Mapping[str, Any]], *, mode: str = "auto",
     for position, (a, b) in enumerate(zip(order, order[1:]), start=1):
         report = _json_edge(edges[a][b])
         report["position"] = position
-        report["position_energy_cost"] = round(nodes[position][b], 6)
+        report["position_energy_cost"] = round(position_parts[position][b]["intensity"], 6)
+        report["position_arc_components"] = {k:round(v, 6) for k,v in position_parts[position][b].items()}
+        report["position_arc_cost"] = round(nodes[position][b], 6)
         report["selected_step_cost"] = round(costs[a][b] + nodes[position][b], 6)
         available = [i for i in range(len(tracks)) if i not in used
                      and (i != last or position == len(tracks) - 1)
                      and math.isfinite(costs[a][i])]
         ranked = sorted(available, key=lambda i: (costs[a][i] + nodes[position][i], ranks[i]))
         report["selected_immediate_rank"] = ranked.index(b) + 1
-        report["candidates_scope"] = "remaining tracks, immediate edge plus next-position energy cost"
-        report["top3_candidates"] = [
+        report["candidates_scope"] = "remaining tracks, immediate edge plus next-position intensity/tempo/bass cost; not future-route evaluation"
+        report["top7_candidates"] = [
             {"id": tracks[i].id, "step_cost": round(costs[a][i] + nodes[position][i], 6),
              "selected": i == b, "reasons": edges[a][i]["reasons"]}
-            for i in ranked[:3]
+            for i in ranked[:7]
         ]
+        # Compatibility for existing readers; the principal shortlist is seven.
+        report["top3_candidates"] = report["top7_candidates"][:3]
         reports.append(report)
         used.add(b)
     reset_count = sum(report["tempo_reset"] for report in reports)
@@ -565,7 +616,21 @@ def plan_tracks(records: Sequence[Mapping[str, Any]], *, mode: str = "auto",
         "baseline_cost": round(baseline_cost, 6) if baseline_cost is not None else None,
         "improvement": round(baseline_cost - total, 6) if baseline_cost is not None else None,
         "baseline_description": "greedy with identical objective, stretch limit, seed and endpoint locks; cost is not audible quality",
-        "weights": objective_weights, "energy_targets": targets, "edges": reports,
+        "weights": objective_weights, "energy_targets": targets,
+        "tempo_targets_bpm": tempo_targets, "bass_targets": bass_targets,
+        "set_arc": {"shape": energy_arc if isinstance(energy_arc, str) else "custom intensity only",
+                    "scope": "position preferences in route search; native tempo and audio are unchanged",
+                    "tempo_normalisation": "absolute deviation divided by known input BPM span",
+                    "missing_evidence": "zero contribution; no guessed bass or intensity",
+                    "positions": [{"id":tracks[i].id, "intensity":tracks[i].energy if tracks[i].energy_observed else None,
+                                   "intensity_method":tracks[i].energy_method,
+                                   "bpm":tracks[i].bpm, "bass_intensity":tracks[i].bass_intensity,
+                                   "bass_method":tracks[i].bass_method,
+                                   "target_intensity":targets[p] if targets else None,
+                                   "target_bpm":tempo_targets[p] if tempo_targets else None,
+                                   "target_bass":bass_targets[p] if bass_targets else None,
+                                   "components":{k:round(v, 6) for k,v in position_parts[p][i].items()}}
+                                  for p,i in enumerate(order)]}, "edges": reports,
         "uncertainty": {"low_confidence_tracks": low_confidence, "warnings": warnings},
         "constraints": {"first_id": first_id, "last_id": last_id,
                         "max_tempo_change_per_deck": limit,

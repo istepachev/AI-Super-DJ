@@ -34,9 +34,11 @@ The ordering report does not certify usable beat grids or audible transitions.
   proven optimum is labelled optimal; a time-limited incumbent is not. Equal
   optima can produce different orders between solver versions and platforms.
 
-The default ordering objective is lexicographic: first minimize unaccepted or
-unknown key edges, then accepted review/high-risk edges, then the weighted
-BPM/key score below. Small tempo convenience cannot buy an incompatible key
+The default ordering objective first minimizes unaccepted or unknown key
+edges. Fuzzy then minimizes accepted review/high-risk edges before the weighted
+BPM/key score below. Mood uses the weighted score immediately after allowance:
+its Energy, Change and Jaws relations are expressive choices, not a categorical
+reason to avoid the route. Small tempo convenience cannot buy an incompatible key
 edge. A rare-key track is evaluated as part of the complete route, rather than
 left as an orphan by repeatedly choosing the cheapest immediate edge. Every
 input and locked chain is retained. Incomplete compatible graphs may still
@@ -75,7 +77,8 @@ not learned probabilities or published DJ.Studio weights.
 | Same number and letter | 0 | Allowed | Allowed | Lower |
 | Same number, A↔B | .10 | Allowed | Allowed | Lower |
 | Same letter, +1 / −1 | .15 | Allowed | Allowed | Lower |
-| Number +1 / −1 with letter change | .30 | Allowed | Allowed | Review |
+| Traditional diagonal: B→A +1, A→B −1 | .30 | Allowed | Allowed | Review |
+| Opposite diagonal: B→A −1, A→B +1 | .30 Fuzzy / 1.50 Mood | Allowed | Incompatible | Review |
 | Same letter, +2 (whole tone up) | .45 | Incompatible | Allowed | Review |
 | Parallel tonic: A→B +3, B→A −3 | .55 | Incompatible | Allowed | Review |
 | Same letter, +7 (semitone up) | .90 | Incompatible | Allowed | High |
@@ -83,10 +86,14 @@ not learned probabilities or published DJ.Studio weights.
 | Unknown key | 1.00 | Unknown | Unknown | Review |
 
 Allowed means permitted by the selected profile; it does not mean safe sounding
-audio. Lower-risk and adventurous matches are counted separately, especially
-for the dissonant semitone lift. Official Fuzzy/Mood pages contradict one
-another, so these names identify our experimental tables rather than a claimed
-exact mapping to a proprietary mode.
+audio. Fuzzy ignores the letter for adjacent numbers; Mood uses the traditional
+directional diagonal and three extra expressive moves. Each key has six Fuzzy
+destinations and eight Mood destinations, with five shared. Mood is not a
+superset of Fuzzy. This table follows the explicit Fuzzy examples, the user's
+Mood wheel and [Mixed In Key's directional diagonal](https://mixedinkey.com/book/use-advanced-harmonic-mixing-techniques/);
+generic help prose differs. These are source-based tables with our penalties,
+not the proprietary search weights. Count adventurous matches separately,
+especially the dissonant semitone lift.
 
 ## Compare the same tracks
 
@@ -123,7 +130,7 @@ remaining tracks with the current ID fixed first, then inspect `order[1]`.
 
 For differences, a second run locking `[current, actual_next]` compares valid
 remaining routes. Compare full-route `objective_tuple` (unaccepted count,
-adventurous count, weighted cost) for the default strategy, or `total_cost` for
+adventurous count for Fuzzy or zero for Mood, weighted cost) for the default strategy, or `total_cost` for
 the legacy weighted strategy. A better valid full-route objective reveals a
 missed search solution; it does not prove that the demonstrated pair was
 predicted. Never subtract `search_cost` between different block partitions:
@@ -131,17 +138,19 @@ collapsing a chain changes n, scaling and constant internal edges. Keep an
 existing valid route as an incumbent when interpreting bounded searches.
 
 Use `harmonize-learn --examples ../examples.json --work ../learning` to fit
-explicit controls and validate on separate playlists. The private manifest is
-a list of `{name, records, order}`; records and order may be JSON paths relative
-to the manifest. Controls are selected on the other playlists, never on the
-held-out playlist. The criterion uses the reciprocal midpoint rank to penalize
+explicit controls and validate on separate source cohorts. The private manifest is
+a list of `{name, records, order, cohort_group, mode}`; records and order may be JSON paths relative
+to the manifest. Give every ordering of the same source pool the same cohort,
+including both modes. Controls are selected on other cohorts, never on a variant
+of the held-out pool. Older controls/ranker manifests fall back to example names
+and disclose that grouping limitation. The criterion uses the reciprocal midpoint rank to penalize
 broad ties. IDs and titles are not fitted features. Learned controls are an
 experimental local ranking profile and do not silently replace set defaults.
 
 For a separately trained conditional model use
 `harmonize-learn --learner ranker --examples ../examples.json --work ../learning`.
-Three playlists are required for nested validation: the outer held-out playlist
-never enters fitting or inner parameter selection. Features contain musical
+Three source cohorts are required for nested validation: every outer held-out
+variant stays outside fitting and inner parameter selection. Features contain musical
 key relationships and BPM differences, not identifiers, titles, paths or the
 held-out order. Profiles and validation results stay private.
 
@@ -154,6 +163,111 @@ denominator; blocked demonstrations remain in it.
 Do not activate a profile merely because it copies more demonstrated choices:
 the current examples include many links outside our Fuzzy table, and the learned
 model can overprefer semitone lifts. It remains an explicit experiment.
+
+## Learn Fuzzy/Mood with the remaining pool
+
+`harmonize-learn --learner modes --examples ../examples.json --work ../learning`
+fits a portable JSON model and writes `mode_ranker_validation.json` and
+`mode_ranker_profile.json`. Each demonstration must explicitly label `mode`.
+Connected shared source hashes/IDs and declared cohort labels keep all repeated
+variants together. At least three independent source cohorts are required for
+nested validation. No track identifier, title, path or demonstrated position is
+a musical feature; identifiers are grouping and matching evidence only.
+
+The model considers directed tonal relations, tonic/scale overlap, BPM movement
+and the remaining pool's key connectivity, rare-key exits and viable successors.
+Inner training cohorts select regularization and shared, mode-interacted or
+separate utilities. Repeated orders do not gain extra fitting weight simply by
+being saved more often. Unknown keys remain explicit and in the validation
+denominator. Profile versions reject stale feature layouts.
+
+`harmonize-rank` accepts the new profile and compares only unplayed candidates.
+`harmonize --records ../records.json --ranking-profile ../learning/mode_ranker_profile.json --harmonic-mode mood --work ../order`
+assembles a complete sequence by recomputing pool context at every choice.
+Endpoint and adjacency locks are preserved. The independent gate rejects
+out-of-mode recommendations. If no playable head is allowed, the complete-order
+assembler retains every track with an explicitly flagged BPM/key fallback;
+it never reports that fallback as a successful learned choice. This sequential
+policy protects its last twelve unplayed blocks with exact unrestricted suffix
+compatibility bounds. It first minimizes the future unaccepted block boundaries
+among currently allowed heads, then preserves the learned utility preference
+and seeded ties. Locked chains use their real incoming head and outgoing tail;
+a reserved last block stays last. Fixed incompatible edges inside user locks
+remain disclosed obligations. The exact result covers that suffix's key
+allowance only, not the full route or audio quality. The ranker's displayed
+Top7 is not silently replaced by this assembly guard.
+
+A separate bounded directed repair pass then reopens provisional adjacencies
+when it can strictly reduce unaccepted final boundaries. It preserves endpoints
+and entire user-locked chains. Among improving moves it prefers fewer changed
+incumbent adjacencies, then lower declared static BPM/key cost. Transfers and
+swaps move blocks without reversing their internal track order. Compatible
+routes stay unchanged. A second stage can relocate intact segments of up to
+thirty-two blocks when short moves leave bridges. Both stages share finite
+scan/evaluation budgets and accept only fewer unaccepted boundaries; they do
+not permanently lock provisional same-key groups. The final route and its bridges are reported separately
+from the original sequential choices, their actual remaining pools and suffix
+bounds. Bounded repair is not a proof that all remaining bridges are necessary
+or that a globally best complete route was found.
+
+This policy is separate from the global pair-cost route optimizer, and its local
+validation is not whole-playlist agreement or an audio-quality measurement.
+With a ranking profile, learned utility determines allowed next choices:
+`--priority` and `--bpm-tolerance` affect the diagnostic cost, an explicit
+fallback and the static repair tie cost. `--direction` additionally affects an automatic first
+choice. These controls do not retune the fitted utilities or create a hard
+tempo constraint. Use the global route search when directly adjusting its
+declared BPM/key weights; record demonstration settings when learning a profile.
+
+Use a shortlist of at most seven allowed tracks, shrinking when fewer remain.
+For the main Top7 comparison require at least eight unplayed candidates; report
+smaller final pools separately, since including every remaining track is trivial
+coverage. Validation retains Top3 as a secondary diagnostic. Report exact unique
+Top1, tied-best, fractional tie credit, optimistic Top7 and guaranteed Top7
+separately. A competition rank at most seven can contain more than seven tracks
+at a tied boundary; the literal shortlist is capped at seven and flags that tie.
+Repeated DJ.Studio orders can themselves differ; examine
+that variation without converting it into a claim that our predictions match.
+Tracks with identical BPM/key cannot be distinguished by these features.
+Keep source-key/slider/mode provenance and ambiguous filenames visible.
+
+## Route representation and search limits
+
+Represent each source track as a graph vertex and each directed permitted
+transition as an edge. Camelot is a circular number from one to twelve plus
+mode A/B; BPM is a scalar feature. Twelve numbers are categories on one circle,
+not twelve independent spatial axes. An allowance matrix can be precomputed
+for the twenty-four keys, and track-level costs for the actual source pool.
+Tracks sharing one cell remain separate vertices: their BPM, duration and
+available future exits can differ, and repeated keys may bridge different
+parts of a route. An existing user-locked chain is the only indivisible block.
+
+The search state includes both the current outgoing tail and **every unplayed
+block**. Caching just the current key is invalid: arriving at the same key after
+consuming a different bridge track changes the possible continuation. The
+route must visit every source once, retain endpoints and keep locks. Ordinary
+shortest-path navigation, which can skip or revisit vertices, cannot certify
+this requirement. Sparse harmony rules reduce branching without guaranteeing
+a cheap exhaustive search over hundreds of tracks.
+
+The pair-cost engine already searches complete routes with exact small-pool
+optimization and bounded beam/MILP methods described above. The learned
+remaining-pool engine recomputes its preferences step by step, calculates
+unrestricted compatibility bounds for the final twelve blocks exactly and
+repairs final bridges with a bounded directed pass. More general dynamic beam
+and backtracking methods remain experimental until separately validated.
+Normalize learned utilities within each hypothetical remaining-pool
+query before adding them along a path; raw conditional utilities have arbitrary
+query offsets. Do not claim a fixed-initial-pool approximation is full dynamic
+lookahead. Compare local next-track accuracy and freely generated route
+compatibility separately; improvement in one does not establish the other.
+
+For future bounded routing, preserve multiple candidate continuations, test
+remaining connectivity, reopen provisional pairs/triples when stitching fails,
+and memoize current-tail/unplayed-set states. A zero connectivity lower bound
+does not prove that every vertex can be visited. If a completely allowed route
+is not found, retain all music and disclose the bridges rather than label them
+compatible or claim infeasibility without a proof.
 
 Our relation-table allowance is not DJ.Studio's Solve status. If an imported
 test requires frequent Solve, record that as a failed application check and

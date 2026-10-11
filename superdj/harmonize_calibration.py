@@ -135,21 +135,37 @@ def fit_successor_controls(examples, *, candidates=None, min_candidates=5):
 
 
 def cross_validate_successor_controls(examples, *, candidates=None, min_candidates=5):
-    """Leave one entire playlist out; never select controls on its results."""
+    """Hold out every variant of one declared cohort; never tune on its results.
+
+    Missing ``cohort_group`` falls back to the example name, reproducing
+    legacy playlist holdout without claiming source-independent validation.
+    """
     examples = list(examples)
     if len(examples) < 2:
         raise ValueError("At least two playlists are required for held-out validation")
     _examples(examples)  # Validate identities and names across all folds.
+    groups = []
+    for index, example in enumerate(examples):
+        value = example.get("cohort_group", str(example.get("name", index)))
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError("cohort_group must be a nonempty string")
+        groups.append(value)
+    if len(set(groups)) < 2:
+        raise ValueError("At least two independent cohort groups are required")
     candidates = _candidates(candidates)
     folds = []
     for i, heldout in enumerate(examples):
-        training_examples = [e for j, e in enumerate(examples) if j != i]
+        training_examples = [e for j, e in enumerate(examples) if groups[j] != groups[i]]
         fitted = fit_successor_controls(training_examples, candidates=candidates, min_candidates=min_candidates)
         test = _metrics(_examples([heldout]), fitted["settings"], min_candidates, {})
         train_pairs = {tuple(pair) for e in training_examples for pair in zip(e["order"], e["order"][1:])}
         test_pairs = list(zip(heldout["order"], heldout["order"][1:]))
-        folds.append(dict(heldout=str(heldout.get("name", i)), fitted=fitted, test=test,
+        folds.append(dict(heldout=str(heldout.get("name", i)), heldout_cohort_group=groups[i],
+                          training_example_names=[str(e.get("name", j)) for j, e in enumerate(training_examples)],
+                          fitted=fitted, test=test,
                           previously_seen_directed_pairs=sum(pair in train_pairs for pair in test_pairs)))
-    return dict(schema_version=1, validation="leave-one-playlist-out", folds=folds,
+    return dict(schema_version=1, validation="leave-one-cohort-out" if any("cohort_group" in e for e in examples) else "leave-one-playlist-out",
+                grouping_source="declared cohort_group or example-name fallback",
+                source_independence_verified=False, folds=folds,
                 full_training=fit_successor_controls(examples, candidates=candidates, min_candidates=min_candidates),
                 defaults_changed=False, audio_compatibility_verified=False)

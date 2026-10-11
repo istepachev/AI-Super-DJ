@@ -165,6 +165,15 @@ class PlannerTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             plan_tracks([track("a")], weights={"imaginary": 1})
 
+    def test_immediate_shortlist_contains_seven_and_caps_to_remaining_pool(self):
+        records = [track(str(i), 120+i*.5) for i in range(10)]
+        result = plan_tracks(records, mode="fixed", energy_arc="none")
+        self.assertEqual(len(result["edges"][0]["top7_candidates"]), 7)
+        self.assertEqual(len(result["edges"][-1]["top7_candidates"]), 1)
+        for edge in result["edges"]:
+            self.assertEqual(edge["top3_candidates"], edge["top7_candidates"][:3])
+            self.assertIn("not future-route", edge["candidates_scope"])
+
 
 if __name__ == "__main__":
     unittest.main()

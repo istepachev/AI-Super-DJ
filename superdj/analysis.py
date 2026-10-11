@@ -21,7 +21,7 @@ from typing import Any, Mapping
 import numpy as np
 
 SCHEMA_VERSION = 1
-ANALYSIS_VERSION = "superdj-analysis-1.5"
+ANALYSIS_VERSION = "superdj-analysis-1.6"
 SAMPLE_RATE = 22050
 HOP = 512
 N_FFT = 2048
@@ -125,10 +125,17 @@ def _features(signal: np.ndarray) -> dict[str, Any]:
     centroid = np.empty(frame_count, dtype=np.float32)
     bass_rms = np.empty(frame_count, dtype=np.float32)
     high_rms = np.empty(frame_count, dtype=np.float32)
+    arc_flux = np.empty(frame_count, dtype=np.float32)
+    spectral_entropy = np.empty(frame_count, dtype=np.float32)
+    bass_power = np.empty(frame_count, dtype=np.float64)
+    musical_power = np.empty(frame_count, dtype=np.float64)
     chroma_sum = np.zeros(12, dtype=np.float64)
     frequencies = np.fft.rfftfreq(N_FFT, 1.0 / SAMPLE_RATE)
     mid = (frequencies >= 300) & (frequencies <= 3500)
+    musical_band = frequencies >= 35
+    bass_band = (frequencies >= 35) & (frequencies <= 180)
     previous: np.ndarray | None = None
+    previous_normalised: np.ndarray | None = None
     for start_frame in range(0, frame_count, 1024):
         count = min(1024, frame_count - start_frame)
         start = start_frame * HOP
@@ -142,6 +149,19 @@ def _features(signal: np.ndarray) -> dict[str, Any]:
         before = np.concatenate([logged[:, :1] if previous is None else previous[:, None], logged[:, :-1]], axis=1)
         flux[sl] = np.mean(np.maximum(logged - before, 0), axis=0)
         previous = logged[:, -1]
+        # Separate gain-invariant descriptors for set development. Keep the
+        # original flux unchanged because timing/cue inference already uses it.
+        normalised = magnitude / np.maximum(magnitude.sum(axis=0), np.finfo(np.float32).tiny)
+        before_normalised = np.concatenate([
+            normalised[:, :1] if previous_normalised is None else previous_normalised[:, None],
+            normalised[:, :-1]], axis=1)
+        arc_flux[sl] = np.maximum(normalised-before_normalised, 0).sum(axis=0)
+        previous_normalised = normalised[:, -1]
+        band_power = power[musical_band].astype(np.float64)
+        musical_power[sl] = band_power.sum(axis=0)
+        bass_power[sl] = power[bass_band].sum(axis=0, dtype=np.float64)
+        distribution = band_power / np.maximum(musical_power[sl], np.finfo(np.float64).tiny)
+        spectral_entropy[sl] = -(distribution * np.log(np.maximum(distribution, np.finfo(np.float64).tiny))).sum(axis=0) / math.log(len(band_power))
         denominator = np.maximum(power.sum(axis=0), 1e-12)
         bass_rms[sl] = rms[sl] * np.sqrt(power[frequencies < 180].sum(axis=0) / denominator)
         high_rms[sl] = rms[sl] * np.sqrt(power[frequencies > 3500].sum(axis=0) / denominator)
@@ -156,8 +176,43 @@ def _features(signal: np.ndarray) -> dict[str, Any]:
     # guitars, synths and strings can also produce it. It is not vocal detection.
     sustained_mid = mid_tonal * (1 - np.minimum(flux, 1))
     return {"rms": rms, "bass_rms": bass_rms, "high_rms": high_rms, "flux": flux, "sustained_mid": sustained_mid,
+            "arc_spectral_flux": arc_flux, "spectral_entropy": spectral_entropy,
+            "bass_35_180_power": bass_power, "musical_power": musical_power,
             "centroid": centroid, "chroma_sum": chroma_sum,
             "times": (np.arange(frame_count) * HOP + N_FFT / 2) / SAMPLE_RATE}
+
+
+def _set_arc_evidence(features: Mapping[str, Any]) -> dict[str, Any]:
+    """Dimensionless audio proxies, independent of an unclipped scalar gain.
+
+    Spectral entropy/variation and relative envelope fullness describe density;
+    they do not identify emotion, a kick, genre or perceived musical power.
+    """
+    rms = np.asarray(features["rms"], dtype=np.float64)
+    reference = float(np.percentile(rms, 95))
+    total_power = float(np.sum(features["musical_power"], dtype=np.float64))
+    method = "gain-invariant relative envelope fullness, spectral entropy and normalised spectral variation; uncalibrated intensity proxy"
+    bass_method = "35–180 Hz / total power above 35 Hz over complete recording; bass availability proxy, not kick detection"
+    if reference <= 0 or total_power <= 0:
+        return {"energy":None, "intensity":None, "energy_method":method,
+                "bass_intensity":None, "bass_intensity_method":bass_method,
+                "set_arc_evidence":{"measured":False, "reason":"no nonzero musical audio evidence",
+                                    "scope":"complete recording", "gain_invariant":True}}
+    active = rms >= reference * .10
+    fullness = float(np.mean(np.clip(rms/reference, 0, 1)))
+    entropy = float(np.mean(np.asarray(features["spectral_entropy"])[active]))
+    variation = float(np.mean(np.clip(np.asarray(features["arc_spectral_flux"])[active] / .20, 0, 1)))
+    intensity = float(np.clip(.40*fullness + .40*entropy + .20*variation, 0, 1))
+    bass = float(np.clip(np.sum(features["bass_35_180_power"], dtype=np.float64)/total_power, 0, 1))
+    return {"energy":round(intensity, 6), "intensity":round(intensity, 6), "energy_method":method,
+            "bass_intensity":round(bass, 6), "bass_intensity_method":bass_method,
+            "set_arc_evidence":{"measured":True, "scope":"complete recording", "gain_invariant":True,
+                                "relative_envelope_fullness":round(fullness, 6),
+                                "spectral_entropy":round(entropy, 6),
+                                "normalised_spectral_variation":round(variation, 6),
+                                "active_frame_fraction":round(float(np.mean(active)), 6),
+                                "intensity_weights":{"relative_fullness":.4,"spectral_entropy":.4,"spectral_variation":.2},
+                                "confidence_kind":"engineering proxy, not calibrated musical judgement"}}
 
 
 def _key(chroma: np.ndarray) -> dict[str, Any]:
@@ -587,8 +642,7 @@ def analyze_track(path: str | Path, *, ffmpeg: str = "ffmpeg", cache_dir: str | 
                   "duration": round(duration, 6), "duration_seconds": round(duration, 6),
                   "bpm": diagnostics["bpm"], "bpm_confidence": round(diagnostics["confidence"] * diagnostics.get("tempo_inlier_fraction", 0), 4),
                   "tempo_alternatives": [diagnostics["bpm"] / 2, diagnostics["bpm"] * 2] if diagnostics["bpm"] else [],
-                  **_key(features["chroma_sum"]), "energy": round(float(np.clip((rms_db + 36) / 30, 0, 1)), 4),
-                  "energy_method": "RMS level proxy mapped -36..-6dBFS to 0..1; not perceived emotion",
+                  **_key(features["chroma_sum"]), **_set_arc_evidence(features),
                   "rms_dbfs": round(rms_db, 3), "spectral_centroid_hz": round(float(np.mean(features["centroid"])), 3),
                   "embedding": {"values": [round(float(value), 6) for value in descriptor],
                                 "method": "handcrafted complete-track chroma, spectral and rhythm descriptor; not a learned embedding"},

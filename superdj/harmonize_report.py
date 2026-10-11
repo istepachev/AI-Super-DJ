@@ -62,8 +62,12 @@ def export_order_pack(records, plan, directory):
     (directory / "harmonized_tracklist.txt").write_text("\n".join(text)+"\n", encoding="utf-8")
     links = ('<a href="input_tracks.m3u8">Те же исходники для DJ.Studio</a> · '
              '<a href="harmonized_tracks.m3u8">Наш порядок</a>') if inputs else ""
-    search_note = ("Сначала минимизируем неподходящие связи тональностей, затем рискованные связи, затем стоимость темпа и тональности. "
+    search_note = ("Сначала минимизируем неподходящие связи тональностей, "
+                   + ("затем рискованные связи, " if plan['settings']['mode'] == 'fuzzy' else "")
+                   + "затем стоимость темпа и тональности. "
                    if plan.get('order_objective') == 'compatible_first' else "Прежняя взвешенная сумма темпа и тональности. ")
+    if plan.get('order_objective') == 'mode_pool':
+        search_note = "Обученная модель Fuzzy/Mood выбирает следующий трек с учётом оставшейся музыки. Гармонический отсев независим. Малый остаток проверяется заранее; отдельная ограниченная пересборка исправляет несовместимые стыки всего маршрута, сохраняя исходные решения в журнале. Оставшиеся несовместимые связи отмечены для проверки. Баланс BPM/key и допуск BPM используются для резервного выбора, диагностической стоимости и вторичного критерия пересборки; обученные предпочтения ими не меняются. Направление BPM также влияет на автоматический выбор первого трека. "
     search_note += ("Минимум заявленного критерия доказан." if plan['optimal_for_declared_objective'] else
                     "Поиск ограничен; глобальный минимум не доказан.")
     search_note = html.escape(search_note)
@@ -71,6 +75,11 @@ def export_order_pack(records, plan, directory):
     page = page.replace('<p>Собственная экспериментальная', f'<p>{search_note}</p><p>Собственная экспериментальная', 1)
     page = page.replace('У многих исходников тональность определена неуверенно.',
                         'Если исходная тональность определена неуверенно, сначала проверим анализ.')
+    if plan.get('order_objective') == 'mode_pool':
+        page = page.replace('Все треки оптимизированы вместе.',
+                            'Следующий трек выбирается последовательно с учётом оставшихся; глобальный оптимум полного порядка не заявлен.')
+        page = page.replace('Поиск ограничен; глобальный минимум не доказан.',
+                            'Модель оценивает варианты продолжения; её численная полезность не означает качество звучания.')
     target = directory / "harmonize_report.html"
     target.write_text(page, encoding="utf-8")
     return {"plan": str(directory / "harmonize_plan.json"), "input_playlist": inputs,

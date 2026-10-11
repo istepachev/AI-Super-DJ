@@ -273,11 +273,16 @@ def harmonize(args):
     from .harmonize import harmonize_tracks
     from .harmonize_report import export_order_pack
     records = _records(args.records)
-    result = harmonize_tracks(records, mode=args.harmonic_mode, priority=args.priority,
+    settings = dict(mode=args.harmonic_mode, priority=args.priority,
         direction=args.direction, bpm_tolerance=args.bpm_tolerance, first_id=args.first,
         last_id=args.last, locked_chains=read_json(args.locked_chains) if args.locked_chains else None,
-        seed=args.seed, beam_width=args.beam_width, order_objective=args.order_objective,
-        search_seconds=args.search_seconds)
+        seed=args.seed)
+    if getattr(args, 'ranking_profile', None):
+        from .harmonize_modes_sequence import sequence_mode_tracks
+        result = sequence_mode_tracks(records, read_json(args.ranking_profile), **settings)
+    else:
+        result = harmonize_tracks(records, **settings, beam_width=args.beam_width,
+            order_objective=args.order_objective, search_seconds=args.search_seconds)
     exported = export_order_pack(records, result, args.work)
     print(f"Harmonized {len(result['order'])} tracks; report: {exported['report']}", flush=True)
     return result
@@ -329,6 +334,8 @@ def _harmonize_examples(manifest_path):
     manifest = Path(manifest_path)
     examples = []
     for entry in read_json(manifest):
+        if entry.get('training_eligible') is False:
+            continue
         source = entry['records']
         if isinstance(source, str):
             source = manifest.parent / source
@@ -338,12 +345,24 @@ def _harmonize_examples(manifest_path):
         order = entry['order']
         if isinstance(order, str):
             order = load_order(manifest.parent / order, records)
-        examples.append(dict(name=entry['name'], records=records, order=order))
+        # Keep cohort/mode provenance and other descriptive manifest metadata.
+        # Only musical records and the demonstrated order enter fitted features.
+        examples.append(dict(entry, records=records, order=order))
     return examples
 
 
 def harmonize_learn(args):
     examples = _harmonize_examples(args.examples)
+    if args.learner == 'modes':
+        from .harmonize_modes import FAMILIES, cross_validate_mode_ranker, fit_mode_ranker
+        result = cross_validate_mode_ranker(examples, feature_families=FAMILIES,
+                                           min_candidates=args.min_candidates)
+        write_json(Path(args.work) / 'mode_ranker_validation.json', result)
+        profile = fit_mode_ranker(examples, feature_families=FAMILIES,
+                                  min_candidates=args.min_candidates)
+        write_json(Path(args.work) / 'mode_ranker_profile.json', profile)
+        print(f"Mode-aware pool ranker and source-cohort validation written: {args.work}; defaults unchanged", flush=True)
+        return result
     if args.learner == 'ranker':
         from .harmonize_ranker import cross_validate_ranker, fit_ranker
         result = cross_validate_ranker(examples, min_candidates=args.min_candidates,
@@ -373,8 +392,12 @@ def harmonize_rank(args):
         raise ValueError('Played prefix must contain distinct known IDs and end with the current track')
     played = set(prefix)
     remaining = [r for i, r in by_id.items() if i not in played]
-    result = rank_remaining_candidates(by_id[args.current], remaining,
-                read_json(args.profile), mode=args.harmonic_mode)
+    profile = read_json(args.profile)
+    if profile.get('model_version') == 'superdj-mode-pool-ranker-2':
+        from .harmonize_modes import rank_mode_candidates
+        result = rank_mode_candidates(by_id[args.current], remaining, profile, mode=args.harmonic_mode)
+    else:
+        result = rank_remaining_candidates(by_id[args.current], remaining, profile, mode=args.harmonic_mode)
     result.update(current_id=args.current, played_prefix=prefix,
                   remaining_ids=[str(r.get('id') or r.get('path')) for r in remaining],
                   whole_path_optimized=False)
@@ -459,6 +482,7 @@ def main(argv=None):
     hp.add_argument("--locked-chains", help="Private JSON array of disjoint adjacent id chains")
     hp.add_argument("--seed", type=int, default=0)
     hp.add_argument("--beam-width", type=int, default=512)
+    hp.add_argument("--ranking-profile", help=argparse.SUPPRESS)
     cp = subs.add_parser("harmonize-compare", help="Compare orders on identical metadata; distinguish detector disagreements")
     _harmonic_search_options(cp)
     cp.add_argument("--records", required=True); cp.add_argument("--work", required=True)
@@ -473,7 +497,7 @@ def main(argv=None):
     lp.add_argument("--examples", required=True, help="Private JSON list of {name, records, order}; paths relative to this manifest")
     lp.add_argument("--work", required=True)
     lp.add_argument("--min-candidates", type=int, default=5)
-    lp.add_argument("--learner", choices=("controls", "ranker"), default="controls", help=argparse.SUPPRESS)
+    lp.add_argument("--learner", choices=("controls", "ranker", "modes"), default="controls", help=argparse.SUPPRESS)
     lp.add_argument("--harmonic-mode", choices=("fuzzy", "mood"), default="fuzzy", help=argparse.SUPPRESS)
     nlp = subs.add_parser("harmonize-rank", help="Experimental local next-track ranks; keeps independent harmony checks")
     nlp.add_argument("--records", required=True); nlp.add_argument("--profile", required=True)

@@ -141,6 +141,94 @@ def test_outer_heldout_metadata_and_order_cannot_change_its_trained_profile():
     assert "blocked demonstrations" in heldout1["gated_recommendation"]["scope"]
 
 
+def cohort_variants(group, offset=0):
+    original = example(group, offset)
+    fuzzy = dict(deepcopy(original), name=group+"-fuzzy", cohort_group=group, mode="fuzzy")
+    mood = dict(deepcopy(original), name=group+"-mood", cohort_group=group, mode="mood")
+    mood["order"].reverse()
+    return [fuzzy, mood]
+
+
+def test_all_variants_of_outer_cohort_are_held_out_together():
+    examples = cohort_variants("a") + cohort_variants("b", 3) + cohort_variants("c", 6)
+    controls = dict(feature_families=("relation",), l2_candidates=(1.,), min_candidates=2)
+    result = cross_validate_ranker(examples, **controls)
+    assert result["validation"] == "nested leave-one-whole-cohort-out"
+    assert result["cohort_group_count"] == 3
+    assert result["fallback_example_names"] == []
+    for fold in result["folds"]:
+        own_group = fold["heldout_cohort_group"]
+        training = fold["profile"]["training_provenance"]
+        assert len(training) == 4
+        assert own_group not in {row["cohort_group"] for row in training}
+        assert set(fold["heldout_cohort_examples"]) == {own_group+"-fuzzy", own_group+"-mood"}
+        assert fold["harmonic_mode"] == ("fuzzy" if fold["heldout"].endswith("fuzzy") else "mood")
+        assert fold["profile"]["selection"]["method"] == "leave-one-training-cohort-out"
+    assert result["folds"][0]["profile"] == result["folds"][1]["profile"]
+    changed = deepcopy(examples)
+    changed[1]["order"].reverse()
+    changed[1]["records"][0].update(bpm=160, key="3B")
+    second = cross_validate_ranker(changed, **controls)
+    # Changing another held-out mode/order variant cannot leak into either fold.
+    assert second["folds"][0]["profile"] == result["folds"][0]["profile"]
+    assert second["folds"][1]["profile"] == result["folds"][1]["profile"]
+
+
+def test_inner_selection_never_splits_variants_of_a_training_cohort(monkeypatch):
+    from superdj import harmonize_ranker as module
+    examples = cohort_variants("a") + cohort_variants("b", 3)
+    fitted_pools, evaluated_pools = [], []
+    fit, metrics = module._fit_weights, module._metrics
+    def fitted(values, *args):
+        fitted_pools.append({row["name"] for row in values})
+        return fit(values, *args)
+    def evaluated(values, *args):
+        evaluated_pools.append({row["name"] for row in values})
+        return metrics(values, *args)
+    monkeypatch.setattr(module, "_fit_weights", fitted)
+    monkeypatch.setattr(module, "_metrics", evaluated)
+    module._select(module._examples(examples), ["relation"], [1.], 2)
+    assert fitted_pools == [{"b-fuzzy", "b-mood"}, {"a-fuzzy", "a-mood"}]
+    assert evaluated_pools == [{"a-fuzzy", "a-mood"}, {"b-fuzzy", "b-mood"}]
+
+
+def test_group_requirements_count_pools_not_number_of_variants():
+    with pytest.raises(ValueError, match="two whole training cohorts"):
+        fit_ranker(cohort_variants("a"), min_candidates=2)
+    with pytest.raises(ValueError, match="three whole track-pool cohorts"):
+        cross_validate_ranker(cohort_variants("a") + cohort_variants("b"), min_candidates=2)
+
+
+def test_legacy_name_grouping_is_disclosed_and_ineligible_examples_are_skipped():
+    values = [example("a"), example("b", 3), dict(name="excluded", training_eligible=False)]
+    fitted = fit_ranker(values, feature_families=("relation",), l2_candidates=(1.,), min_candidates=2)
+    assert fitted["cohort_grouping"]["fallback_example_names"] == ["a", "b"]
+    assert fitted["cohort_grouping"]["training_group_count"] == 2
+    assert {row["cohort_group_source"] for row in fitted["training_provenance"]} == {"example_name_fallback"}
+    assert {row["name"] for row in fitted["training_provenance"]} == {"a", "b"}
+
+
+@pytest.mark.parametrize("group", [True, 12, "", " "])
+def test_malformed_explicit_cohort_group_is_rejected(group):
+    malformed = dict(example("a"), cohort_group=group)
+    with pytest.raises(ValueError, match="cohort_group"):
+        fit_ranker([malformed, example("b")], min_candidates=2)
+
+
+def test_loaded_profile_cannot_claim_independent_training_from_one_cohort():
+    invalid = profile()
+    for row in invalid["training_provenance"]:
+        row["cohort_group"] = "one-track-pool"
+    with pytest.raises(ValueError, match="two track-pool cohorts"):
+        validate_ranker_profile(invalid)
+
+
+def test_old_coefficients_cannot_silently_use_changed_relation_semantics():
+    invalid = dict(profile(), model_version="superdj-conditional-ranker-1")
+    with pytest.raises(ValueError, match="version"):
+        validate_ranker_profile(invalid)
+
+
 def test_gated_validation_counts_blocked_demonstrations_in_denominator():
     values=[example("a"),example("b",3),example("c",6)]
     values[2]["records"][1]["key"]="3A"

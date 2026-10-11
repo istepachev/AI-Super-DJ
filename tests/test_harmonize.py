@@ -27,6 +27,33 @@ def test_wrapped_fifths_relative_and_risky_directional_moves():
     assert harmonic_relation("8A", "3A", mode="mood")["risk"] == "high"
 
 
+def test_mood_diagonal_is_directional_and_fuzzy_is_wider():
+    # The displayed Mood wheel for C major selects E minor, not D minor.
+    assert harmonic_relation("8B", "9A", mode="mood")["relation"] == "diagonal"
+    assert harmonic_relation("9A", "8B", mode="mood")["relation"] == "diagonal"
+    assert harmonic_relation("8A", "7B", mode="mood")["relation"] == "diagonal"
+    assert harmonic_relation("8B", "7A", mode="mood")["accepted"] is False
+    assert harmonic_relation("8B", "7A", mode="fuzzy")["accepted"] is True
+    assert harmonic_relation("8A", "9B", mode="mood")["accepted"] is False
+    assert harmonic_relation("8A", "9B", mode="fuzzy")["accepted"] is True
+    # Directional expressive moves are not accepted in reverse by accident.
+    assert harmonic_relation("8B", "10B", mode="mood")["relation"] == "energy_boost"
+    assert harmonic_relation("8B", "5A", mode="mood")["relation"] == "parallel_major_minor"
+    assert harmonic_relation("8B", "3B", mode="mood")["relation"] == "semitone_lift"
+
+
+@pytest.mark.parametrize("source", [f"{n}{letter}" for letter in "AB" for n in range(1, 13)])
+def test_every_key_has_six_fuzzy_and_eight_mood_destinations(source):
+    keys = [f"{n}{letter}" for letter in "AB" for n in range(1, 13)]
+    fuzzy = {key for key in keys if harmonic_relation(source, key, mode="fuzzy")["accepted"]}
+    mood = {key for key in keys if harmonic_relation(source, key, mode="mood")["accepted"]}
+    assert len(fuzzy) == 6
+    assert len(mood) == 8
+    assert len(fuzzy & mood) == 5
+    assert len(fuzzy - mood) == 1
+    assert len(mood - fuzzy) == 3
+
+
 def test_direction_and_tolerance_are_explicit_soft_costs_not_stretch_limits():
     a, b = track("a", 130), track("b", 120)
     up = score_pair(a, b, direction="ascending", bpm_tolerance=4)
