@@ -95,7 +95,12 @@ def _allowed(a, b, mode):
             or mode == "mood" and relation in RELATIONS[6:9])
 
 
-def feature_names(family="pool", sharing="shared"):
+def feature_names(family="pool", sharing="shared", *, priority_aware=False):
+    if type(priority_aware) is not bool:
+        raise ValueError("priority_aware must be a boolean")
+    if priority_aware:
+        from .harmonize_priority import feature_names as priority_names
+        return priority_names(family, sharing)
     if family not in FAMILIES or sharing not in SHARING_OPTIONS:
         raise ValueError("Unsupported feature family or mode sharing")
     names = ["relation:" + relation for relation in RELATIONS]
@@ -239,8 +244,17 @@ def _rank_current_context(current_bpm, current_key, bpms, keys, mode, pool_conte
     return values
 
 
-def remaining_features(current, candidates, *, mode="fuzzy", family="pool", sharing="shared"):
+def remaining_features(current, candidates, *, mode="fuzzy", family="pool", sharing="shared",
+                       priority_aware=False, priority="unknown", bpm_tolerance=None):
     """Musical feature matrix; permutation equivariant, no identity columns."""
+    if type(priority_aware) is not bool:
+        raise ValueError("priority_aware must be a boolean")
+    if priority_aware:
+        from .harmonize_priority import extend_features
+        candidates = _list(candidates, "Candidates")
+        base = remaining_features(current, candidates, mode=mode, family=family, sharing="shared")
+        return extend_features(base, _musical(current)[1], [_musical(row)[1] for row in candidates],
+            mode=mode, sharing=sharing, priority=priority, bpm_tolerance=bpm_tolerance)
     mode = _mode(mode)
     feature_names(family, sharing)
     current_id, current_bpm, current_key = _musical(current)
@@ -627,6 +641,15 @@ def fit_mode_ranker(examples, *, feature_families=DEFAULT_FEATURE_FAMILIES, shar
     return _profile(prepared, selected, options, coefficients, minimum)
 
 
+def fit_priority_mode_ranker_fixed(examples, *, feature_family="tempo_rank_density",
+        sharing="interactions", l2_penalty=.1, min_candidates=4,
+        training_support="allowed_candidates"):
+    """Opt-in fixed-option training prototype; no independent validation claim."""
+    from .harmonize_priority import fit_priority_mode_ranker_fixed as fixed_fit
+    return fixed_fit(examples, feature_family=feature_family, sharing=sharing,
+        l2_penalty=l2_penalty, min_candidates=min_candidates, training_support=training_support)
+
+
 def cross_validate_mode_ranker(examples, *, feature_families=DEFAULT_FEATURE_FAMILIES, sharing_options=SHARING_OPTIONS,
                               l2_candidates=(.01, .1, 1.), min_candidates=4, training_supports=TRAINING_SUPPORTS):
     """Outer source cohort holdout, with all variants excluded from inner fit."""
@@ -655,6 +678,9 @@ def cross_validate_mode_ranker(examples, *, feature_families=DEFAULT_FEATURE_FAM
 
 def validate_mode_ranker_profile(profile):
     """Reject incompatible/tampered JSON profiles; no executable model format."""
+    if isinstance(profile, Mapping) and profile.get("model_version") == "superdj-mode-priority-ranker-3":
+        from .harmonize_priority import validate_priority_profile
+        return validate_priority_profile(profile)
     if not isinstance(profile, Mapping) or type(profile.get("schema_version")) is not int or profile.get("schema_version") != 1:
         raise ValueError("Unsupported mode-ranker profile schema")
     if profile.get("model_version") != MODEL_VERSION or profile.get("feature_version") != FEATURE_VERSION:
@@ -696,17 +722,21 @@ def validate_mode_ranker_profile(profile):
 
 
 def rank_mode_candidates(current, candidates, profile, *, mode="fuzzy", tie_tolerance=1e-8,
-                         shortlist_limit=3):
+                         shortlist_limit=3, priority="unknown", bpm_tolerance=None):
     """Rank remaining candidates with pool context and an independent mode gate."""
     profile = validate_mode_ranker_profile(profile)
     mode = _mode(mode)
+    from .harmonize_priority import routing_controls
+    controls = routing_controls(priority, bpm_tolerance)
     tolerance = _number(tie_tolerance, "tie_tolerance")
     if tolerance < 0:
         raise ValueError("tie_tolerance must be nonnegative")
     if type(shortlist_limit) is not int or not 1 <= shortlist_limit <= 7:
         raise ValueError("shortlist_limit must be an integer from one to seven")
     candidates = _list(candidates, "Candidates")
-    matrix = remaining_features(current, candidates, mode=mode, family=profile["feature_family"], sharing=profile["sharing"])
+    priority_aware = profile.get("priority_aware") is True
+    matrix = remaining_features(current, candidates, mode=mode, family=profile["feature_family"],
+        sharing=profile["sharing"], priority_aware=priority_aware, **controls)
     coefficients = profile["coefficients"][mode if profile["sharing"] == "separate" else "all"]
     utilities = matrix @ np.asarray(coefficients)
     if not np.all(np.isfinite(utilities)):
@@ -727,7 +757,7 @@ def rank_mode_candidates(current, candidates, profile, *, mode="fuzzy", tie_tole
     limit = min(shortlist_limit, len(eligible))
     boundary_tied = bool(limit and limit < len(eligible)
                         and eligible[limit-1]["rank"] == eligible[limit]["rank"])
-    return dict(model_version=MODEL_VERSION, experimental=True, mode=mode, utility_warning=UTILITY_WARNING,
+    result = dict(model_version=profile["model_version"], experimental=True, mode=mode, utility_warning=UTILITY_WARNING,
                 ranking_scope="local pool-aware musical utility with independent mode gate",
                 candidate_count=len(candidates), eligible_count=len(eligible), blocked_count=len(blocked),
                 best_candidate_ids=[row["id"] for row in eligible if row["rank"] == 1],
@@ -736,3 +766,8 @@ def rank_mode_candidates(current, candidates, profile, *, mode="fuzzy", tie_tole
                 shortlist_scope=f"At most {shortlist_limit} allowed choices, fewer when the pool is small; boundary ties are illustrative, not unique predictions",
                 candidates=eligible + blocked,
                 no_recommendation_reason=None if eligible else "No remaining candidate passes the caller mode")
+    if priority_aware or priority != "unknown" or bpm_tolerance is not None:
+        result.update(routing_controls=controls, priority_aware=priority_aware,
+            control_scope="Explicit controls enter fitted utility; independent harmony gate unchanged" if priority_aware else
+                          "Legacy profile records controls without changing its fitted utility")
+    return result

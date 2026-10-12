@@ -223,12 +223,59 @@ or that a globally best complete route was found.
 
 This policy is separate from the global pair-cost route optimizer, and its local
 validation is not whole-playlist agreement or an audio-quality measurement.
-With a ranking profile, learned utility determines allowed next choices:
+With a legacy version-two ranking profile, learned utility determines allowed next choices:
 `--priority` and `--bpm-tolerance` affect the diagnostic cost, an explicit
 fallback and the static repair tie cost. `--direction` additionally affects an automatic first
 choice. These controls do not retune the fitted utilities or create a hard
 tempo constraint. Use the global route search when directly adjusting its
 declared BPM/key weights; record demonstration settings when learning a profile.
+Version-three priority-aware profiles additionally receive the explicitly
+declared routing priority and tempo tolerance during ranking and dynamic search.
+
+## Priority-aware fixed training
+
+Use the experimental `harmonize-learn --learner priority` when demonstrations
+explicitly distinguish Key and BPM priority. Store `mode`, `priority` (`key`,
+`bpm` or `unknown`) and nullable `bpm_tolerance` independently in each example.
+Human instructions override a filename such as `key`; never infer a missing
+tolerance or priority from the observed tempo jumps. The opt-in manifest field
+`priority_aware_training_eligible` permits a controlled example without enabling
+it for the legacy, priority-blind learner.
+
+This fixed fit uses the declared feature family, mode interactions, L2 penalty
+and training support without choosing parameters on the same examples. It can
+fit one connected source cohort, and records that scope as training-only.
+Repeated orders, modes and priorities of the same source pool remain one cohort.
+The resulting training metrics are not independent validation or a promise of
+the same agreement on the next file. Freeze a profile before that next test.
+Legacy nested validation and its source-cohort requirements remain separate.
+
+The new profile retains BPM/key and the actual remaining-pool features. It adds
+Key/BPM interactions with the relation and tempo terms, plus known-tolerance
+descriptors. Candidate features are computed using the entire remaining pool
+before unsupported targets or candidates are excluded from fitting. All
+demonstrated targets, including blocked ones, remain in evaluation denominators.
+Track names, identifiers and the demonstrated future order are not features.
+
+For a version-three profile, numeric CLI priority endpoints `0` and `1` supply
+the BPM and Key contexts. Intermediate/default values provide `unknown` unless
+the advanced `--routing-priority` explicitly selects a context. A missing
+tolerance remains unknown; it is never silently filled with four or six BPM.
+The Python ranker accepts `priority="key"`, `"bpm"` or `"unknown"` and
+`bpm_tolerance=None` or a positive number. Full route search propagates the same
+controls through every hypothetical current/unplayed state. The independent
+mode gate, source retention and lock handling still apply.
+
+```text
+superdj harmonize-learn --learner priority --examples ../work/controlled_examples.json --work ../priority-fit
+superdj harmonize-rank --records ../work/records.json --profile ../work/priority-profile.json --current TRACK_ID --priority 0 --bpm-tolerance 6 --work ../ranks
+superdj harmonize --records ../work/records.json --ranking-profile ../work/priority-profile.json --harmonic-mode fuzzy --priority 0 --bpm-tolerance 6 --work ../order
+```
+
+Version-two profiles retain their earlier feature layout and behavior. A new
+priority-aware profile stays an explicit experiment; training agreement alone
+does not replace the working profile or establish better complete routes or
+audible transitions.
 
 Use a shortlist of at most three allowed tracks, shrinking when fewer remain.
 For the main Top3 comparison require at least four unplayed candidates; report

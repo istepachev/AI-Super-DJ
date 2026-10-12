@@ -78,7 +78,8 @@ def _tail_guard(remaining, blocks, by_id, mode, last):
 def sequence_mode_tracks(records, profile, *, mode="fuzzy", first_id=None,
                          last_id=None, locked_chains=None, seed=0,
                          priority=.5, direction="ascending", bpm_tolerance=None,
-                         route_search="beam", search_max_expansions=100000):
+                         route_search="beam", search_max_expansions=100000,
+                         routing_priority="unknown"):
     """Retain every input/lock; explicitly flag unavoidable out-of-mode links.
 
     Learned utility only ranks allowed block heads. With at most 12 remaining
@@ -99,6 +100,8 @@ def sequence_mode_tracks(records, profile, *, mode="fuzzy", first_id=None,
     if (type(search_max_expansions) is not int or not 0 <= search_max_expansions <= 1000000):
         raise ValueError("search_max_expansions must be an integer from zero to one million")
     profile = validate_mode_ranker_profile(profile)
+    from .harmonize_priority import routing_controls
+    learned_controls = routing_controls(routing_priority, bpm_tolerance)
     settings = dict(zip(("mode", "priority", "direction", "bpm_tolerance"),
                         _settings(mode, priority, direction, bpm_tolerance)))
     records = list(records)
@@ -154,7 +157,7 @@ def sequence_mode_tracks(records, profile, *, mode="fuzzy", first_id=None,
         current = by_id[order[-1]]
         # All unplayed music contributes context; locks restrict playable heads.
         pool = [by_id[identity] for index in remaining for identity in blocks[index]]
-        ranked = rank_mode_candidates(current, pool, profile, mode=mode)
+        ranked = rank_mode_candidates(current, pool, profile, mode=mode, **learned_controls)
         rows = {row["id"]: row for row in ranked["candidates"]}
         heads = [index for index in available if rows[blocks[index][0]]["eligible"]]
         fallback = not heads
@@ -202,7 +205,7 @@ def sequence_mode_tracks(records, profile, *, mode="fuzzy", first_id=None,
     if route_search == "beam":
         search = search_mode_route(records, profile, mode=mode,
             first_id=blocks[first][0], last_id=last_id, locked_chains=locked_chains,
-            seed=seed, max_expansions=search_max_expansions)
+            seed=seed, max_expansions=search_max_expansions, **learned_controls)
         beam_repair = repair_mode_order(records, search["order"], **settings,
             first_id=blocks[first][0], last_id=last_id, locked_chains=locked_chains)
         local_bad = len(records)-1-summarize_order(records, order, **settings)["harmonic_matches"]
@@ -219,7 +222,7 @@ def sequence_mode_tracks(records, profile, *, mode="fuzzy", first_id=None,
                 selected=selected_method == "complete_path_beam_and_repair",
                 repaired_harmonic_violations=beam_bad)]
         for candidate in candidates:
-            candidate["final_route_score"] = rescore_mode_order(records, profile, candidate["order"], mode=mode)
+            candidate["final_route_score"] = rescore_mode_order(records, profile, candidate["order"], mode=mode, **learned_controls)
         search.update(selected_method=selected_method,
             selection="use the complete-path beam after equal bounded repair unless its harmonic violation count is worse than the released local candidate; normalized loss does not select",
             local_safety_harmonic_violations=local_bad,
@@ -270,4 +273,12 @@ def sequence_mode_tracks(records, profile, *, mode="fuzzy", first_id=None,
         initial_choice_scope="locked first" if first_id is not None else "BPM direction or harmonic connectivity heuristic",
         uncertainty=dict(warnings=warnings), proprietary_equivalence=False,
         render_readiness="order only; validate source, grid, cues and temporary tempo before fixed-order SYNC rendering")
+    if profile.get("priority_aware") is True or routing_priority != "unknown":
+        summary["routing_controls"] = learned_controls
+        summary["control_scope"]["routing_priority"] = (
+            "Explicit categorical priority enters the selected v3 utility on every actual/hypothetical pool"
+            if profile.get("priority_aware") is True else "Legacy profile utility ignores categorical priority")
+        if profile.get("priority_aware") is True:
+            summary["control_scope"]["bpm_tolerance"] = (
+                "Explicit nullable tolerance enters soft v3 utility and existing fallback/repair costs; never filters the independent harmony gate")
     return summary

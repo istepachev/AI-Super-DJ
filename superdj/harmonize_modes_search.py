@@ -49,8 +49,11 @@ class DynamicModePool:
     track. Source IDs address records only; input positions provide seeded ties.
     """
 
-    def __init__(self, records, profile, *, mode="fuzzy", seed=0, cache_limit=3000):
+    def __init__(self, records, profile, *, mode="fuzzy", seed=0, cache_limit=3000,
+                 priority="unknown", bpm_tolerance=None):
         self.profile = validate_mode_ranker_profile(profile)
+        from .harmonize_priority import effective_weights, routing_controls, tolerance_features
+        self.routing_controls = routing_controls(priority, bpm_tolerance)
         if mode not in {"fuzzy", "mood"}:
             raise ValueError("mode must be fuzzy or mood")
         if type(seed) is not int:
@@ -74,7 +77,10 @@ class DynamicModePool:
         sharing = self.profile["sharing"]
         weights = np.array(self.profile["coefficients"][mode if sharing == "separate" else "all"])
         base_count = len(feature_names(self.family, "shared"))
-        if sharing == "interactions":
+        self.tolerance_weights = None
+        if self.profile.get("priority_aware") is True:
+            weights, self.tolerance_weights = effective_weights(self.profile, mode, **self.routing_controls)
+        elif sharing == "interactions":
             with np.errstate(over="ignore", invalid="ignore"):
                 weights = weights[:base_count] + float(mode == "mood") * weights[base_count:]
         if not np.all(np.isfinite(weights)):
@@ -92,6 +98,10 @@ class DynamicModePool:
                 values = _pair(a, b, mode, self.family)
                 with np.errstate(over="ignore", invalid="ignore"):
                     self.pair_utility[source, target] = np.array(values) @ weights[:len(values)]
+                    if self.tolerance_weights is not None:
+                        terms = tolerance_features(self.bpms[source], self.bpms[target:target+1],
+                            self.routing_controls["bpm_tolerance"])[0]
+                        self.pair_utility[source, target] += terms @ self.tolerance_weights
                     if self.relation_rank_utility is not None:
                         self.relation_rank_utility[source, target] = np.array(values[:11]) @ self.rank_weights[8:]
         if not np.all(np.isfinite(self.pair_utility)):
@@ -258,7 +268,8 @@ class DynamicModePool:
 
 def search_mode_route(records, profile, *, mode="fuzzy", first_id, last_id=None,
                       locked_chains=None, seed=0, beam_width=32, branch_limit=7,
-                      max_expansions=100000, cache_limit=3000):
+                      max_expansions=100000, cache_limit=3000,
+                      priority="unknown", bpm_tolerance=None):
     """Search all the way to the final block with finite prefix/evaluation caps.
 
     Each locked chain is indivisible. The last block can be chosen only last.
@@ -273,7 +284,8 @@ def search_mode_route(records, profile, *, mode="fuzzy", first_id, last_id=None,
         raise ValueError("branch_limit must be positive")
     _integer(max_expansions, "max_expansions", 1000000)
     started = time.perf_counter()
-    engine = DynamicModePool(records, profile, mode=mode, seed=seed, cache_limit=cache_limit)
+    engine = DynamicModePool(records, profile, mode=mode, seed=seed, cache_limit=cache_limit,
+        priority=priority, bpm_tolerance=bpm_tolerance)
     blocks, assigned = [], set()
     for chain in locked_chains or []:
         if isinstance(chain, str) or not chain:
@@ -378,6 +390,7 @@ def search_mode_route(records, profile, *, mode="fuzzy", first_id, last_id=None,
         scope="bounded search, finite branch/beam caps and optional greedy budget completion; not a global optimum or audible quality claim")
 
 
-def rescore_mode_order(records, profile, order, *, mode="fuzzy"):
+def rescore_mode_order(records, profile, order, *, mode="fuzzy", priority="unknown", bpm_tolerance=None):
     """Recompute a repaired final route's diagnostic musical loss."""
-    return DynamicModePool(records, profile, mode=mode, cache_limit=0).rescore_order(order)
+    return DynamicModePool(records, profile, mode=mode, cache_limit=0,
+        priority=priority, bpm_tolerance=bpm_tolerance).rescore_order(order)

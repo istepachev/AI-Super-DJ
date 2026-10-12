@@ -279,8 +279,11 @@ def harmonize(args):
         seed=args.seed)
     if getattr(args, 'ranking_profile', None):
         from .harmonize_modes_sequence import sequence_mode_tracks
-        result = sequence_mode_tracks(records, read_json(args.ranking_profile), **settings)
+        result = sequence_mode_tracks(records, read_json(args.ranking_profile),
+            routing_priority=_routing_priority(args), **settings)
     else:
+        if getattr(args, 'routing_priority', None) is not None:
+            raise ValueError('--routing-priority requires a mode ranking profile')
         result = harmonize_tracks(records, **settings, beam_width=args.beam_width,
             order_objective=args.order_objective, search_seconds=args.search_seconds)
     exported = export_order_pack(records, result, args.work)
@@ -329,12 +332,13 @@ def harmonize_compare(args):
     return result
 
 
-def _harmonize_examples(manifest_path):
+def _harmonize_examples(manifest_path, *, priority_aware=False):
     from .harmonize_compare import load_order
     manifest = Path(manifest_path)
     examples = []
     for entry in read_json(manifest):
-        if entry.get('training_eligible') is False:
+        if entry.get('training_eligible') is False and not (
+                priority_aware and entry.get('priority_aware_training_eligible') is True):
             continue
         source = entry['records']
         if isinstance(source, str):
@@ -352,7 +356,30 @@ def _harmonize_examples(manifest_path):
 
 
 def harmonize_learn(args):
-    examples = _harmonize_examples(args.examples)
+    examples = _harmonize_examples(args.examples, priority_aware=args.learner == 'priority')
+    if args.learner == 'priority':
+        from .harmonize_modes import fit_priority_mode_ranker_fixed, rank_mode_candidates, _prepare
+        from .harmonize_priority import _example_controls
+        profile = fit_priority_mode_ranker_fixed(examples, min_candidates=args.min_candidates)
+        write_json(Path(args.work) / 'priority_mode_ranker_profile.json', profile)
+        diagnostics = []
+        controls = [_example_controls(example) for example in examples]
+        for example, context in zip(_prepare(examples, args.min_candidates), controls):
+            counts = dict(steps=0, literal_top3=0, unique_top1=0, blocked=0)
+            for current, pool in example['queries']:
+                ranked = rank_mode_candidates(current, pool, profile, mode=example['mode'], **context)
+                identity = str(pool[0].get('id') or pool[0].get('path'))
+                target = next(row for row in ranked['candidates'] if row['id'] == identity)
+                counts['steps'] += 1
+                counts['literal_top3'] += identity in ranked['shortlist_ids']
+                counts['unique_top1'] += target['rank'] == 1 and target['tie_count'] == 1
+                counts['blocked'] += not target['eligible']
+            diagnostics.append(dict(name=example['name'], mode=example['mode'], routing_controls=context, **counts))
+        result = dict(scope='Training-set diagnostics after fixed-option fit; not independent validation',
+            training_only=True, independent_validation=False, selection=profile['selection'], rows=diagnostics)
+        write_json(Path(args.work) / 'priority_mode_ranker_training_diagnostics.json', result)
+        print(f"Fixed priority prototype and training-only diagnostics written: {args.work}; defaults unchanged", flush=True)
+        return result
     if args.learner == 'modes':
         from .harmonize_modes import FAMILIES, cross_validate_mode_ranker, fit_mode_ranker
         result = cross_validate_mode_ranker(examples, feature_families=FAMILIES,
@@ -393,10 +420,14 @@ def harmonize_rank(args):
     played = set(prefix)
     remaining = [r for i, r in by_id.items() if i not in played]
     profile = read_json(args.profile)
-    if profile.get('model_version') == 'superdj-mode-pool-ranker-2':
+    if profile.get('model_version') in {'superdj-mode-pool-ranker-2', 'superdj-mode-priority-ranker-3'}:
         from .harmonize_modes import rank_mode_candidates
-        result = rank_mode_candidates(by_id[args.current], remaining, profile, mode=args.harmonic_mode)
+        result = rank_mode_candidates(by_id[args.current], remaining, profile, mode=args.harmonic_mode,
+            priority=_routing_priority(args), bpm_tolerance=getattr(args, 'bpm_tolerance', None))
     else:
+        if (getattr(args, 'routing_priority', None) is not None or getattr(args, 'priority', None) is not None
+                or getattr(args, 'bpm_tolerance', None) is not None):
+            raise ValueError('Routing controls require a mode ranking profile')
         result = rank_remaining_candidates(by_id[args.current], remaining, profile, mode=args.harmonic_mode)
     result.update(current_id=args.current, played_prefix=prefix,
                   remaining_ids=[str(r.get('id') or r.get('path')) for r in remaining],
@@ -404,6 +435,21 @@ def harmonize_rank(args):
     write_json(Path(args.work) / 'next_track_rankings.json', result)
     print(f"Experimental remaining-track ranks written: {args.work}; whole-path order unchanged", flush=True)
     return result
+
+
+def _routing_priority(args):
+    """Explicit categorical override; numeric endpoints only, no middle guess."""
+    from .harmonize import _number
+    from .harmonize_priority import routing_controls
+    numeric = getattr(args, 'priority', None)
+    if numeric is not None:
+        numeric = _number(numeric, 'priority')
+        if not 0 <= numeric <= 1:
+            raise ValueError('priority must be from0(BPM) to1(key)')
+    explicit = getattr(args, 'routing_priority', None)
+    if explicit is not None:
+        return routing_controls(explicit, getattr(args, 'bpm_tolerance', None))['priority']
+    return 'bpm' if numeric == 0 else 'key' if numeric == 1 else 'unknown'
 
 
 def _planning(parser, seed=True):
@@ -483,6 +529,8 @@ def main(argv=None):
     hp.add_argument("--seed", type=int, default=0)
     hp.add_argument("--beam-width", type=int, default=512)
     hp.add_argument("--ranking-profile", help=argparse.SUPPRESS)
+    hp.add_argument("--routing-priority", choices=("key", "bpm", "unknown"),
+                    help="Categorical control for an optional priority-aware ranking profile")
     cp = subs.add_parser("harmonize-compare", help="Compare orders on identical metadata; distinguish detector disagreements")
     _harmonic_search_options(cp)
     cp.add_argument("--records", required=True); cp.add_argument("--work", required=True)
@@ -497,13 +545,16 @@ def main(argv=None):
     lp.add_argument("--examples", required=True, help="Private JSON list of {name, records, order}; paths relative to this manifest")
     lp.add_argument("--work", required=True)
     lp.add_argument("--min-candidates", type=int, default=4)
-    lp.add_argument("--learner", choices=("controls", "ranker", "modes"), default="controls", help=argparse.SUPPRESS)
+    lp.add_argument("--learner", choices=("controls", "ranker", "modes", "priority"), default="controls", help=argparse.SUPPRESS)
     lp.add_argument("--harmonic-mode", choices=("fuzzy", "mood"), default="fuzzy", help=argparse.SUPPRESS)
     nlp = subs.add_parser("harmonize-rank", help="Experimental local next-track ranks; keeps independent harmony checks")
     nlp.add_argument("--records", required=True); nlp.add_argument("--profile", required=True)
     nlp.add_argument("--current", required=True); nlp.add_argument("--work", required=True)
     nlp.add_argument("--played-prefix", help="Private JSON array of played IDs ending with current; omitted means current only")
     nlp.add_argument("--harmonic-mode", choices=("fuzzy", "mood"), default="fuzzy")
+    nlp.add_argument("--priority", type=float, help="0=BPM,1=key; intermediate numeric controls remain unknown to the fitted ranker")
+    nlp.add_argument("--routing-priority", choices=("key", "bpm", "unknown"))
+    nlp.add_argument("--bpm-tolerance", type=float, help="Explicit nullable soft preference for a priority-aware profile")
     rp = subs.add_parser("render")
     rp.add_argument("--work", required=True); rp.add_argument("--records", required=True); rp.add_argument("--plan", required=True)
     _audio(rp); _rendering(rp)
