@@ -21,7 +21,7 @@ def configuration():
         if find_spec("demucs") is None:
             return None
         python = sys.executable
-    return {"python": python, "device": runtime.get("stem_device", "auto"), "model": "htdemucs", "version": "4.0.1"}
+    return {"python": python, "device": runtime.get("stem_device", "auto"), "model": "htdemucs", "version": "4.0.1", "include_drums": True}
 
 
 def separate(source, source_hash, cache, config, ffmpeg):
@@ -32,11 +32,12 @@ def separate(source, source_hash, cache, config, ffmpeg):
     result_file = directory / "result.json"
     if result_file.is_file():
         result = json.loads(result_file.read_text(encoding="utf-8"))
-        if Path(result["path"]).is_file():
+        if Path(result["path"]).is_file() and (not config.get('include_drums') or Path(result.get('drums_path','')).is_file()):
             return result
     job_file = directory / "job.json"
     write_json(job_file, {**config, "source": str(source), "ffmpeg": ffmpeg,
-                         "output": str(directory / "vocals.wav")})
+                         "output": str(directory / "vocals.wav"),
+                         **({'drums_output':str(directory/'drums.wav')} if config.get('include_drums') else {})})
     env = dict(os.environ, PYTHONPATH=str(Path(__file__).resolve().parents[1]), PYTHONUTF8="1")
     result = subprocess.run([config["python"], "-m", "superdj.stems", str(job_file), str(result_file)], env=env, capture_output=True)
     (directory / "inference.log").write_bytes(result.stdout + result.stderr)
@@ -71,15 +72,20 @@ def _worker(job):
         mean, std = reference.mean(), reference.std()
         if float(std) < 1e-8:
             vocals = np.zeros_like(audio)
+            drums = np.zeros_like(audio)
         else:
             with torch.inference_mode():
                 estimates = apply_model(model, ((mixture - mean) / std)[None],
                     shifts=0, split=True, overlap=.25, device=device, segment=7.8, num_workers=0)
                 estimates = estimates[0].cpu() * std + mean
                 vocals = estimates[model.sources.index("vocals")].T.numpy()
+                drums = estimates[model.sources.index("drums")].T.numpy()
         if vocals.shape != audio.shape or not np.isfinite(vocals).all():
             raise ValueError("Vocal model changed length/channels or returned invalid audio")
         sf.write(job["output"], vocals, rate, subtype="FLOAT")
+        if job.get('drums_output'):
+            if drums.shape!=audio.shape or not np.isfinite(drums).all():raise ValueError('Invalid estimated drum PCM')
+            sf.write(job['drums_output'],drums,rate,subtype='FLOAT')
         profile = []
         for start in range(0, len(audio), rate):
             end = min(len(audio), start + rate)
@@ -90,6 +96,7 @@ def _worker(job):
                             "foreground_risk": min(1., ratio / .15)})
         weights = list((Path(torch.hub.get_dir()) / "checkpoints").glob("955717e8-*.th"))
         return {"path": job["output"], "sample_rate": rate, "frames": len(audio), "profile": profile,
+                **({'drums_path':job['drums_output'],'drum_source_start_seconds':0.} if job.get('drums_output') else {}),
                 "provenance": {"executed": True, "model": "htdemucs", "demucs_version": "4.0.1",
                 "device": device, "shifts": 0, "segment_seconds": 7.8, "overlap": .25,
                 "weights": {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in weights},

@@ -38,18 +38,30 @@ def preserve_minimum(plan, records, prepared, directory):
         if position:
             core_start = float(grid[3][np.argmin(abs(grid[3] - section['start'])) + result['edges'][position - 1]['overlap_bars']])
         choices = []
-        for repeat_bars in (1, 2, 4):
-            if insertion_index < repeat_bars:
-                continue
-            window = _beat_window(grid[2], grid[3], insertion_index - repeat_bars,
-                                  repeat_bars, row['bpm'], 48000)
-            length = insertion - float(window.times[0])
-            if length >= deficit and length <= 10 and window.times[0] >= core_start:
-                if np.max(abs(np.diff(window.times) / (60 / row['bpm']) - 1)) <= .15:
-                    choices.append((length, float(window.times[0]), repeat_bars))
+        voice_profile = (row.get('vocal_stem') or {}).get('profile', [])
+        for bar_end in range(insertion_index, 0, -1):
+            loop_end = float(grid[3][bar_end])
+            if loop_end <= core_start:
+                break
+            for repeat_bars in (1, 2, 4):
+                if bar_end < repeat_bars:
+                    continue
+                try:
+                    window = _beat_window(grid[2], grid[3], bar_end - repeat_bars,
+                                          repeat_bars, row['bpm'], 48000)
+                except RenderError:
+                    continue  # Another interior window can have valid evidence.
+                loop_start = float(window.times[0]); length = loop_end - loop_start
+                if length >= deficit and length <= 10 and loop_start >= core_start:
+                    if np.max(abs(np.diff(window.times) / (60 / row['bpm']) - 1)) <= .15:
+                        voices = [float(v['foreground_risk']) for v in voice_profile
+                                  if loop_start <= v['time'] < loop_end and 'foreground_risk' in v]
+                        voice_risk = float(np.mean(voices)) if voices else 0.
+                        choices.append((voice_risk, round(length, 10), -loop_end,
+                                        length, loop_start, repeat_bars, loop_end))
         if not choices:
             raise RenderError(f"{identity}: no short stable bar repeat meets playback minimum")
-        length, loop_start, repeat_bars = min(choices)
+        voice_risk, _, _, length, loop_start, repeat_bars, insertion = min(choices)
         item = files[identity]
         directory.mkdir(parents=True, exist_ok=True)
 
@@ -99,6 +111,8 @@ def preserve_minimum(plan, records, prepared, directory):
                 'loop_start_seconds': loop_start, 'insertion_source_seconds': insertion,
                 'added_seconds': length, 'bars_repeated': repeat_bars,
                 'reason': 'critical minimum selected playback; model endpoint otherwise too early',
+                'repeat_selection': 'stable interior window, least estimated voice activity, then shortest addition',
+                'estimated_voice_risk': voice_risk if voice_profile else None,
                 'original_source_duration_seconds': row['duration'],
                 'synthetic_beat_extension': False, 'splices_conditioned_seconds': .002}
         item.setdefault('provenance', {})['timeline_edit'] = edit

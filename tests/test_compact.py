@@ -8,7 +8,7 @@ import soundfile as sf
 from superdj.compact import arrange_sync
 from superdj.mixing import blend, envelopes
 from superdj.planner import plan_tracks
-from superdj.render import render_plan
+from superdj.render import render_plan, _grid
 from superdj.sync import shared_clock
 from superdj.minimum import preserve_minimum
 from superdj.rhythm import support
@@ -156,6 +156,10 @@ def test_real_compact_render_matches_solo_budget_and_shared_phase(tmp_path):
     for row in rows:
         t = np.arange(320 * sr) / sr
         audio = .07 * np.sin(2 * np.pi * 440 * t)
+        pulse_t=np.arange(round(.12*sr))/sr
+        pulse=.18*np.sin(2*np.pi*80*pulse_t)*np.exp(-pulse_t/.035)+.06*np.random.default_rng(11).normal(size=len(pulse_t))*np.exp(-pulse_t/.003)
+        for beat in row['beats']:
+            first=round(beat*sr);last=min(first+len(pulse),len(audio));audio[first:last]+=pulse[:last-first]
         path = tmp_path / (row['id'] + '.wav')
         sf.write(path, np.column_stack((audio, audio)), sr, subtype='FLOAT')
         row['path'] = str(path)
@@ -197,3 +201,27 @@ def test_minimum_repeat_preserves_phase_voice_edit_and_original_file(tmp_path):
     assert len(mixture) == len(audio) + round(edit['added_seconds'] * sr)
     assert revised[0]['duration'] == rows[0]['duration'] + edit['added_seconds']
     assert plan['sections']['a']['predicted_play_seconds'] < 120  # No mutation.
+
+
+def test_minimum_repeat_can_use_earlier_stable_body_when_exit_annotations_disagree(tmp_path):
+    sr=8000
+    rows=[record('a',125,100),record('b',320,126)]
+    rows[0]['downbeats']=[t for t in rows[0]['downbeats'] if t<119]
+    plan=arrange_sync(plan_tracks(rows,mode='fixed'),rows)
+    grid=_grid(rows[0],.75)
+    edge=plan['edges'][0]
+    end=int(np.argmin(abs(grid[3]-plan['sections']['a']['end'])))-edge['overlap_bars']
+    original_insertion=float(grid[3][end])
+    # Three bad predicted downbeat annotations near the exit must not discard
+    # independently valid, earlier eight-beat windows inside the solo body.
+    for offset in (1,2,4):rows[0]['downbeats'][end-offset]+=.6
+    audio=np.column_stack([.1*np.sin(2*np.pi*300*np.arange(125*sr)/sr)]*2).astype(np.float32)
+    source=tmp_path/'source.wav';sf.write(source,audio,sr,subtype='FLOAT')
+    processed={'a':{'path':str(source)},'b':{'path':'unused'}}
+    result,revised,prepared=preserve_minimum(plan,rows,processed,tmp_path/'repeat')
+    edit=result['minimum_playback_edits'][0]
+    assert edit['insertion_source_seconds']<original_insertion
+    assert edit['bars_repeated']==2 and edit['added_seconds']<5
+    assert result['sections']['a']['predicted_play_seconds']>=120
+    assert sf.info(prepared['a']['path']).frames==len(audio)+round(edit['added_seconds']*sr)
+    np.testing.assert_array_equal(sf.read(source,dtype='float32')[0],audio)

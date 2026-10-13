@@ -74,7 +74,7 @@ def arrange_sync(plan, records, *, target_solo_seconds=210., maximum_solo_second
             if isinstance(supplied, bool) or not isinstance(supplied, int) or supplied not in {2, 4, 8, 16, 32, 40, 44}:
                 raise ValueError('Invalid explicit overlap_bars')
         requested = native_beats / 4 if native_beats else edge.get('overlap_bars')
-        preferred = requested or (16 if change > .20 else 40 if zhilin else 32)
+        preferred = requested or (16 if change > .20 else 32)
         available = [preferred] if requested else [n for n in (40, 32, 16, 8) if n <= preferred]
         chosen = next((n for n in available if candidates(a['id'], n, native_beats is not None) and candidates(b['id'], n, native_beats is not None)), None)
         if chosen is None:
@@ -127,6 +127,12 @@ def arrange_sync(plan, records, *, target_solo_seconds=210., maximum_solo_second
         in_duration = shared_clock(by_id[order[position - 1]]['bpm'], row['bpm'], round(counts[position - 1] * 4), sample_rate)['duration_seconds'] if position else 0.
         out_duration = shared_clock(row['bpm'], by_id[order[position + 1]]['bpm'], round(counts[position] * 4), sample_rate)['duration_seconds'] if position < len(counts) else 0.
         protected = row.get('protected_ranges', [])
+        # The late-head bass gap is independent of every possible tail.
+        # Cache once per head to avoid repeatedly scanning the same profile
+        # in the Cartesian source-window search.
+        posthandoff_gaps = ({(w[0], w[1]): weak_gap(profiles[identity],
+                             w[0] + .55 * (w[1] - w[0]), w[1]) for w in heads}
+                           if position and start_lock is None else {})
         choices = []
         for head in heads:
             for tail in tails:
@@ -147,7 +153,7 @@ def arrange_sync(plan, records, *, target_solo_seconds=210., maximum_solo_second
                 # covered by the old deck. Prefer windows that avoid a sustained
                 # hole there; brief native fills remain permissible.
                 if position and start_lock is None:
-                    gap = weak_gap(profiles[identity], start + .55 * (core_start - start), core_start)
+                    gap = posthandoff_gaps[(start, core_start)]
                     score += 5 * max(0., gap - .8)
                 # Avoid selecting only an intro when an energetic central core
                 # scores equally. This is not a claim of a known Cue ordinal.

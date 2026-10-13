@@ -971,6 +971,9 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                                 "phrase_alignment": "estimated bar grouping; musical phrase boundaries not guaranteed",
                                 "human_reviewed": bool((by_id[outgoing].get("grid") or {}).get("human_reviewed") and
                                                        (by_id[incoming].get("grid") or {}).get("human_reviewed"))})
+    for transition,edge in zip(transitions,edges):
+        for key in ('mid_handoff_bars','bass_handoff_beats'):
+            if edge.get(key) is not None:transition[key]=edge[key]
     clips: list[dict[str, Any]] = []
     prepared_files = prepared_files or {}
     for position, identity in enumerate(order):
@@ -1049,6 +1052,15 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                 ):
                     raise RenderError("Next tempo automation intersects the native incoming overlap")
             map_path = directory / f"track-{position + 1:02d}-timemap.txt"
+            if (head[identity] and head[identity].clock) or (tail[identity] and tail[identity].clock):
+                from .kick_grid import refine_source_controls
+                kick_evidence=record.get('kick_evidence')
+                if kick_evidence is None and (record.get('vocal_stem') or {}).get('drums_path'):
+                    stem=record['vocal_stem']
+                    drum_path=prepared.get('drum_path') if isinstance(prepared,Mapping) else None
+                    if drum_path or not (preparation or {}).get('processors'):
+                        kick_evidence={role:{'path':drum_path or stem['drums_path'],'source_start_seconds':stem.get('drum_source_start_seconds',0.)} for role in ('head','tail')}
+                refine_source_controls(clip_input,warp,sample_rate,kick_evidence)
             map_path.write_text("".join(f"{item['source_frame']} {item['output_frame']}\n" for item in warp["anchors"]), encoding="ascii")
             ratio = warp["output_frames"] / source_frames
             engine_args = ["--fast", "--detector-perc"] if rubberband_engine == "r2" else ["--fine"]
@@ -1071,27 +1083,57 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                 fixed.replace(clip_output)
             if (head[identity] and head[identity].clock) or (tail[identity] and tail[identity].clock):
                 from .sync import transient_drift, compensate_backend_drift
+                from .kick_grid import rendered_attack_audit
+                from copy import deepcopy
+                import shutil
                 audits = []
-                for attempt in range(6):
-                    audit = transient_drift(clip_input, clip_output, warp, sample_rate)
+                use_kicks=any(r['events'] for r in warp.get('source_kick_alignment',{}).values())
+                best=None;best_file=directory/f'track-{position+1:02d}-acoustic-best.wav'
+                for attempt in range(10):
+                    if warp.get('source_attack_controls_unapplied'):
+                        from .kick_grid import preserve_rendered_attacks
+                        preserve_rendered_attacks(clip_output,prepared_path,warp,sample_rate,gain=gain)
+                        warp['native_attack_preservation']['roles']=['head','tail']
+                    audit = rendered_attack_audit(clip_output,warp,sample_rate) if use_kicks else transient_drift(clip_input, clip_output, warp, sample_rate)
                     audits.append(audit)
                     maximum = audit["maximum_measured_drift_seconds"]
-                    if maximum is None or maximum <= .003 or attempt == 5:
+                    if maximum is not None and (best is None or maximum<best[0]):
+                        best=(maximum,deepcopy(warp),deepcopy(audit));shutil.copy2(clip_output,best_file)
+                    if maximum is None or maximum <= .003 or attempt == 9:
                         break
                     # The backend can switch a transient's alignment at a
                     # detector threshold. Damped follow-ups prevent oscillation.
-                    compensate_backend_drift(warp, audit, sample_rate, strength=1.0 if attempt == 0 else .5)
+                    compensate_backend_drift(warp, audit, sample_rate, strength=1.0 if attempt < 2 else .5)
                     map_path.write_text("".join(f"{p['source_frame']} {p['output_frame']}\n" for p in warp["anchors"]), encoding="ascii")
                     _run([rubberband, *engine_args, "--centre-focus", "--ignore-clipping", "--quiet",
                           "--time", f"{ratio:.12f}", "--timemap", map_path.name,
                           clip_input.name, clip_output.name], cwd=directory)
                     if sf.info(clip_output).frames != warp["output_frames"]:
                         raise RenderError("Compensated SYNC render did not retain its exact declared duration")
+                if best is None:
+                    best_file.unlink(missing_ok=True)
+                    raise RenderError(f'{identity}: acoustic attack alignment unresolved; select a supported window or provide percussion evidence')
+                warp=best[1];shutil.copy2(best_file,clip_output);best_file.unlink()
+                if use_kicks:
+                    from .kick_grid import fine_align_rendered,preserve_rendered_attacks
+                    final_attack=fine_align_rendered(clip_output,warp,sample_rate)
+                    protection_roles=[role for role,r in warp.get('source_kick_alignment',{}).items()
+                        if len(r['events'])>=8 and (sum(e['role']==role for e in final_attack['measured'])<8
+                        or max((abs(e['delay_seconds']) for e in final_attack['measured'] if e['role']==role),default=0)>.003)]
+                    if protection_roles:
+                        preserve_rendered_attacks(clip_output,prepared_path,warp,sample_rate,gain=gain,roles=protection_roles)
+                        warp['native_attack_preservation']['roles']=protection_roles
+                        final_attack=rendered_attack_audit(clip_output,warp,sample_rate)
+                else:final_attack=best[2]
+                if final_attack['maximum_measured_drift_seconds'] is None or final_attack['maximum_measured_drift_seconds']>.003:
+                    raise RenderError(f'{identity}: acoustic attack alignment remains unresolved')
+                map_path.write_text("".join(f"{p['source_frame']} {p['output_frame']}\n" for p in warp['anchors']),encoding='ascii')
                 warp["post_render_transient_audit"] = {"iterations": audits,
-                    "final": audits[-1], "tolerance_seconds": .003,
-                    "all_interior_attacks_within_tolerance": bool(audits[-1]["all_interior_beats_verified"] and
-                        audits[-1]["maximum_measured_drift_seconds"] <= .003),
+                    "final": final_attack, "tolerance_seconds": .003,
+                    "all_interior_attacks_within_tolerance": bool(final_attack["all_interior_beats_verified"] and
+                        final_attack["maximum_measured_drift_seconds"] <= .003),
                     "backend_controls_precompensated": len(audits) > 1}
+                if use_kicks:warp['post_render_kick_audit']=warp['post_render_transient_audit']
             clip_input.unlink()
         else:
             clip_input.replace(clip_output)
@@ -1134,6 +1176,15 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                     rubberband=rubberband, engine=rubberband_engine, sample_rate=sample_rate,
                     first_frame=first_frame, source_frames=source_frames,
                     output_frames=sf.info(clip_output).frames, gain=gain, warp=warp)
+                if warp and warp.get('fine_attack_timing'):
+                    from .kick_grid import apply_fine_timing
+                    fine_voice=Path(vocal_path).with_name(Path(vocal_path).stem+'-fine.wav')
+                    apply_fine_timing(vocal_path,fine_voice,warp,sample_rate)
+                    fine_voice.replace(vocal_path)
+                if warp and warp.get('native_attack_preservation'):
+                    from .kick_grid import preserve_rendered_attacks
+                    preserve_rendered_attacks(vocal_path,vocal_source['path'],warp,sample_rate,gain=gain,
+                        roles=warp['native_attack_preservation']['roles'],record_templates=False)
         clips.append({"id": identity, "audio_path": str(clip_output), "source_path": str(source_path),
                       "aligned_vocal_path": vocal_path,
                       "prepared_path": str(prepared_path), "preparation_provenance": preparation,
@@ -1153,6 +1204,11 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                 clips[-1]["rendered_selected_span_in_3_4_minutes"] = 180 <= clips[-1]["duration_seconds"] <= 240
             if 'target_solo_seconds' not in section and not clips[-1]["rendered_selected_span_in_3_4_minutes"]:
                 warnings.append(f"{identity}: rendered selected span outside 3–4 minutes; source/tempo/manual exception retained")
+    from .kick_grid import validate_overlap_attacks
+    try:
+        validate_overlap_attacks(clips,transitions)
+    except ValueError as error:
+        raise RenderError(str(error)) from error
     temporary = output.with_name(output.stem + ".partial.wav")
     if temporary.exists():
         raise FileExistsError(temporary)
@@ -1204,9 +1260,17 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                             beat_phase = (np.interp(np.arange(incoming), clock['output_frames'], clock['phase']) / clock['beats']) if clock else None
                             if beat_phase is not None:
                                 beat_phase[-1] = 1.
+                            from .percussion import needs_handoff,final_drum_estimates
+                            percussion_args={}
+                            if mode=='beatmapped_bass_swap' and needs_handoff(clips[position-1].get('warp'),clip.get('warp'),style=plan.get('style','default')):
+                                percussion_args,percussion_report=final_drum_estimates(previous_tail,block,sample_rate,directory/f'percussion-{position:02}',ffmpeg=ffmpeg)
+                                transition['percussion_estimates']=percussion_report
                             mixed, evidence = blend(previous_tail, block, sample_rate,
                                 bass_hz=bass_hz if mode == "beatmapped_bass_swap" else 0.0,
-                                beats=transition.get("beats", 64), tonal_conflict=risk, beat_phase=beat_phase)
+                                beats=transition.get("beats", 64), tonal_conflict=risk, beat_phase=beat_phase,
+                                style=plan.get('style','default'),
+                                mid_handoff_bars=transition.get('mid_handoff_bars'),
+                                bass_handoff_beats=transition.get('bass_handoff_beats'),**percussion_args)
                             transition["frequency_processing"] = evidence
                             dest.write(mixed)
                         transitions[position - 1]["set_start_frame"] = cursor - incoming

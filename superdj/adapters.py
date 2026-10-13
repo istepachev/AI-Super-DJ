@@ -139,6 +139,15 @@ def prepare_tracks(records: list[dict], work_dir: str | Path, *, audamcp: str | 
             result["vocal_path"] = voice["path"]
             result["vocal_preparation"] = voice["provenance"]
             vocal_decoded.unlink()
+            if record['vocal_stem'].get('drums_path'):
+                drum_decoded=directory/f'{track_id}_drums_decoded.wav'
+                drum_output=directory/f'{track_id}_drums.wav'
+                execute([ffmpeg,'-nostdin','-v','error','-y','-i',record['vocal_stem']['drums_path'],
+                         '-ac','2','-ar',str(sample_rate),'-c:a','pcm_f32le',str(drum_decoded)])
+                drum=run_worker({'action':'prepare','checkout':checkout,'decoded':str(drum_decoded),
+                    'output':str(drum_output),'forced_processors':result['provenance']['processors']},directory,track_id+'_drums')
+                result['drum_path']=drum['path'];result['drum_preparation']=drum['provenance']
+                drum_decoded.unlink()
         prepared[track_id] = result
         decoded.unlink()
     return prepared

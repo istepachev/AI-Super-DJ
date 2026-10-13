@@ -17,7 +17,7 @@ def _playlist(args):
     if args.playlist:
         return read_json(args.playlist)
     seed = args.seed if args.seed is not None else random.SystemRandom().randrange(2**32)
-    playlist = select_tracks(args.folder, args.count, seed)
+    playlist = select_tracks(args.folder, args.count, seed,allow_repeats=getattr(args,'allow_repeats',False))
     write_json(Path(args.work) / "playlist.json", playlist)
     return playlist
 
@@ -183,6 +183,19 @@ def render(args, records=None, planned=None):
         hours, minutes, seconds = int(seconds // 3600), int(seconds % 3600 // 60), int(seconds % 60)
         lines.append(f"{index:02}. {hours:02}:{minutes:02}:{seconds:02}  {names[track['id']]}")
     (directory / f"{args.name}_tracklist.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    from .delivery import make_cue,publish_pair
+    from .cues import runtime_config
+    from .history import register_manifest,import_cue_folder,write_text_index
+    cue=make_cue(manifest)
+    ready=runtime_config().get('delivery_root')
+    if ready:
+        manifest['delivery']=publish_pair(exported['flac']['path'],cue,ready)
+        write_json(directory/f'{args.name}_manifest.json',manifest)
+    history_result=register_manifest(manifest,manifest_path=directory/f'{args.name}_manifest.json')
+    if ready and history_result['registered']:
+        import_cue_folder(ready);write_text_index(ready)
+    if history_result['registered']:
+        print(f"Completed history updated: {history_result['unique_sources']} unique sources",flush=True)
     print(f"Completed: {exported['flac']['path']}", flush=True)
     return manifest
 
@@ -253,6 +266,7 @@ def _source(parser):
     parser.add_argument("--checkpoint", default="final0")
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--download-model", action="store_true")
+    parser.add_argument('--allow-repeats',action='store_true',help='Explicitly allow previously used sources in automatic folder selection')
     parser.add_argument("--grid-json", help="Explicit imported grid overrides keyed by track id")
 
 
@@ -509,7 +523,8 @@ def main(argv=None):
     subs = parser.add_subparsers(dest="command", required=True)
     mp = subs.add_parser("make", help="One file → mastered FLAC; multiple files → mixed FLAC")
     mp.add_argument("inputs", nargs="+", help="Audio files or a folder")
-    mp.add_argument("--style", choices=("default", "zhilin"), default="default")
+    mp.add_argument("--style", choices=("default", "zhilin"), default=None)
+    mp.add_argument('--allow-repeats',action='store_true',help='Explicitly allow previously used sources in automatic folder selection')
     mp.add_argument("--keep-order", action="store_true", help="Keep supplied file order")
     mp.add_argument("--output")
     mp.add_argument("--name")

@@ -170,6 +170,10 @@ def test_real_zhilin_long_render_preserves_three_minute_sections(tmp_path, nativ
     records = [record("a", 300, 120), record("b", 300, 122)]
     for row in records:
         samples = .12 * np.sin(2 * np.pi * 440 * np.arange(300 * sr) / sr)
+        pulse_t=np.arange(round(.12*sr))/sr
+        pulse=.4*np.sin(2*np.pi*80*pulse_t)*np.exp(-pulse_t/.035)+.2*np.random.default_rng(11).normal(size=len(pulse_t))*np.exp(-pulse_t/.003)
+        for beat in row['beats']:
+            first=round(beat*sr);last=min(first+len(pulse),len(samples));samples[first:last]+=pulse[:last-first]
         path = tmp_path / f"{row['id']}.wav"
         sf.write(path, np.column_stack((samples, samples)), sr, subtype="FLOAT")
         row["path"] = str(path)
