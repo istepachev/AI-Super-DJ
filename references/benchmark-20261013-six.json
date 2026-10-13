@@ -1,0 +1,664 @@
+{
+  "schema_version": 1,
+  "date_local": "2026-10-13",
+  "scope": "Separate sixth-export evidence update; numerical version 0.17.0 and its policy unchanged",
+  "previous_published_algorithm_commit": "845e982c45fcc16f67bffa7ab8ccf366af7eaac4",
+  "previous_five_report_preserved": true,
+  "corpus": {
+    "all_exports": 63,
+    "controlled_exports": 36,
+    "all_unique_source_claims": 2355,
+    "controlled_unique_source_claims": 1669,
+    "all_source_hash_cohorts": 2,
+    "controlled_source_hash_cohorts": 1,
+    "latest_references": 6,
+    "latest_pool_occurrences": 431,
+    "new_reference_occurrences": 431,
+    "new_duplicate_occurrences": 0,
+    "new_sources_relative_to_previous_five": 0,
+    "same_source_fileHash_native_BPM_key_pool": true,
+    "new_order_different": true,
+    "unchanged_positions_vs_first_Fuzzy_BPM6": 7,
+    "new_metadata_members_read": 2,
+    "new_metadata_bytes_read": 90739345,
+    "latest_six_metadata_members_read": 12,
+    "latest_six_metadata_bytes_read": 544435911,
+    "audio_read_or_archive_extraction": false,
+    "identity_scope": "Stored source/fileHash claims, not freshly computed audio hashes"
+  },
+  "new_reference_controls": {
+    "mode": "fuzzy",
+    "priority": "bpm",
+    "bpm_tolerance": 6,
+    "key_analyzer": "DJ.Studio",
+    "direction": "none",
+    "endpoint_locks": false,
+    "transition_locks": false,
+    "provenance": "Filename and continuation of unchanged confirmed current batch; wizard controls not independently persisted"
+  },
+  "freeze_and_scope": {
+    "protocol_frozen_before_metadata": true,
+    "published_profiles_and_policy_frozen_before_metadata": true,
+    "numerical_dependencies_and_cached_routes_frozen_before_metadata": true,
+    "new_fit_or_model_policy_selection": false,
+    "new_complete_route_generation": 0,
+    "exact_Fuzzy_BPM6_complete_routes_reused": 8,
+    "original_free_complete_routes": 32,
+    "original_four_and_five_predictions_and_manifests_preserved": true,
+    "sixth_actual_local_prefixes_scored_fresh": true,
+    "new_order_source_independent_test": false,
+    "next_v1_direct_fit_source_overlap": 0,
+    "other_fitted_models_direct_source_overlap": 233,
+    "whole_selection_corpus_independent": false,
+    "failed_prior30_candidate_promotion_reopened": false
+  },
+  "conditional_next_track": {
+    "all_observations": 2580,
+    "primary_remaining_ge4": 2562,
+    "fair_remaining_ge8": 2538,
+    "short_tail_remaining1to3": 18,
+    "gated_primary_targets_outside_native_table": 76,
+    "metric": "Literal successor in Top3 from the actual played prefix and remaining pool. Blocked targets remain failures for gated systems; legacy soft control permits them.",
+    "by_model": {
+      "paired_key": {
+        "literal_top3_hits": 1616,
+        "denominator": 2562,
+        "literal_rate": 0.6307572209211554,
+        "tie_optimistic_hits": 1687,
+        "tie_guaranteed_hits": 1540,
+        "tie_fractional_hits": 1613.1833333333334
+      },
+      "priority_015": {
+        "literal_top3_hits": 1619,
+        "denominator": 2562,
+        "literal_rate": 0.631928181108509,
+        "tie_optimistic_hits": 1689,
+        "tie_guaranteed_hits": 1536,
+        "tie_fractional_hits": 1611.4333333333334
+      },
+      "density_13fit": {
+        "literal_top3_hits": 1611,
+        "denominator": 2562,
+        "literal_rate": 0.6288056206088993,
+        "tie_optimistic_hits": 1680,
+        "tie_guaranteed_hits": 1533,
+        "tie_fractional_hits": 1607.8333333333333
+      },
+      "graph_13fit": {
+        "literal_top3_hits": 1613,
+        "denominator": 2562,
+        "literal_rate": 0.6295862607338018,
+        "tie_optimistic_hits": 1679,
+        "tie_guaranteed_hits": 1536,
+        "tie_fractional_hits": 1608.1666666666667
+      },
+      "bpm_residual": {
+        "literal_top3_hits": 1630,
+        "denominator": 2562,
+        "literal_rate": 0.6362217017954723,
+        "tie_optimistic_hits": 1701,
+        "tie_guaranteed_hits": 1550,
+        "tie_fractional_hits": 1625.75
+      },
+      "native_strict_v3": {
+        "literal_top3_hits": 1032,
+        "denominator": 2562,
+        "literal_rate": 0.4028103044496487,
+        "tie_optimistic_hits": 1461,
+        "tie_guaranteed_hits": 724,
+        "tie_fractional_hits": 1041.5556220723488
+      },
+      "legacy_weighted_soft_v2": {
+        "literal_top3_hits": 618,
+        "denominator": 2562,
+        "literal_rate": 0.24121779859484777,
+        "tie_optimistic_hits": 1276,
+        "tie_guaranteed_hits": 338,
+        "tie_fractional_hits": 616.9592435384262
+      }
+    },
+    "sixth_by_model": {
+      "paired_key": {
+        "literal_top3_hits": 303,
+        "denominator": 427,
+        "literal_rate": 0.7096018735362998
+      },
+      "priority_015": {
+        "literal_top3_hits": 303,
+        "denominator": 427,
+        "literal_rate": 0.7096018735362998
+      },
+      "density_13fit": {
+        "literal_top3_hits": 303,
+        "denominator": 427,
+        "literal_rate": 0.7096018735362998
+      },
+      "graph_13fit": {
+        "literal_top3_hits": 302,
+        "denominator": 427,
+        "literal_rate": 0.7072599531615925
+      },
+      "bpm_residual": {
+        "literal_top3_hits": 305,
+        "denominator": 427,
+        "literal_rate": 0.7142857142857143
+      },
+      "native_strict_v3": {
+        "literal_top3_hits": 253,
+        "denominator": 427,
+        "literal_rate": 0.5925058548009368
+      },
+      "legacy_weighted_soft_v2": {
+        "literal_top3_hits": 122,
+        "denominator": 427,
+        "literal_rate": 0.2857142857142857
+      }
+    },
+    "next_v1_fair_shortlists": {
+      "3": {
+        "literal_hits": 1597,
+        "literal_rate": 0.6292356185973207,
+        "same_source_hits": 1597,
+        "tie_optimistic_hits": 1667,
+        "tie_guaranteed_hits": 1514,
+        "tie_fractional_hits": 1589.4333333333334,
+        "listed_occurrences": 7592,
+        "actual_length_mean": 2.991331757289204,
+        "actual_length_median": 3.0,
+        "actual_length_histogram": {
+          "0": 1,
+          "1": 7,
+          "2": 5,
+          "3": 2525
+        },
+        "fraction_of_allowed_mean": 0.09492929523552104,
+        "fraction_of_remaining_mean": 0.028358412934207402,
+        "same_size_random_allowed_expected_hits": 236.00594543441088,
+        "same_size_random_allowed_rate": 0.09298894619165125,
+        "same_size_random_remaining_expected_hits": 71.97365202701839,
+        "same_size_random_remaining_rate": 0.028358412934207402,
+        "excess_vs_same_size_allowed_pp": 53.62466724056695,
+        "excess_vs_same_size_remaining_pp": 60.087720566311326
+      },
+      "5": {
+        "literal_hits": 1872,
+        "literal_rate": 0.7375886524822695,
+        "same_source_hits": 1872,
+        "tie_optimistic_hits": 1913,
+        "tie_guaranteed_hits": 1828,
+        "tie_fractional_hits": 1873.4666666666667,
+        "listed_occurrences": 12607,
+        "actual_length_mean": 4.967297084318361,
+        "actual_length_median": 5.0,
+        "actual_length_histogram": {
+          "0": 1,
+          "1": 7,
+          "2": 5,
+          "3": 9,
+          "4": 17,
+          "5": 2499
+        },
+        "fraction_of_allowed_mean": 0.15102479071956423,
+        "fraction_of_remaining_mean": 0.046489422716857305,
+        "same_size_random_allowed_expected_hits": 375.0932423906848,
+        "same_size_random_allowed_rate": 0.1477908756464479,
+        "same_size_random_remaining_expected_hits": 117.99015485538384,
+        "same_size_random_remaining_rate": 0.046489422716857305,
+        "excess_vs_same_size_allowed_pp": 58.979777683582164,
+        "excess_vs_same_size_remaining_pp": 69.10992297654121
+      },
+      "7": {
+        "literal_hits": 2058,
+        "literal_rate": 0.8108747044917257,
+        "same_source_hits": 2058,
+        "tie_optimistic_hits": 2079,
+        "tie_guaranteed_hits": 2027,
+        "tie_fractional_hits": 2055.05,
+        "listed_occurrences": 17556,
+        "actual_length_mean": 6.91725768321513,
+        "actual_length_median": 7.0,
+        "actual_length_histogram": {
+          "0": 1,
+          "1": 7,
+          "2": 5,
+          "3": 9,
+          "4": 17,
+          "5": 12,
+          "6": 25,
+          "7": 2462
+        },
+        "fraction_of_allowed_mean": 0.20191277372659142,
+        "fraction_of_remaining_mean": 0.06344576685398205,
+        "same_size_random_allowed_expected_hits": 501.1305393469587,
+        "same_size_random_allowed_rate": 0.19745096112961336,
+        "same_size_random_remaining_expected_hits": 161.02535627540644,
+        "same_size_random_remaining_rate": 0.06344576685398205,
+        "excess_vs_same_size_allowed_pp": 61.34237433621124,
+        "excess_vs_same_size_remaining_pp": 74.74289376377438
+      }
+    },
+    "next_v1_compactness_increments": {
+      "1_to_3": {
+        "added_listed_occurrences": 5055,
+        "added_slots_per_state": 1.991725768321513,
+        "added_covered_observations": 703,
+        "added_coverage_pp": 27.698975571315998,
+        "added_hits_per_added_listed_occurrence": 0.1390702274975272,
+        "added_excess_vs_same_size_allowed_pp": 21.716418559642477
+      },
+      "3_to_5": {
+        "added_listed_occurrences": 5015,
+        "added_slots_per_state": 1.9759653270291568,
+        "added_covered_observations": 275,
+        "added_coverage_pp": 10.835303388494879,
+        "added_hits_per_added_listed_occurrence": 0.054835493519441676,
+        "added_excess_vs_same_size_allowed_pp": 5.355110443015214
+      },
+      "5_to_7": {
+        "added_listed_occurrences": 4949,
+        "added_slots_per_state": 1.9499605988967692,
+        "added_covered_observations": 186,
+        "added_coverage_pp": 7.328605200945627,
+        "added_hits_per_added_listed_occurrence": 0.03758335017175187,
+        "added_excess_vs_same_size_allowed_pp": 2.3625966526290796
+      }
+    },
+    "exhaustive_list_sanity": {
+      "all_allowed_hits": 2464,
+      "all_allowed_same_size_chance_hits": 2464,
+      "all_allowed_excess_pp": 0.0,
+      "all_remaining_hits": 2538,
+      "all_remaining_same_size_chance_hits": 2538,
+      "all_remaining_excess_pp": 0.0
+    },
+    "same_width_chance": "Use actual emitted m, allowed count A and remaining count N; allowed baseline is m/A only when target allowed, otherwise0; unrestricted remaining comparator is m/N. Historical raw requested-K/N control is a different nominal-width comparator and is not used for these same-width values.",
+    "local_scores_do_not_measure_free_complete_route_agreement": true
+  },
+  "free_complete_routes": {
+    "references": 6,
+    "unique_musical_control_groups": 4,
+    "reference_counts_per_control": {
+      "Mood_BPM4": 2,
+      "Fuzzy_BPM6": 2,
+      "Mood_Key": 1,
+      "Fuzzy_Key": 1
+    },
+    "metric": "Exact directed contiguous windows of2/3/4 total tracks, without reversal or skipped tracks",
+    "macro_weighting": "Equal four-control weight, averaging the two references inside each repeated BPM condition",
+    "outside_edges_counted_once_per_actual_generated_route": true,
+    "by_pipeline": {
+      "paired_key_public_beam": {
+        "macro_per_control_pool_individual_reference_rates": {
+          "2": 0.11715116279069768,
+          "3": 0.02097902097902098,
+          "4": 0.005257009345794392
+        },
+        "pooled_individual_reference_rates": {
+          "2": {
+            "matches": 313,
+            "denominator": 2580,
+            "rate": 0.12131782945736434
+          },
+          "3": {
+            "matches": 62,
+            "denominator": 2574,
+            "rate": 0.024087024087024088
+          },
+          "4": {
+            "matches": 18,
+            "denominator": 2568,
+            "rate": 0.007009345794392523
+          }
+        },
+        "outside_mode_edges": 0
+      },
+      "priority_015_public_beam": {
+        "macro_per_control_pool_individual_reference_rates": {
+          "2": 0.11569767441860465,
+          "3": 0.018648018648018648,
+          "4": 0.0040887850467289715
+        },
+        "pooled_individual_reference_rates": {
+          "2": {
+            "matches": 310,
+            "denominator": 2580,
+            "rate": 0.12015503875968993
+          },
+          "3": {
+            "matches": 56,
+            "denominator": 2574,
+            "rate": 0.021756021756021756
+          },
+          "4": {
+            "matches": 14,
+            "denominator": 2568,
+            "rate": 0.005451713395638629
+          }
+        },
+        "outside_mode_edges": 1
+      },
+      "density_13fit_public_beam": {
+        "macro_per_control_pool_individual_reference_rates": {
+          "2": 0.11453488372093024,
+          "3": 0.024184149184149184,
+          "4": 0.006717289719626167
+        },
+        "pooled_individual_reference_rates": {
+          "2": {
+            "matches": 316,
+            "denominator": 2580,
+            "rate": 0.12248062015503876
+          },
+          "3": {
+            "matches": 76,
+            "denominator": 2574,
+            "rate": 0.029526029526029528
+          },
+          "4": {
+            "matches": 23,
+            "denominator": 2568,
+            "rate": 0.00895638629283489
+          }
+        },
+        "outside_mode_edges": 1
+      },
+      "graph_13fit_public_beam": {
+        "macro_per_control_pool_individual_reference_rates": {
+          "2": 0.11366279069767442,
+          "3": 0.022144522144522144,
+          "4": 0.005841121495327103
+        },
+        "pooled_individual_reference_rates": {
+          "2": {
+            "matches": 298,
+            "denominator": 2580,
+            "rate": 0.11550387596899225
+          },
+          "3": {
+            "matches": 63,
+            "denominator": 2574,
+            "rate": 0.024475524475524476
+          },
+          "4": {
+            "matches": 19,
+            "denominator": 2568,
+            "rate": 0.007398753894080997
+          }
+        },
+        "outside_mode_edges": 1
+      },
+      "bpm_residual_greedy_repair": {
+        "macro_per_control_pool_individual_reference_rates": {
+          "2": 0.11075581395348837,
+          "3": 0.013986013986013986,
+          "4": 0.0017523364485981308
+        },
+        "pooled_individual_reference_rates": {
+          "2": {
+            "matches": 295,
+            "denominator": 2580,
+            "rate": 0.11434108527131782
+          },
+          "3": {
+            "matches": 41,
+            "denominator": 2574,
+            "rate": 0.015928515928515928
+          },
+          "4": {
+            "matches": 6,
+            "denominator": 2568,
+            "rate": 0.002336448598130841
+          }
+        },
+        "outside_mode_edges": 0
+      },
+      "paired_greedy_repair_control": {
+        "macro_per_control_pool_individual_reference_rates": {
+          "2": 0.11104651162790698,
+          "3": 0.014860139860139862,
+          "4": 0.002336448598130841
+        },
+        "pooled_individual_reference_rates": {
+          "2": {
+            "matches": 296,
+            "denominator": 2580,
+            "rate": 0.11472868217054263
+          },
+          "3": {
+            "matches": 44,
+            "denominator": 2574,
+            "rate": 0.017094017094017096
+          },
+          "4": {
+            "matches": 8,
+            "denominator": 2568,
+            "rate": 0.003115264797507788
+          }
+        },
+        "outside_mode_edges": 0
+      },
+      "native_strict_v3": {
+        "macro_per_control_pool_individual_reference_rates": {
+          "2": 0.06279069767441861,
+          "3": 0.01048951048951049,
+          "4": 0.002628504672897196
+        },
+        "pooled_individual_reference_rates": {
+          "2": {
+            "matches": 208,
+            "denominator": 2580,
+            "rate": 0.08062015503875969
+          },
+          "3": {
+            "matches": 36,
+            "denominator": 2574,
+            "rate": 0.013986013986013986
+          },
+          "4": {
+            "matches": 9,
+            "denominator": 2568,
+            "rate": 0.0035046728971962616
+          }
+        },
+        "outside_mode_edges": 0
+      },
+      "legacy_weighted_soft_v2": {
+        "macro_per_control_pool_individual_reference_rates": {
+          "2": 0.020930232558139535,
+          "3": 0.001456876456876457,
+          "4": 0.0002920560747663551
+        },
+        "pooled_individual_reference_rates": {
+          "2": {
+            "matches": 64,
+            "denominator": 2580,
+            "rate": 0.024806201550387597
+          },
+          "3": {
+            "matches": 5,
+            "denominator": 2574,
+            "rate": 0.0019425019425019425
+          },
+          "4": {
+            "matches": 1,
+            "denominator": 2568,
+            "rate": 0.0003894080996884735
+          }
+        },
+        "outside_mode_edges": 595
+      }
+    },
+    "teacher_order_or_endpoints_used_in_generation": false
+  },
+  "route_v2_safety": {
+    "rule": "Frozen Density complete route and independent frozen Paired complete route; same inputs and constraints. Select Paired only for strictly fewer native outside-mode edges. Ties retain Density.",
+    "teacher_agreement_or_cross_model_utility_used_for_choice": false,
+    "combined_six": {
+      "primary": {
+        "chains": {
+          "2": {
+            "matches": 316,
+            "denominator": 2580,
+            "macro_control_pool_rate": 0.11453488372093024
+          },
+          "3": {
+            "matches": 76,
+            "denominator": 2574,
+            "macro_control_pool_rate": 0.024184149184149184
+          },
+          "4": {
+            "matches": 23,
+            "denominator": 2568,
+            "macro_control_pool_rate": 0.006717289719626167
+          }
+        },
+        "outside_mode_edges": 1,
+        "safety_activated_pools": 1,
+        "complete_control_pools": 4
+      },
+      "selected": {
+        "chains": {
+          "2": {
+            "matches": 324,
+            "denominator": 2580,
+            "macro_control_pool_rate": 0.11918604651162791
+          },
+          "3": {
+            "matches": 79,
+            "denominator": 2574,
+            "macro_control_pool_rate": 0.025932400932400932
+          },
+          "4": {
+            "matches": 23,
+            "denominator": 2568,
+            "macro_control_pool_rate": 0.006717289719626167
+          }
+        },
+        "outside_mode_edges": 0,
+        "safety_activated_pools": 1,
+        "complete_control_pools": 4
+      }
+    },
+    "sixth_choice": {
+      "primary_outside": 0,
+      "safety_outside": 0,
+      "chosen_pipeline": "density_13fit_public_beam",
+      "safety_chosen": false,
+      "equality_retains_primary": true,
+      "reference_order_or_reference_hits_received": false
+    },
+    "sixth_selected_windows": {
+      "2": 67,
+      "3": 22,
+      "4": 7
+    },
+    "sixth_scope": "Prospective evaluation of the already published policy on another order of the same pool",
+    "original_four_scope": "Policy informed by first-four model-route diagnostics; retained historical scope",
+    "no_global_optimum_DJ_identity_or_audio_quality_claim": true
+  },
+  "DJ_repeat_Fuzzy_BPM6_same431": {
+    "exports": 2,
+    "directed_windows": {
+      "2": {
+        "matches": 68,
+        "denominator": 430,
+        "rate": 0.15813953488372093
+      },
+      "3": {
+        "matches": 23,
+        "denominator": 429,
+        "rate": 0.053613053613053616
+      },
+      "4": {
+        "matches": 9,
+        "denominator": 428,
+        "rate": 0.02102803738317757
+      }
+    },
+    "context_summary": {
+      "all": {
+        "repeated_exact_contexts": 1,
+        "observations": 2,
+        "contexts_with_different_next": 1,
+        "equal_full_prefix_contexts": 1,
+        "equal_prefix_with_different_next": 1
+      },
+      "remaining_ge4": {
+        "repeated_exact_contexts": 1,
+        "observations": 2,
+        "contexts_with_different_next": 1,
+        "equal_full_prefix_contexts": 1,
+        "equal_prefix_with_different_next": 1
+      },
+      "remaining_ge8": {
+        "repeated_exact_contexts": 1,
+        "observations": 2,
+        "contexts_with_different_next": 1,
+        "equal_full_prefix_contexts": 1,
+        "equal_prefix_with_different_next": 1
+      },
+      "remaining1to3": {
+        "repeated_exact_contexts": 0,
+        "observations": 0,
+        "contexts_with_different_next": 0,
+        "equal_full_prefix_contexts": 0,
+        "equal_prefix_with_different_next": 0
+      }
+    },
+    "native_table_geometry": {
+      "first_reference_allowed": 401,
+      "first_reference_outside": 29,
+      "sixth_reference_allowed": 398,
+      "sixth_reference_outside": 32
+    },
+    "first_complete_prefix_context_diagnostic": {
+      "scope": "Exploratory diagnosis from already frozen predictions; one repeated complete-prefix context only",
+      "remaining_occurrences": 430,
+      "native_Fuzzy_allowed_occurrences": 126,
+      "distinct_observed_successors": 2,
+      "old_observed_successor_in_native_allowed_pool": false,
+      "sixth_observed_successor_in_native_allowed_pool": true,
+      "sixth_observed_successor_literal_ordinal": 3,
+      "sixth_observed_successor_competition_tie_rank": 2,
+      "sixth_observed_successor_tie_size": 2,
+      "next_v1_shortlists_identical": true,
+      "old_observed_successor_covered_by_Top3_5_7": false,
+      "sixth_observed_successor_covered_by_Top3_5_7": true,
+      "inference": "Uniform choice restricted to our native allowed shortlist cannot explain both observed choices here; hidden state, key changes, different support or global tradeoffs remain unobserved",
+      "DJ_true_support_or_uniform_distribution_identified": false,
+      "native_tempo_diagnostic": {
+        "tempo_measure": "Absolute unmodified native BPM difference, in BPM units; no half/double normalization or audio analysis",
+        "first_blocked_DJ_successor_native_bpm_distance": 24.797049069193918,
+        "second_allowed_DJ_successor_native_bpm_distance": 10.797049069193918,
+        "minimum_allowed_native_bpm_distance": 6.797049069193918,
+        "allowed_candidates_strictly_closer_than_blocked_successor": 38,
+        "allowed_candidates_equal_distance_to_blocked_successor": 8,
+        "allowed_candidates_strictly_closer_than_allowed_successor": 2,
+        "all_remaining_candidates_strictly_closer_than_blocked_successor": 122,
+        "allowed_candidates_with_native_distance_at_most6": 0,
+        "tolerance6_is_not_assumed_DJ_hard_constraint": true
+      }
+    },
+    "uniform_rand_identified": false,
+    "true_DJ_candidate_support_identified": false,
+    "repeat_similarity_is_not_predictability_ceiling": true,
+    "interpretation": "Two exports show variability, not its distribution. Native-table exclusions are our comparison criterion, not an audible-invalidity judgment or a reconstructed DJ Solve warning."
+  },
+  "verification": {
+    "numerical_version_unchanged": "0.17.0",
+    "prior_code_validation": "702 tests and38 subtests passed for published version; this supplement changes evidence and documentation only",
+    "saved_predictions_reconstructed_independently": true,
+    "original_cache_guards_and_exact_reuse_passed": true,
+    "primary_gated_blocked": 76,
+    "fair_gated_blocked": 74
+  },
+  "artifact_commitments": {
+    "pre_read_protocol_sha256": "08fe6abfdb2b804384531b62b6d22bfdd814c1c8a2ad8ad06a3e93ac923d0817",
+    "pre_read_freeze_sha256": "90619054edb1bd68d935a506a3d2a459cbd1195b719aab70d57158fcb4b8cf0f",
+    "combined6_local_sha256": "4718422e3ff54db40331efc8cf8b0d2534b0d8f1d37801a072c1661c00705d1c",
+    "combined6_routes_sha256": "63375aaae98ea11c47e4e8d6b25877647d9e58fc3c45d0f1b264271b79c9b3f2",
+    "combined6_safety_sha256": "2129355009ee97a78e6f44d8ccf74b7cfffcb9ba076b190aa357993d0cb3197a",
+    "Fuzzy_repeat_sha256": "b1f06a349300ca26e6b952a9033c16591fe290b5d90bcafd934a71422f24447f"
+  },
+  "privacy": "Aggregate evidence only. No archive, audio, track labels, per-track identities, private path, teacher order or new fitted coefficients."
+}

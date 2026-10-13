@@ -51,6 +51,14 @@ original frozen comparisons remain intact. See the [final daily
 benchmark](benchmark-20261013-final.md) and the [earlier
 benchmark](benchmark-20261013.md).
 
+The [sixth-export Fuzzy/BPM6 supplement](benchmark-20261013-six.md) checks the
+already published 0.17.0 policy on another order of the same 431 sources.
+The coefficients and generated routes are unchanged. A repeated complete-prefix
+context contains two different DJ choices, one outside our native-key table;
+random selection only within our allowed shortlist cannot explain both.
+Keep this native-table discrepancy separate from ranking, actual key changes,
+audio quality and the still unknown DJ.Studio support or random distribution.
+
 The profiles are experimental. Local Top3, whole-order adjacent matches and
 contiguous three/four-track chains show different tradeoffs. The completed
 comparisons do not establish a universal winner. The evaluated order variants share sources
