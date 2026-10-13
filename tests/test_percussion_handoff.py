@@ -63,6 +63,6 @@ def test_final_blend_corrects_one_supported_front_without_changing_other_pcm(tmp
     gains={'bass_in':np.ones((n,1)),'bass_out':np.zeros((n,1))};repaired,report=verify_blended_fronts(broken,sr,{},warp,gains,tmp_path)
     assert len(report['local_combined_waveform_refinements'])==1
     assert report['checks'][0]['maximum_error_seconds']<=.0005
-    lo=first-round(.1*sr);hi=first+round(.1*sr)+1;assert np.array_equal(repaired[:lo],broken[:lo]);assert np.array_equal(repaired[hi:],broken[hi:])
+    fix=report['local_combined_waveform_refinements'][0];lo=fix['start_frame'];hi=fix['end_frame'];assert fix['maximum_local_rate_change']<.02;assert np.array_equal(repaired[:lo],broken[:lo]);assert np.array_equal(repaired[hi:],broken[hi:])
     too_late=audio.copy();too_late[first:last]=0;too_late[first+80:last+80]=audio[first:last]
     with pytest.raises(ValueError,match='misses the shared clock'):verify_blended_fronts(too_late,sr,{},warp,gains,tmp_path)

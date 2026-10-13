@@ -53,7 +53,7 @@ def verify_blended_fronts(audio,sample_rate,outgoing_warp,incoming_warp,gains,di
                 estimates,_=final_drum_estimates(corrected,corrected,sample_rate,Path(directory)/f'view-{attempt}',ffmpeg=ffmpeg);fresh=template_attack_rows(np.pad(estimates['drums_out'],((pad,pad),(0,0))),sample_rate,[t+.2 for t in centres],templates,attack_band_hz=band)
                 for i,(old,new) in enumerate(zip(rows,fresh)):
                     if new['eligible'] and (not old['eligible'] or (abs(old['time']-.2-centres[i])>.003 and new['template_correlation']>old.get('template_correlation',0)+.08)):rows[i]=new
-            measured=[{'seconds':t,'delay_seconds':r['time']-.2-t,'correlation':r['template_correlation']} for t,r in zip(centres,rows) if r['eligible']]
+            measured=[{'seconds':t,'delay_seconds':round(r['time']-.2-t,9),'correlation':r['template_correlation']} for t,r in zip(centres,rows) if r['eligible']]
             if not measured or len(measured)<min(8,len(centres)):raise ValueError('Combined percussion fronts remain unverified; review the source window')
             for row in measured:
                 if abs(row['delay_seconds'])>.003:
@@ -62,11 +62,15 @@ def verify_blended_fronts(audio,sample_rate,outgoing_warp,incoming_warp,gains,di
             checks.append({'role':role,'audible_source_events':len(centres),'recognized':measured,'fresh_percussion_view_used':fresh is not None,'maximum_error_seconds':max(abs(r['delay_seconds']) for r in measured)})
         if not residuals:break
         intervals=[]
+        reference_times=sorted(set(t for _,centres,_,_ in references for t in centres))
         for row in residuals:
-            center=round(row['seconds']*sample_rate);radius=round(.1*sample_rate);first=center-radius;last=center+radius+1
+            distances=[abs(t-row['seconds']) for t in reference_times if abs(t-row['seconds'])>1e-5]
+            support=min(.5,.95*min(distances)) if distances else .5
+            center=round(row['seconds']*sample_rate);radius=round(support*sample_rate);first=center-radius;last=center+radius+1
             if first<0 or last>n:raise ValueError('Final front correction lacks endpoint context')
             if any(first<b and last>a for a,b in intervals):raise ValueError('Final front correction contexts overlap')
-            intervals.append((first,last));t=np.arange(last-first);shape=.5*(1+np.cos(np.pi*(t-radius)/radius));indices=t+row['delay_seconds']*sample_rate*shape
-            if np.any(np.diff(indices)<=0) or np.max(abs(np.diff(indices)-1))>=.15:raise ValueError('Final front correction exceeds local rate bounds')
-            block=original[first:last];corrected[first:last]=np.column_stack([np.interp(indices,t,block[:,ch]) for ch in (0,1)]).astype('float32');refinements.append({**row,'start_frame':first,'end_frame':last,'context_seconds':.2})
+            intervals.append((first,last));t=np.arange(last-first);p=np.clip(1-abs(t-radius)/radius,0,1);shape=p*p*(3-2*p);indices=t+row['delay_seconds']*sample_rate*shape
+            rate_change=float(np.max(abs(np.diff(indices)-1)))
+            if np.any(np.diff(indices)<=0) or rate_change>=.03:raise ValueError('Final front correction exceeds gentle local rate bounds')
+            block=original[first:last];corrected[first:last]=np.column_stack([np.interp(indices,t,block[:,ch]) for ch in (0,1)]).astype('float32');refinements.append({**row,'start_frame':first,'end_frame':last,'context_seconds':2*support,'maximum_local_rate_change':rate_change})
     return corrected,{'executed':True,'recognized_fronts_only':True,'checks':checks,'local_combined_waveform_refinements':refinements,'other_pcm_retained':True,'measurement_limit_seconds':.003}
