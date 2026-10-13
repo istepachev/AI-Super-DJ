@@ -245,8 +245,10 @@ def template_attack_rows(audio,sample_rate,centres,templates,minimum_correlation
     rate=8000;divisor=math.gcd(sample_rate,rate)
     band=resample_poly(np.mean(audio,axis=1),rate//divisor,sample_rate//divisor)
     band=sosfiltfilt(butter(3,attack_band_hz,btype='bandpass',fs=rate,output='sos'),band)
-    pre=96;post=360;search=280;rows=[]
+    pre=96;search=280;rows=[]
     for index,(centre,template) in enumerate(zip(centres,templates)):
+        post=len(template)-pre
+        if post<16:raise ValueError('Attack template lacks leading-front context')
         target=round(centre*rate);first=target-pre-search;last=target+post+search
         if first<0 or last>len(band):rows.append({'index':index,'time':centre,'eligible':False});continue
         segment=band[first:last];cross=correlate(segment,template,mode='valid',method='direct')

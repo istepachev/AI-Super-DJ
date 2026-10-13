@@ -1272,6 +1272,12 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                                 mid_handoff_bars=transition.get('mid_handoff_bars'),
                                 bass_handoff_beats=transition.get('bass_handoff_beats'),**percussion_args)
                             transition["frequency_processing"] = evidence
+                            if percussion_args:
+                                from .percussion import verify_blended_fronts
+                                from .mixing import envelopes
+                                gains,_=envelopes(incoming,transition.get('beats',64),beat_phase=beat_phase,style=plan.get('style','default'),mid_handoff_bars=transition.get('mid_handoff_bars'),bass_handoff_beats=transition.get('bass_handoff_beats'))
+                                mixed,front_report=verify_blended_fronts(mixed,sample_rate,clips[position-1].get('warp'),clip.get('warp'),gains,directory/f'percussion-fronts-{position:02}',ffmpeg=ffmpeg)
+                                transition['blended_front_audit']=front_report
                             dest.write(mixed)
                         transitions[position - 1]["set_start_frame"] = cursor - incoming
                         transitions[position - 1]["set_end_frame"] = cursor

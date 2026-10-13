@@ -32,6 +32,15 @@ def test_continuous_bass_is_not_a_kick_sequence():
     sr=16000;t=np.arange(sr*20)/sr;audio=np.column_stack([.1*np.sin(2*np.pi*150*t)]*2)
     assert not repeated_attacks(attack_events(audio,sr,np.arange(.5,19,.5)))
 
+def test_front_focused_template_retains_timing_and_detects_a_late_attack():
+    sr=8000;audio=np.zeros((sr*3,2),dtype='float32');t=np.arange(456)/sr
+    pulse=.2*np.random.default_rng(29).normal(size=len(t))*np.exp(-np.maximum(t-.012,0)/.008);pulse[:96]=0
+    center=sr;audio[center-96:center+360]=pulse[:,None]
+    from scipy.signal import butter,sosfiltfilt
+    band=sosfiltfilt(butter(3,(100,1400),btype='bandpass',fs=sr,output='sos'),audio[:,0]);template=band[center-96:center+96].copy()
+    row=template_attack_rows(audio,sr,[1.],np.array([template]))[0];assert row['eligible'] and abs(row['time']-1)<.00025
+    delayed=np.pad(audio,((72,0),(0,0)))[:len(audio)];row=template_attack_rows(delayed,sr,[1.],np.array([template]))[0];assert row['eligible'] and abs(row['time']-1.009)<.00025
+
 def test_coherent_upper_front_is_selected_ahead_of_delayed_louder_body(tmp_path):
     path,warp,sr=fixture(tmp_path);audio=np.zeros((sf.info(path).frames,2),dtype='float32');times=np.arange(.3,17.4,.503)
     t=np.arange(round(.16*sr))/sr

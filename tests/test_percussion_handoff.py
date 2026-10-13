@@ -48,3 +48,21 @@ def test_automatic_handoff_stops_when_runtime_is_unavailable(tmp_path,monkeypatc
     monkeypatch.setattr(stems,'configuration',lambda:None)
     a=np.zeros((256,2),dtype='float32')
     with pytest.raises(RuntimeError,match='local Demucs runtime'):final_drum_estimates(a,a,8000,tmp_path)
+
+def test_final_blend_corrects_one_supported_front_without_changing_other_pcm(tmp_path,monkeypatch):
+    from superdj.percussion import verify_blended_fronts
+    from superdj import percussion
+    from scipy.signal import butter,sosfiltfilt
+    sr=8000;n=sr*20;audio=np.zeros((n,2),dtype='float32');centres=.3+np.arange(39)*.5;t=np.arange(1000)/sr;wave=.15*np.random.default_rng(33).normal(size=len(t))*np.exp(-t/.006)
+    for stamp in centres:
+        i=round(stamp*sr);audio[i:i+len(wave)]+=wave[:,None]
+    band=sosfiltfilt(butter(3,(180,1200),btype='bandpass',fs=sr,output='sos'),audio[:,0]);templates=np.array([band[round(t*sr)-96:round(t*sr)+360] for t in centres]);path=tmp_path/'templates.npz';np.savez(path,templates=templates)
+    source={'attack_front_comparison':{'upper_front_selected':True},'attack_templates_path':str(path),'attack_band_hz':[180,1200],'events':[{'output_seconds':float(t),'beat':i} for i,t in enumerate(centres)]};warp={'source_kick_alignment':{'head':source},'input_output_beat_mapping':{'head':[{'output_seconds':0.}]}}
+    broken=audio.copy();stamp=centres[26];first=round(stamp*sr);last=first+len(wave);broken[first:last]=0;broken[first+36:last+36]=audio[first:last]
+    monkeypatch.setattr(percussion,'final_drum_estimates',lambda a,b,*args,**kw:({'drums_out':a,'drums_in':b},[]))
+    gains={'bass_in':np.ones((n,1)),'bass_out':np.zeros((n,1))};repaired,report=verify_blended_fronts(broken,sr,{},warp,gains,tmp_path)
+    assert len(report['local_combined_waveform_refinements'])==1
+    assert report['checks'][0]['maximum_error_seconds']<=.0005
+    lo=first-round(.1*sr);hi=first+round(.1*sr)+1;assert np.array_equal(repaired[:lo],broken[:lo]);assert np.array_equal(repaired[hi:],broken[hi:])
+    too_late=audio.copy();too_late[first:last]=0;too_late[first+80:last+80]=audio[first:last]
+    with pytest.raises(ValueError,match='misses the shared clock'):verify_blended_fronts(too_late,sr,{},warp,gains,tmp_path)
