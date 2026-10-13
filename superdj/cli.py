@@ -296,10 +296,13 @@ def harmonize(args):
         seed=args.seed)
     if getattr(args, 'ranking_profile', None) or getattr(args, 'preset', None):
         from .harmonize_modes_sequence import sequence_mode_tracks
-        from .presets import ordering_profile
-        profile = ordering_profile(args.preset) if getattr(args, 'preset', None) else read_json(args.ranking_profile)
-        result = sequence_mode_tracks(records, profile,
-            routing_priority=_routing_priority(args), **settings)
+        if getattr(args, 'preset', None):
+            from .preset_routes import sequence_ordering_preset
+            result = sequence_ordering_preset(records, args.preset,
+                routing_priority=_routing_priority(args), **settings)
+        else:
+            result = sequence_mode_tracks(records, read_json(args.ranking_profile),
+                routing_priority=_routing_priority(args), **settings)
     else:
         if getattr(args, 'routing_priority', None) is not None:
             raise ValueError('--routing-priority requires a mode ranking profile')
@@ -558,7 +561,7 @@ def main(argv=None):
     profile_options = hp.add_mutually_exclusive_group()
     profile_options.add_argument("--ranking-profile", help=argparse.SUPPRESS)
     profile_options.add_argument("--preset", choices=ORDERING_PRESETS,
-                                 help="Portable experimental profile; route-v1 for complete order, next-v1 for Top3")
+                                 help="Portable ordering profile; route-v2 adds a complete-route harmony safeguard, next-v1 gives Top3")
     hp.add_argument("--routing-priority", choices=("key", "bpm", "unknown"),
                     help="Categorical control for an optional priority-aware ranking profile")
     cp = subs.add_parser("harmonize-compare", help="Compare orders on identical metadata; distinguish detector disagreements")

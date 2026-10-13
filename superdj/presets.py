@@ -3,7 +3,7 @@ from importlib.resources import files
 import json
 
 
-ORDERING_PRESETS = ('djstudio-route-v1', 'djstudio-next-v1')
+ORDERING_PRESETS = ('djstudio-route-v1', 'djstudio-route-v2', 'djstudio-next-v1')
 
 
 def ordering_profile(name):

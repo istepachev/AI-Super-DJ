@@ -17,18 +17,37 @@ report. Music is referenced, not copied. A normal set can use that order through
 `plan --mode fixed --fixed-order ../experiment/order.json`, followed by `render`.
 The ordering report does not certify usable beat grids or audible transitions.
 
-## Portable frozen presets
+## Portable ordering presets
 
 For a requested DJ.Studio-style **complete-order comparison**, use
-`--preset djstudio-route-v1`. It packages the frozen density/remaining-pool
-profile and uses the public route search and repair. For **local next-track
+`--preset djstudio-route-v2`. It packages the frozen density/remaining-pool
+profile and a frozen Paired safety profile, both using the public route search
+and repair. For **local next-track
 suggestions**, use `harmonize-rank --preset djstudio-next-v1`; it packages the
-frozen priority profile selected for literal Top3. Both use schema-three
+frozen priority profile retained from the earlier literal Top3 comparison. Both use schema-three
 priority-aware inference. Packaged coefficients and feature layout are exact
 copies of the respective frozen models; publication removes private names,
 paths, records and orders, retaining anonymous training conditions and metadata
 SHA commitments. Parameters were frozen before the latest exports; the
-sanitized public files were prepared for this release.
+sanitized public files were prepared for release. `djstudio-route-v1` retains
+its earlier single-profile policy and coefficients for reproduction.
+
+Route-v2 generates two complete candidates from the same musical inputs,
+mode, priority, nullable tolerance, seed and explicit first/last/chain locks.
+It selects the safety route only when it has **strictly fewer outside-mode
+links across the complete route**. Equal counts retain the primary route.
+Reference order agreement and utilities from different fitted models are never
+selection criteria. `preset_route_selection` retains both candidate orders,
+their outside-mode counts and the choice. If both need a compromise, the
+selected result continues to disclose it; this safeguard cannot guarantee a
+compatible path through every pool and mandatory lock.
+
+The two-route safeguard was designed after the frozen forward diagnostics.
+Its separately labelled evaluation is a post-forward engineering check, not
+a pre-frozen or source-independent validation of a newly chosen policy. The
+original frozen comparisons remain intact. See the [final daily
+benchmark](benchmark-20261013-final.md) and the [earlier
+benchmark](benchmark-20261013.md).
 
 The profiles are experimental. Local Top3, whole-order adjacent matches and
 contiguous three/four-track chains show different tradeoffs. The completed
@@ -44,9 +63,9 @@ orders. Reuse another user's explicit controls only for the same declared
 experiment. Examples of that protocol:
 
 ```text
-superdj harmonize --records ../work/records.json --preset djstudio-route-v1 --harmonic-mode mood --priority 0 --routing-priority bpm --bpm-tolerance 4 --direction none --seed 0 --work ../mood-order
-superdj harmonize --records ../work/records.json --preset djstudio-route-v1 --harmonic-mode fuzzy --priority 0 --routing-priority bpm --bpm-tolerance 6 --direction none --seed 0 --work ../fuzzy-order
-superdj harmonize --records ../work/records.json --preset djstudio-route-v1 --harmonic-mode mood --priority 1 --routing-priority key --direction none --seed 0 --work ../key-order
+superdj harmonize --records ../work/records.json --preset djstudio-route-v2 --harmonic-mode mood --priority 0 --routing-priority bpm --bpm-tolerance 4 --direction none --seed 0 --work ../mood-order
+superdj harmonize --records ../work/records.json --preset djstudio-route-v2 --harmonic-mode fuzzy --priority 0 --routing-priority bpm --bpm-tolerance 6 --direction none --seed 0 --work ../fuzzy-order
+superdj harmonize --records ../work/records.json --preset djstudio-route-v2 --harmonic-mode mood --priority 1 --routing-priority key --direction none --seed 0 --work ../key-order
 superdj harmonize-rank --records ../work/records.json --preset djstudio-next-v1 --current TRACK_ID --played-prefix ../work/played.json --harmonic-mode mood --priority 0 --routing-priority bpm --bpm-tolerance 4 --work ../next-ranks
 ```
 
