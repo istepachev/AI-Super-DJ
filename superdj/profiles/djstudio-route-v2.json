@@ -805,7 +805,10 @@
     "provenance": "Anonymous source-cohort labels and original SHA256 metadata commitments; no source records or order lists",
     "scope": "Experimental two-route musical safety policy; coefficient fit and post-forward policy evaluation are distinct",
     "policy_version": "native-harmony-safety-1",
-    "policy_declared_after_frozen_forward": true
+    "policy_declared_after_frozen_model_route_diagnostics": true,
+    "policy_declared_before_complete_32_route_audit": true,
+    "policy_evaluated_after_complete_32_route_audit": true,
+    "policy_declared_before_fifth_metadata": true
   },
   "safety_profile": {
     "schema_version": 3,

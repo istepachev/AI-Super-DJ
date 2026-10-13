@@ -42,8 +42,10 @@ their outside-mode counts and the choice. If both need a compromise, the
 selected result continues to disclose it; this safeguard cannot guarantee a
 compatible path through every pool and mandatory lock.
 
-The two-route safeguard was designed after the frozen forward diagnostics.
-Its separately labelled evaluation is a post-forward engineering check, not
+The two-route safeguard was declared after diagnostics of 24 frozen model
+routes, before the complete 32-route audit. It was evaluated after that audit.
+Its separately labelled evaluation is an engineering check informed by the
+model-route diagnostics, not
 a pre-frozen or source-independent validation of a newly chosen policy. The
 original frozen comparisons remain intact. See the [final daily
 benchmark](benchmark-20261013-final.md) and the [earlier

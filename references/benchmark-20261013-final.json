@@ -64,7 +64,7 @@
     "original_forward_exports": 4,
     "original_generated_free_routes": 32,
     "original_numerical_models_and_budgets_frozen_before_metadata": true,
-    "route_safety_policy": "Designed after original forward diagnostics",
+    "route_safety_policy": "Declared after diagnostics of 24 frozen model routes, before final closure of all 32 routes; evaluated after all 32 were saved and verified",
     "fifth": "Received after safety rule declaration; same pool, new order; eight exact Mood/BPM routes reused",
     "additional_routes_for_fifth": 0,
     "original_four_forward_results_preserved": true,
@@ -86,7 +86,7 @@
     "fair_remaining_ge8": 2115,
     "short_tails_separate": 15,
     "blocked_teacher_primary": 45,
-    "metric": "Literal directed observed successor in harmonic-gated Top3 after actual teacher prefix; blocked targets remain failures",
+    "metric": "Literal directed observed successor in Top3 after actual teacher prefix. For harmonic-gated models blocked targets remain failures; legacy soft control permits them and harmony validity is reported separately.",
     "by_model": {
       "paired_key": {
         "literal_top3_hits": 1313,
@@ -695,7 +695,7 @@
     "skipped": 0,
     "real_ffmpeg_ffprobe_rubberband_on_synthetic_audio": true,
     "wheel_inference_imported_from_built_wheel": true,
-    "wheel_sha256": "7172d182a13b1776e0a1ba5754b40c4bc08d7378a4ca53d4419419ec01e228ad",
+    "wheel_sha256": "a9a9b2d5afc360c3f369f7ad87f4a5e32eb6c64ea1805decd941abbd09256e8c",
     "wheel_three_presets_loaded": true,
     "wheel_inference_coefficients_unchanged": true,
     "wheel_real_twenty_track_constraints_passed": true,
