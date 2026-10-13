@@ -47,7 +47,14 @@ Complementary 180/3500 Hz bands reconstruct the input. Paired band gains sum to 
 
 ## DJ Жилин and native exceptions
 
-New sets target 210 seconds of solo play, normally 180–240, with a hard maximum of 300. Automatic windows select an energetic central core using cue confidence, energy and competing vocals/tonal proxy. Default shared SYNC overlaps prefer 32 bars, 16 above 20% temporary tempo change. `--style zhilin` prefers forty-bar compatible overlaps using the same mixer. Reduce automatic lengths when a short source or grid would otherwise erase the core. Explicit locks/protected ranges remain constraints.
+User listening feedback can narrow middle and bass handoffs independently with
+per-edge `mid_handoff_bars` and `bass_handoff_beats`. Aim for long useful
+harmonic/rhythmic support; shorten for foreground voices or sustained tonal
+competition. Pitch-class uncertainty alone is not a reason to remove a groove.
+See [adaptive-mids.md](adaptive-mids.md) for the reviewed decision policy and
+its current validation limits. This is not a trained taste classifier.
+
+New sets target 210 seconds of solo play, normally 180–240, with a hard maximum of 300. Automatic windows select an energetic central core using cue confidence, energy and competing vocals/tonal proxy. Shared SYNC overlaps prefer 32 bars, 16 above 20% temporary tempo change, including `--style zhilin`. DJ Zhilin uses broad complementary mid/high curves and a slow bass transfer over one eighth of the overlap. Its configured profile derives effective EQ-plus-volume shares from approved native automation. The portable [reference envelopes](../assets/zhilin-reference-v1.json) retain those normalized curves without the original music, source-specific cues or listening feedback; see [friend-setup.md](friend-setup.md) for explicit configuration. The same reference is adapted to new music, not claimed as an identical montage. Reduce automatic lengths when a short source or grid would otherwise erase the core. Explicit locks/protected ranges remain constraints.
 
 Reports separate source, rendered deck, solo and overlap durations. At least 120 seconds including overlaps are retained; short sources can leave less solo music. A small deficit can use a disclosed single repeat of stable whole bars (at most four bars/ten seconds) inside the body, with identical mixture/voice editing. Protected/locked sources or larger deficits stop. The legacy preserving `sections.arrange` API remains available for approved source-span montages.
 

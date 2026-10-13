@@ -28,10 +28,16 @@ def write_json(path: str | Path, value: Any) -> None:
     temporary.replace(target)
 
 
-def select_tracks(folder: str | Path, count: int, seed: int) -> dict:
+def select_tracks(folder: str | Path, count: int, seed: int, *, history=None, allow_repeats=False) -> dict:
     source = Path(folder).expanduser().resolve(strict=True)
     files = sorted((p for p in source.rglob("*") if p.is_file() and p.suffix.lower() in MEDIA), key=lambda p: str(p).casefold())
+    excluded=[]
+    if not allow_repeats:
+        from .history import unseen_files
+        files,excluded=unseen_files(files,history)
     if not 1 <= count <= len(files):
-        raise ValueError(f"Requested {count} tracks from {len(files)} available files")
+        raise ValueError(f"Requested {count} tracks from {len(files)} available unseen files; excluded {len(excluded)} previously used files")
     chosen = random.Random(seed).sample(files, count)
-    return {"source": str(source), "seed": seed, "tracks": [{"id": f"track_{i:02}", "path": str(p)} for i, p in enumerate(chosen, 1)]}
+    return {"source": str(source), "seed": seed, "tracks": [{"id": f"track_{i:02}", "path": str(p)} for i, p in enumerate(chosen, 1)],
+            'history_policy':'explicit repeat allowance' if allow_repeats else 'exclude completed-set sources',
+            'excluded_previous_sources':excluded}

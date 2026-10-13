@@ -17,7 +17,7 @@ def _playlist(args):
     if args.playlist:
         return read_json(args.playlist)
     seed = args.seed if args.seed is not None else random.SystemRandom().randrange(2**32)
-    playlist = select_tracks(args.folder, args.count, seed)
+    playlist = select_tracks(args.folder, args.count, seed,allow_repeats=getattr(args,'allow_repeats',False))
     write_json(Path(args.work) / "playlist.json", playlist)
     return playlist
 
@@ -183,6 +183,19 @@ def render(args, records=None, planned=None):
         hours, minutes, seconds = int(seconds // 3600), int(seconds % 3600 // 60), int(seconds % 60)
         lines.append(f"{index:02}. {hours:02}:{minutes:02}:{seconds:02}  {names[track['id']]}")
     (directory / f"{args.name}_tracklist.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    from .delivery import make_cue,publish_pair
+    from .cues import runtime_config
+    from .history import register_manifest,import_cue_folder,write_text_index
+    cue=make_cue(manifest)
+    ready=runtime_config().get('delivery_root')
+    if ready:
+        manifest['delivery']=publish_pair(exported['flac']['path'],cue,ready)
+        write_json(directory/f'{args.name}_manifest.json',manifest)
+    history_result=register_manifest(manifest,manifest_path=directory/f'{args.name}_manifest.json')
+    if ready and history_result['registered']:
+        import_cue_folder(ready);write_text_index(ready)
+    if history_result['registered']:
+        print(f"Completed history updated: {history_result['unique_sources']} unique sources",flush=True)
     print(f"Completed: {exported['flac']['path']}", flush=True)
     return manifest
 
@@ -253,6 +266,7 @@ def _source(parser):
     parser.add_argument("--checkpoint", default="final0")
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--download-model", action="store_true")
+    parser.add_argument('--allow-repeats',action='store_true',help='Explicitly allow previously used sources in automatic folder selection')
     parser.add_argument("--grid-json", help="Explicit imported grid overrides keyed by track id")
 
 
@@ -273,19 +287,27 @@ def harmonize(args):
     from .harmonize import harmonize_tracks
     from .harmonize_report import export_order_pack
     records = _records(args.records)
+    if getattr(args, 'preset', None):
+        # A preset must not inherit the teacher's file-order tie permutation.
+        records = sorted(records, key=lambda row: str(row.get('id') or row.get('path')))
     settings = dict(mode=args.harmonic_mode, priority=args.priority,
         direction=args.direction, bpm_tolerance=args.bpm_tolerance, first_id=args.first,
         last_id=args.last, locked_chains=read_json(args.locked_chains) if args.locked_chains else None,
         seed=args.seed)
-    if getattr(args, 'ranking_profile', None):
+    if getattr(args, 'ranking_profile', None) or getattr(args, 'preset', None):
         from .harmonize_modes_sequence import sequence_mode_tracks
-        result = sequence_mode_tracks(records, read_json(args.ranking_profile),
+        from .presets import ordering_profile
+        profile = ordering_profile(args.preset) if getattr(args, 'preset', None) else read_json(args.ranking_profile)
+        result = sequence_mode_tracks(records, profile,
             routing_priority=_routing_priority(args), **settings)
     else:
         if getattr(args, 'routing_priority', None) is not None:
             raise ValueError('--routing-priority requires a mode ranking profile')
         result = harmonize_tracks(records, **settings, beam_width=args.beam_width,
             order_objective=args.order_objective, search_seconds=args.search_seconds)
+    if getattr(args, 'preset', None):
+        result['ordering_preset'] = args.preset
+        result['preset_input_policy'] = 'stable ID sort; explicit endpoint and chain constraints retained'
     exported = export_order_pack(records, result, args.work)
     print(f"Harmonized {len(result['order'])} tracks; report: {exported['report']}", flush=True)
     return result
@@ -419,7 +441,8 @@ def harmonize_rank(args):
         raise ValueError('Played prefix must contain distinct known IDs and end with the current track')
     played = set(prefix)
     remaining = [r for i, r in by_id.items() if i not in played]
-    profile = read_json(args.profile)
+    from .presets import ordering_profile
+    profile = ordering_profile(args.preset) if getattr(args, 'preset', None) else read_json(args.profile)
     if profile.get('model_version') in {'superdj-mode-pool-ranker-2', 'superdj-mode-priority-ranker-3'}:
         from .harmonize_modes import rank_mode_candidates
         result = rank_mode_candidates(by_id[args.current], remaining, profile, mode=args.harmonic_mode,
@@ -432,6 +455,8 @@ def harmonize_rank(args):
     result.update(current_id=args.current, played_prefix=prefix,
                   remaining_ids=[str(r.get('id') or r.get('path')) for r in remaining],
                   whole_path_optimized=False)
+    if getattr(args, 'preset', None):
+        result['ordering_preset'] = args.preset
     write_json(Path(args.work) / 'next_track_rankings.json', result)
     print(f"Experimental remaining-track ranks written: {args.work}; whole-path order unchanged", flush=True)
     return result
@@ -509,7 +534,8 @@ def main(argv=None):
     subs = parser.add_subparsers(dest="command", required=True)
     mp = subs.add_parser("make", help="One file → mastered FLAC; multiple files → mixed FLAC")
     mp.add_argument("inputs", nargs="+", help="Audio files or a folder")
-    mp.add_argument("--style", choices=("default", "zhilin"), default="default")
+    mp.add_argument("--style", choices=("default", "zhilin"), default=None)
+    mp.add_argument('--allow-repeats',action='store_true',help='Explicitly allow previously used sources in automatic folder selection')
     mp.add_argument("--keep-order", action="store_true", help="Keep supplied file order")
     mp.add_argument("--output")
     mp.add_argument("--name")
@@ -528,7 +554,11 @@ def main(argv=None):
     hp.add_argument("--locked-chains", help="Private JSON array of disjoint adjacent id chains")
     hp.add_argument("--seed", type=int, default=0)
     hp.add_argument("--beam-width", type=int, default=512)
-    hp.add_argument("--ranking-profile", help=argparse.SUPPRESS)
+    from .presets import ORDERING_PRESETS
+    profile_options = hp.add_mutually_exclusive_group()
+    profile_options.add_argument("--ranking-profile", help=argparse.SUPPRESS)
+    profile_options.add_argument("--preset", choices=ORDERING_PRESETS,
+                                 help="Portable experimental profile; route-v1 for complete order, next-v1 for Top3")
     hp.add_argument("--routing-priority", choices=("key", "bpm", "unknown"),
                     help="Categorical control for an optional priority-aware ranking profile")
     cp = subs.add_parser("harmonize-compare", help="Compare orders on identical metadata; distinguish detector disagreements")
@@ -548,7 +578,10 @@ def main(argv=None):
     lp.add_argument("--learner", choices=("controls", "ranker", "modes", "priority"), default="controls", help=argparse.SUPPRESS)
     lp.add_argument("--harmonic-mode", choices=("fuzzy", "mood"), default="fuzzy", help=argparse.SUPPRESS)
     nlp = subs.add_parser("harmonize-rank", help="Experimental local next-track ranks; keeps independent harmony checks")
-    nlp.add_argument("--records", required=True); nlp.add_argument("--profile", required=True)
+    nlp.add_argument("--records", required=True)
+    rank_profiles = nlp.add_mutually_exclusive_group(required=True)
+    rank_profiles.add_argument("--profile", help="Private ranking profile")
+    rank_profiles.add_argument("--preset", choices=ORDERING_PRESETS, help="Packaged experimental ordering profile")
     nlp.add_argument("--current", required=True); nlp.add_argument("--work", required=True)
     nlp.add_argument("--played-prefix", help="Private JSON array of played IDs ending with current; omitted means current only")
     nlp.add_argument("--harmonic-mode", choices=("fuzzy", "mood"), default="fuzzy")

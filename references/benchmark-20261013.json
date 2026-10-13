@@ -1,0 +1,721 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-13",
+  "scope": "Frozen forward order comparison with overlapping sources; not source-independent validation, DJ.Studio internals or an audible-quality score",
+  "new_exports": 9,
+  "tracks_per_export": 403,
+  "all_recent_examples": 57,
+  "explicitly_controlled_examples": 30,
+  "controlled_source_connected_cohorts": 1,
+  "new_sources_shared_with_controlled_history": 194,
+  "new_sources_novel_to_controlled_history": 209,
+  "conditions": [
+    {
+      "mode": "mood",
+      "priority": "bpm",
+      "bpm_tolerance": 4,
+      "exports": 3
+    },
+    {
+      "mode": "fuzzy",
+      "priority": "bpm",
+      "bpm_tolerance": 6,
+      "exports": 2
+    },
+    {
+      "mode": "mood",
+      "priority": "key",
+      "bpm_tolerance": null,
+      "exports": 2
+    },
+    {
+      "mode": "fuzzy",
+      "priority": "key",
+      "bpm_tolerance": null,
+      "exports": 2
+    }
+  ],
+  "key_source": "DJ.Studio",
+  "teacher_endpoint_or_transition_locks": [],
+  "historical_tempo_direction": "unknown",
+  "benchmark_direction": "none",
+  "teacher_order_used_to_generate_free_routes": false,
+  "fit_after_reading_new_exports": false,
+  "seed_or_budget_tuning_after_new_labels": false,
+  "local_main_denominator_remaining_ge4": 3591,
+  "local_fair_denominator_remaining_ge8": 3555,
+  "small_tail_states_separate": 27,
+  "full_route_count": 32,
+  "primary_route_scope": "Four controls weighted equally; exact directed windows of two, three and four total tracks, compared with each export separately",
+  "uniform_candidate_support_known": false,
+  "unobserved_choices_used_as_negatives": false,
+  "local_models": {
+    "paired_key": {
+      "literal_top3_hits": 2179,
+      "literal_top3_denominator": 3591,
+      "literal_top3_rate": 0.6067947646895016,
+      "blocked_demonstrations_retained": 75,
+      "fair_lists": {
+        "1": {
+          "literal_hits": 1248,
+          "literal_rate": 0.3510548523206751,
+          "actual_length_mean": 0.9988748241912799,
+          "same_size_random_allowed_rate": 0.03346535552605423,
+          "excess_vs_same_size_allowed_pp": 31.758949679462088
+        },
+        "3": {
+          "literal_hits": 2150,
+          "literal_rate": 0.6047819971870605,
+          "actual_length_mean": 2.9873417721518987,
+          "same_size_random_allowed_rate": 0.09392630567802204,
+          "excess_vs_same_size_allowed_pp": 51.08556915090385
+        },
+        "5": {
+          "literal_hits": 2572,
+          "literal_rate": 0.7234880450070323,
+          "actual_length_mean": 4.955836849507736,
+          "same_size_random_allowed_rate": 0.14845664167152758,
+          "excess_vs_same_size_allowed_pp": 57.503140333550476
+        },
+        "7": {
+          "literal_hits": 2834,
+          "literal_rate": 0.7971870604781998,
+          "actual_length_mean": 6.894514767932489,
+          "same_size_random_allowed_rate": 0.19742204564440494,
+          "excess_vs_same_size_allowed_pp": 59.97650148337949
+        }
+      }
+    },
+    "priority_015": {
+      "literal_top3_hits": 2190,
+      "literal_top3_denominator": 3591,
+      "literal_top3_rate": 0.6098579782790309,
+      "blocked_demonstrations_retained": 75,
+      "fair_lists": {
+        "1": {
+          "literal_hits": 1235,
+          "literal_rate": 0.34739803094233473,
+          "actual_length_mean": 0.9988748241912799,
+          "same_size_random_allowed_rate": 0.03346535552605423,
+          "excess_vs_same_size_allowed_pp": 31.393267541628052
+        },
+        "3": {
+          "literal_hits": 2161,
+          "literal_rate": 0.6078762306610408,
+          "actual_length_mean": 2.9873417721518987,
+          "same_size_random_allowed_rate": 0.09392630567802204,
+          "excess_vs_same_size_allowed_pp": 51.39499249830188
+        },
+        "5": {
+          "literal_hits": 2571,
+          "literal_rate": 0.7232067510548523,
+          "actual_length_mean": 4.955836849507736,
+          "same_size_random_allowed_rate": 0.14845664167152758,
+          "excess_vs_same_size_allowed_pp": 57.475010938332474
+        },
+        "7": {
+          "literal_hits": 2827,
+          "literal_rate": 0.7952180028129395,
+          "actual_length_mean": 6.894514767932489,
+          "same_size_random_allowed_rate": 0.19742204564440494,
+          "excess_vs_same_size_allowed_pp": 59.779595716853464
+        }
+      }
+    },
+    "density_13fit": {
+      "literal_top3_hits": 2184,
+      "literal_top3_denominator": 3591,
+      "literal_top3_rate": 0.6081871345029239,
+      "blocked_demonstrations_retained": 75,
+      "fair_lists": {
+        "1": {
+          "literal_hits": 1243,
+          "literal_rate": 0.349648382559775,
+          "actual_length_mean": 0.9988748241912799,
+          "same_size_random_allowed_rate": 0.03346535552605423,
+          "excess_vs_same_size_allowed_pp": 31.618302703372073
+        },
+        "3": {
+          "literal_hits": 2155,
+          "literal_rate": 0.6061884669479606,
+          "actual_length_mean": 2.9873417721518987,
+          "same_size_random_allowed_rate": 0.09392630567802204,
+          "excess_vs_same_size_allowed_pp": 51.22621612699386
+        },
+        "5": {
+          "literal_hits": 2571,
+          "literal_rate": 0.7232067510548523,
+          "actual_length_mean": 4.955836849507736,
+          "same_size_random_allowed_rate": 0.14845664167152758,
+          "excess_vs_same_size_allowed_pp": 57.475010938332474
+        },
+        "7": {
+          "literal_hits": 2824,
+          "literal_rate": 0.7943741209563995,
+          "actual_length_mean": 6.894514767932489,
+          "same_size_random_allowed_rate": 0.19742204564440494,
+          "excess_vs_same_size_allowed_pp": 59.69520753119946
+        }
+      }
+    },
+    "graph_13fit": {
+      "literal_top3_hits": 2181,
+      "literal_top3_denominator": 3591,
+      "literal_top3_rate": 0.6073517126148705,
+      "blocked_demonstrations_retained": 75,
+      "fair_lists": {
+        "1": {
+          "literal_hits": 1242,
+          "literal_rate": 0.3493670886075949,
+          "actual_length_mean": 0.9988748241912799,
+          "same_size_random_allowed_rate": 0.03346535552605423,
+          "excess_vs_same_size_allowed_pp": 31.59017330815407
+        },
+        "3": {
+          "literal_hits": 2152,
+          "literal_rate": 0.6053445850914205,
+          "actual_length_mean": 2.9873417721518987,
+          "same_size_random_allowed_rate": 0.09392630567802204,
+          "excess_vs_same_size_allowed_pp": 51.141827941339855
+        },
+        "5": {
+          "literal_hits": 2572,
+          "literal_rate": 0.7234880450070323,
+          "actual_length_mean": 4.955836849507736,
+          "same_size_random_allowed_rate": 0.14845664167152758,
+          "excess_vs_same_size_allowed_pp": 57.503140333550476
+        },
+        "7": {
+          "literal_hits": 2830,
+          "literal_rate": 0.7960618846694796,
+          "actual_length_mean": 6.894514767932489,
+          "same_size_random_allowed_rate": 0.19742204564440494,
+          "excess_vs_same_size_allowed_pp": 59.86398390250747
+        }
+      }
+    },
+    "bpm_residual": {
+      "literal_top3_hits": 2190,
+      "literal_top3_denominator": 3591,
+      "literal_top3_rate": 0.6098579782790309,
+      "blocked_demonstrations_retained": 75,
+      "fair_lists": {
+        "1": {
+          "literal_hits": 1223,
+          "literal_rate": 0.3440225035161744,
+          "actual_length_mean": 0.9988748241912799,
+          "same_size_random_allowed_rate": 0.03346535552605423,
+          "excess_vs_same_size_allowed_pp": 31.055714799012016
+        },
+        "3": {
+          "literal_hits": 2161,
+          "literal_rate": 0.6078762306610408,
+          "actual_length_mean": 2.9873417721518987,
+          "same_size_random_allowed_rate": 0.09392630567802204,
+          "excess_vs_same_size_allowed_pp": 51.39499249830188
+        },
+        "5": {
+          "literal_hits": 2592,
+          "literal_rate": 0.7291139240506329,
+          "actual_length_mean": 4.955836849507736,
+          "same_size_random_allowed_rate": 0.14845664167152758,
+          "excess_vs_same_size_allowed_pp": 58.065728237910534
+        },
+        "7": {
+          "literal_hits": 2858,
+          "literal_rate": 0.8039381153305204,
+          "actual_length_mean": 6.894514767932489,
+          "same_size_random_allowed_rate": 0.19742204564440494,
+          "excess_vs_same_size_allowed_pp": 60.65160696861155
+        }
+      }
+    }
+  },
+  "full_routes": {
+    "paired_key_public_beam": {
+      "macro_per_control_pool_individual_reference_rates": {
+        "2": 0.11225124378109452,
+        "3": 0.013715710723192021,
+        "4": 0.0014583333333333334
+      },
+      "pooled_individual_reference_rates": {
+        "2": {
+          "matches": 401,
+          "denominator": 3618,
+          "rate": 0.11083471531232725
+        },
+        "3": {
+          "matches": 48,
+          "denominator": 3609,
+          "rate": 0.013300083125519535
+        },
+        "4": {
+          "matches": 5,
+          "denominator": 3600,
+          "rate": 0.001388888888888889
+        }
+      },
+      "macro_per_control_pool_union_rates": {
+        "2": 0.21703980099502487,
+        "3": 0.028678304239401497,
+        "4": 0.003125
+      },
+      "outside_mode_edges": 0,
+      "native_bpm_travel": 2884.782801664358,
+      "native_tolerance_exceedances": 44,
+      "groups": [
+        {
+          "mode": "mood",
+          "priority": "bpm",
+          "bpm_tolerance": 4,
+          "tracks": 403
+        },
+        {
+          "mode": "fuzzy",
+          "priority": "bpm",
+          "bpm_tolerance": 6,
+          "tracks": 403
+        },
+        {
+          "mode": "mood",
+          "priority": "key",
+          "bpm_tolerance": null,
+          "tracks": 403
+        },
+        {
+          "mode": "fuzzy",
+          "priority": "key",
+          "bpm_tolerance": null,
+          "tracks": 403
+        }
+      ]
+    },
+    "priority_015_public_beam": {
+      "macro_per_control_pool_individual_reference_rates": {
+        "2": 0.12230514096185738,
+        "3": 0.016521197007481295,
+        "4": 0.003958333333333333
+      },
+      "pooled_individual_reference_rates": {
+        "2": {
+          "matches": 438,
+          "denominator": 3618,
+          "rate": 0.12106135986733002
+        },
+        "3": {
+          "matches": 60,
+          "denominator": 3609,
+          "rate": 0.01662510390689942
+        },
+        "4": {
+          "matches": 16,
+          "denominator": 3600,
+          "rate": 0.0044444444444444444
+        }
+      },
+      "macro_per_control_pool_union_rates": {
+        "2": 0.2300995024875622,
+        "3": 0.03678304239401496,
+        "4": 0.01
+      },
+      "outside_mode_edges": 1,
+      "native_bpm_travel": 2609.5289202305094,
+      "native_tolerance_exceedances": 38,
+      "groups": [
+        {
+          "mode": "mood",
+          "priority": "bpm",
+          "bpm_tolerance": 4,
+          "tracks": 403
+        },
+        {
+          "mode": "fuzzy",
+          "priority": "bpm",
+          "bpm_tolerance": 6,
+          "tracks": 403
+        },
+        {
+          "mode": "mood",
+          "priority": "key",
+          "bpm_tolerance": null,
+          "tracks": 403
+        },
+        {
+          "mode": "fuzzy",
+          "priority": "key",
+          "bpm_tolerance": null,
+          "tracks": 403
+        }
+      ]
+    },
+    "density_13fit_public_beam": {
+      "macro_per_control_pool_individual_reference_rates": {
+        "2": 0.11784825870646766,
+        "3": 0.01974231088944306,
+        "4": 0.005833333333333333
+      },
+      "pooled_individual_reference_rates": {
+        "2": {
+          "matches": 422,
+          "denominator": 3618,
+          "rate": 0.11663902708678828
+        },
+        "3": {
+          "matches": 72,
+          "denominator": 3609,
+          "rate": 0.0199501246882793
+        },
+        "4": {
+          "matches": 22,
+          "denominator": 3600,
+          "rate": 0.006111111111111111
+        }
+      },
+      "macro_per_control_pool_union_rates": {
+        "2": 0.22139303482587067,
+        "3": 0.04177057356608479,
+        "4": 0.0125
+      },
+      "outside_mode_edges": 0,
+      "native_bpm_travel": 2793.517813839,
+      "native_tolerance_exceedances": 42,
+      "groups": [
+        {
+          "mode": "mood",
+          "priority": "bpm",
+          "bpm_tolerance": 4,
+          "tracks": 403
+        },
+        {
+          "mode": "fuzzy",
+          "priority": "bpm",
+          "bpm_tolerance": 6,
+          "tracks": 403
+        },
+        {
+          "mode": "mood",
+          "priority": "key",
+          "bpm_tolerance": null,
+          "tracks": 403
+        },
+        {
+          "mode": "fuzzy",
+          "priority": "key",
+          "bpm_tolerance": null,
+          "tracks": 403
+        }
+      ]
+    },
+    "graph_13fit_public_beam": {
+      "macro_per_control_pool_individual_reference_rates": {
+        "2": 0.11608623548922056,
+        "3": 0.017040731504571905,
+        "4": 0.0022916666666666667
+      },
+      "pooled_individual_reference_rates": {
+        "2": {
+          "matches": 417,
+          "denominator": 3618,
+          "rate": 0.11525704809286899
+        },
+        "3": {
+          "matches": 60,
+          "denominator": 3609,
+          "rate": 0.01662510390689942
+        },
+        "4": {
+          "matches": 8,
+          "denominator": 3600,
+          "rate": 0.0022222222222222222
+        }
+      },
+      "macro_per_control_pool_union_rates": {
+        "2": 0.22388059701492538,
+        "3": 0.03615960099750623,
+        "4": 0.005
+      },
+      "outside_mode_edges": 0,
+      "native_bpm_travel": 2678.39006374995,
+      "native_tolerance_exceedances": 38,
+      "groups": [
+        {
+          "mode": "mood",
+          "priority": "bpm",
+          "bpm_tolerance": 4,
+          "tracks": 403
+        },
+        {
+          "mode": "fuzzy",
+          "priority": "bpm",
+          "bpm_tolerance": 6,
+          "tracks": 403
+        },
+        {
+          "mode": "mood",
+          "priority": "key",
+          "bpm_tolerance": null,
+          "tracks": 403
+        },
+        {
+          "mode": "fuzzy",
+          "priority": "key",
+          "bpm_tolerance": null,
+          "tracks": 403
+        }
+      ]
+    },
+    "bpm_residual_greedy_repair": {
+      "macro_per_control_pool_individual_reference_rates": {
+        "2": 0.11888474295190714,
+        "3": 0.02130091438071488,
+        "4": 0.005625
+      },
+      "pooled_individual_reference_rates": {
+        "2": {
+          "matches": 426,
+          "denominator": 3618,
+          "rate": 0.11774461028192372
+        },
+        "3": {
+          "matches": 75,
+          "denominator": 3609,
+          "rate": 0.020781379883624274
+        },
+        "4": {
+          "matches": 20,
+          "denominator": 3600,
+          "rate": 0.005555555555555556
+        }
+      },
+      "macro_per_control_pool_union_rates": {
+        "2": 0.22388059701492538,
+        "3": 0.0442643391521197,
+        "4": 0.0125
+      },
+      "outside_mode_edges": 0,
+      "native_bpm_travel": 3199.5374694139646,
+      "native_tolerance_exceedances": 36,
+      "groups": [
+        {
+          "mode": "mood",
+          "priority": "bpm",
+          "bpm_tolerance": 4,
+          "tracks": 403
+        },
+        {
+          "mode": "fuzzy",
+          "priority": "bpm",
+          "bpm_tolerance": 6,
+          "tracks": 403
+        },
+        {
+          "mode": "mood",
+          "priority": "key",
+          "bpm_tolerance": null,
+          "tracks": 403
+        },
+        {
+          "mode": "fuzzy",
+          "priority": "key",
+          "bpm_tolerance": null,
+          "tracks": 403
+        }
+      ]
+    },
+    "paired_greedy_repair_control": {
+      "macro_per_control_pool_individual_reference_rates": {
+        "2": 0.11691542288557213,
+        "3": 0.02213216957605985,
+        "4": 0.0040625
+      },
+      "pooled_individual_reference_rates": {
+        "2": {
+          "matches": 416,
+          "denominator": 3618,
+          "rate": 0.11498065229408513
+        },
+        "3": {
+          "matches": 79,
+          "denominator": 3609,
+          "rate": 0.021889720144084236
+        },
+        "4": {
+          "matches": 14,
+          "denominator": 3600,
+          "rate": 0.0038888888888888888
+        }
+      },
+      "macro_per_control_pool_union_rates": {
+        "2": 0.21952736318407962,
+        "3": 0.046758104738154616,
+        "4": 0.00875
+      },
+      "outside_mode_edges": 0,
+      "native_bpm_travel": 3090.528778904993,
+      "native_tolerance_exceedances": 48,
+      "groups": [
+        {
+          "mode": "mood",
+          "priority": "bpm",
+          "bpm_tolerance": 4,
+          "tracks": 403
+        },
+        {
+          "mode": "fuzzy",
+          "priority": "bpm",
+          "bpm_tolerance": 6,
+          "tracks": 403
+        },
+        {
+          "mode": "mood",
+          "priority": "key",
+          "bpm_tolerance": null,
+          "tracks": 403
+        },
+        {
+          "mode": "fuzzy",
+          "priority": "key",
+          "bpm_tolerance": null,
+          "tracks": 403
+        }
+      ]
+    },
+    "native_strict_v3": {
+      "macro_per_control_pool_individual_reference_rates": {
+        "2": 0.0541044776119403,
+        "3": 0.006338320864505403,
+        "4": 0.0016666666666666666
+      },
+      "pooled_individual_reference_rates": {
+        "2": {
+          "matches": 206,
+          "denominator": 3618,
+          "rate": 0.056937534549474846
+        },
+        "3": {
+          "matches": 25,
+          "denominator": 3609,
+          "rate": 0.006927126627874758
+        },
+        "4": {
+          "matches": 7,
+          "denominator": 3600,
+          "rate": 0.0019444444444444444
+        }
+      },
+      "macro_per_control_pool_union_rates": {
+        "2": 0.10385572139303482,
+        "3": 0.01371571072319202,
+        "4": 0.004375
+      },
+      "outside_mode_edges": 1,
+      "native_bpm_travel": 13962.23571378608,
+      "native_tolerance_exceedances": 57,
+      "groups": [
+        {
+          "mode": "mood",
+          "priority": "bpm",
+          "bpm_tolerance": 4,
+          "tracks": 403
+        },
+        {
+          "mode": "fuzzy",
+          "priority": "bpm",
+          "bpm_tolerance": 6,
+          "tracks": 403
+        },
+        {
+          "mode": "mood",
+          "priority": "key",
+          "bpm_tolerance": null,
+          "tracks": 403
+        },
+        {
+          "mode": "fuzzy",
+          "priority": "key",
+          "bpm_tolerance": null,
+          "tracks": 403
+        }
+      ]
+    },
+    "legacy_weighted_soft_v2": {
+      "macro_per_control_pool_individual_reference_rates": {
+        "2": 0.023528192371475954,
+        "3": 0.001142975893599335,
+        "4": 0.00020833333333333335
+      },
+      "pooled_individual_reference_rates": {
+        "2": {
+          "matches": 90,
+          "denominator": 3618,
+          "rate": 0.024875621890547265
+        },
+        "3": {
+          "matches": 5,
+          "denominator": 3609,
+          "rate": 0.0013854253255749516
+        },
+        "4": {
+          "matches": 1,
+          "denominator": 3600,
+          "rate": 0.0002777777777777778
+        }
+      },
+      "macro_per_control_pool_union_rates": {
+        "2": 0.04788557213930348,
+        "3": 0.003117206982543641,
+        "4": 0.000625
+      },
+      "outside_mode_edges": 544,
+      "native_bpm_travel": 13008.49094821775,
+      "native_tolerance_exceedances": 6,
+      "groups": [
+        {
+          "mode": "mood",
+          "priority": "bpm",
+          "bpm_tolerance": 4,
+          "tracks": 403
+        },
+        {
+          "mode": "fuzzy",
+          "priority": "bpm",
+          "bpm_tolerance": 6,
+          "tracks": 403
+        },
+        {
+          "mode": "mood",
+          "priority": "key",
+          "bpm_tolerance": null,
+          "tracks": 403
+        },
+        {
+          "mode": "fuzzy",
+          "priority": "key",
+          "bpm_tolerance": null,
+          "tracks": 403
+        }
+      ]
+    }
+  },
+  "dj_to_dj_variation": {
+    "scope": "Observed saved DJ.Studio-to-DJ.Studio variation in nine same-pool controlled exports",
+    "macro_per_control_pool_directed_window_rates": {
+      "2": 0.14075456053067992,
+      "3": 0.0369908561928512,
+      "4": 0.016458333333333335
+    },
+    "weighting": "Mean unique export-pair agreement within each control/pool, then mean across four controls; comparable control weights to frozen route macro but different reference-pair experiment",
+    "definitions": {
+      "adjacent_pair": "Two exact occurrence IDs in directed contiguous order",
+      "chain3": "Three total consecutive tracks",
+      "chain4": "Four total consecutive tracks",
+      "unordered_comparison": "Each export pair counted once; intersection of directed-window sets is symmetric but each window retains its direction"
+    },
+    "limitations": [
+      "Observed variation comparator, not a predictability ceiling.",
+      "Linked exports are not independent quality or random-choice trials.",
+      "A deterministic route can match recurring windows across different references; DJ-to-DJ mean is not an upper bound.",
+      "No claim about acoustic quality or hidden proprietary optimizer."
+    ]
+  }
+}
