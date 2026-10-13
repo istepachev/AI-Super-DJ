@@ -28,7 +28,7 @@ the overlap. Each pair's gain sum stays at or below one. These narrow bass/mid
 curves belong to the explicit default style. DJ Zhilin instead spreads mids
 across almost the whole overlap and bass across one eighth (four of 32 bars),
 with gentle full-overlap highs. The private reference profile derives effective
-band shares from the approved Надя native volume and EQ automation. Incoming
+band shares from approved native volume and EQ automation. Incoming
 mids precede the bass handoff and outgoing mids remain afterwards. Complementary
 gains and separate vocal handoff avoid two equally loud foregrounds. Preserve
 native solo audio where feasible; do not infer acoustic alignment from the map.

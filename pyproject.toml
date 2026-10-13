@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "superdj"
-version = "0.15.0"
+version = "0.16.0"
 description = "AI Super DJ: offline planning, DJ.Studio audits and audio rendering"
 requires-python = ">=3.12"
 license = {text = "MIT"}
@@ -26,6 +26,9 @@ license-files = ["LICENSE", "licenses/*.txt"]
 
 [tool.setuptools.packages.find]
 include = ["superdj*"]
+
+[tool.setuptools.package-data]
+superdj = ["profiles/*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -66,6 +66,7 @@ def verify_blended_fronts(audio,sample_rate,outgoing_warp,incoming_warp,gains,di
         for row in residuals:
             distances=[abs(t-row['seconds']) for t in reference_times if abs(t-row['seconds'])>1e-5]
             support=min(.5,.95*min(distances)) if distances else .5
+            support=min(support,.95*row['seconds'],.95*((n-1)/sample_rate-row['seconds']))
             center=round(row['seconds']*sample_rate);radius=round(support*sample_rate);first=center-radius;last=center+radius+1
             if first<0 or last>n:raise ValueError('Final front correction lacks endpoint context')
             if any(first<b and last>a for a,b in intervals):raise ValueError('Final front correction contexts overlap')

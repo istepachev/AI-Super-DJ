@@ -17,6 +17,68 @@ report. Music is referenced, not copied. A normal set can use that order through
 `plan --mode fixed --fixed-order ../experiment/order.json`, followed by `render`.
 The ordering report does not certify usable beat grids or audible transitions.
 
+## Portable frozen presets
+
+For a requested DJ.Studio-style **complete-order comparison**, use
+`--preset djstudio-route-v1`. It packages the frozen density/remaining-pool
+profile and uses the public route search and repair. For **local next-track
+suggestions**, use `harmonize-rank --preset djstudio-next-v1`; it packages the
+frozen priority profile selected for literal Top3. Both use schema-three
+priority-aware inference. Packaged coefficients and feature layout are exact
+copies of the respective frozen models; publication removes private names,
+paths, records and orders, retaining anonymous training conditions and metadata
+SHA commitments. Parameters were frozen before the latest exports; the
+sanitized public files were prepared for this release.
+
+The profiles are experimental. Local Top3, whole-order adjacent matches and
+contiguous three/four-track chains show different tradeoffs. The completed
+comparisons do not establish a universal winner. The evaluated order variants share sources
+with training examples, so new export order is not independent source
+validation. Utilities are relative scores, not probabilities, confidence or
+audible quality. Keep full-route and local results separate, preserve blocked
+teachers in comparison denominators and keep ties and short tails explicit.
+
+The comparison protocol used seed **0**, neutral direction and free endpoints
+because the user declared no locks; do not infer endpoints from reference
+orders. Reuse another user's explicit controls only for the same declared
+experiment. Examples of that protocol:
+
+```text
+superdj harmonize --records ../work/records.json --preset djstudio-route-v1 --harmonic-mode mood --priority 0 --routing-priority bpm --bpm-tolerance 4 --direction none --seed 0 --work ../mood-order
+superdj harmonize --records ../work/records.json --preset djstudio-route-v1 --harmonic-mode fuzzy --priority 0 --routing-priority bpm --bpm-tolerance 6 --direction none --seed 0 --work ../fuzzy-order
+superdj harmonize --records ../work/records.json --preset djstudio-route-v1 --harmonic-mode mood --priority 1 --routing-priority key --direction none --seed 0 --work ../key-order
+superdj harmonize-rank --records ../work/records.json --preset djstudio-next-v1 --current TRACK_ID --played-prefix ../work/played.json --harmonic-mode mood --priority 0 --routing-priority bpm --bpm-tolerance 4 --work ../next-ranks
+```
+
+For Key priority, omit `--bpm-tolerance` to represent known disabled/null
+tolerance; Fuzzy Key uses `--harmonic-mode fuzzy` with the same Key controls.
+Mood BPM 4 and Fuzzy BPM 6 are user-confirmed conditions for this comparison,
+not universal mode defaults. `--routing-priority` communicates the categorical
+control; numeric `--priority` sets our route weighting (0 BPM, 1 Key). Intermediate
+numeric values do not identify a known fitted categorical control. Tempo
+tolerance is a soft preference; it does not forbid a larger BPM jump. The
+mode's independent harmonic gate still applies.
+
+`played.json` is the complete actual played-ID array ending at `TRACK_ID`;
+omitting it means only that current track is excluded. `harmonize-rank` writes
+the literal capped shortlist and candidate diagnostics without optimizing the
+complete route. `ordering_preset` in the saved result records the selection.
+Explicit presets sort input occurrences by stable ID before seeded route
+selection, preserving explicit endpoint/chain constraints. This prevents a
+saved teacher file order from becoming the seed's implicit tie permutation;
+`preset_input_policy` records that choice. Ordinary planning is unchanged.
+`--preset` is mutually exclusive with a private `--ranking-profile` for
+`harmonize` and with `--profile` for `harmonize-rank`.
+
+These ordering presets are separate from ordinary `make` development by tempo,
+intensity and bass, and from the renderer's `default`/`zhilin` mixing style.
+Do not switch the ordinary planner merely because a set uses DJ Zhilin. To
+render a requested preset order, feed it to fixed-order planning, then apply
+the chosen style and normal source/timing/audio checks. No audio quality is
+certified by an ordering match. New learning, examples, private checkpoints
+and reports remain outside the public repository; only explicitly sanitized
+published parameters are bundled.
+
 ## Explicit controls and objective
 
 - `--priority`: 0 is BPM, 1 is key, default .5, within the final tie-breaking

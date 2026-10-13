@@ -49,8 +49,8 @@ def test_history_excludes_renamed_copy_and_other_encoding_by_name(tmp_path):
     assert len(select_tracks(folder,1,4,history=history,allow_repeats=True)['tracks'])==1
 
 def test_date_first_name_keeps_explicit_date_and_cyrillic():
-    assert dated_name('Вечериночка_Мажор','2026_10_12')=='2026_10_12_Вечериночка_Мажор'
-    assert dated_name('2026_10_11_ДР_Нади','2026_10_12')=='2026_10_11_ДР_Нади'
+    assert dated_name('Музыкальная_папка','2026_10_12')=='2026_10_12_Музыкальная_папка'
+    assert dated_name('2026_10_11_Праздник','2026_10_12')=='2026_10_11_Праздник'
 
 def test_zhilin_broad_mids_retain_music_before_and_after_bass():
     p=np.linspace(0,1,8193)

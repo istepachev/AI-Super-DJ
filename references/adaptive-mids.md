@@ -1,6 +1,6 @@
 # Adaptive middle handoff
 
-The user's 2026-10-12 listening feedback supersedes the initial experiment's
+Reviewed listening feedback supersedes the initial experiment's
 rule that uncertain chroma should usually shorten mids to sixteen bars.
 Different local notes can still support each other. Midband percussion can
 maintain a dance rhythm while one source has an empty kick section. Preserve
@@ -48,14 +48,15 @@ the slow reference cross; exceptions must be recorded.
 
 ## Reviewed examples and validation
 
-The private runtime's `adaptive_mid_feedback` points to the source-cohort
-feedback record. For Вечериночка — Мажор the accepted shorter middles are
-transitions 3/6/8/19 at sixteen bars and 9 at eight. The 3/6 choices were inferred
-from the user's general approval of preceding pairs. Long middles are retained
-at 7/12/16/17/18 for musical/rhythmic support; 11/14 were equally good and keep
-the longer version. At 12, lowband attack isolation was inconclusive; a one-bar
-bass cross is an explicitly disclosed mitigation, not a certified grid repair.
-Other identical control pairs remain unchanged.
+The optional private runtime's `adaptive_mid_feedback` points to local
+source-cohort feedback. Do not copy another listener's titles, transition
+indices or per-edge overrides to a new collection. In reviewed comparisons,
+some competing foregrounds benefited from sixteen/eight-bar middles, while
+other overlaps retained long middles for rhythmic support. Equally good
+candidates kept the longer texture. A disclosed one-bar bass cross mitigated
+one uncertain lowband collision; that listening decision did not establish a
+certified timing repair. Such exceptions apply to their reviewed source pair,
+not every transition in this style.
 
 Keep the original predictions frozen. Save later feedback and reviewed choices
 separately. Those comparisons calibrate our policy on this particular set;

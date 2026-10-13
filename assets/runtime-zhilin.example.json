@@ -1,0 +1,21 @@
+{
+  "audamcp": "C:/SuperDJ/superdj-work/checkouts/audamcp",
+  "bitwize": "C:/SuperDJ/superdj-work/checkouts/bitwize",
+  "ffmpeg": "ffmpeg",
+  "ffprobe": "ffprobe",
+  "rubberband": "rubberband",
+  "git": "git",
+  "cache": "C:/SuperDJ/superdj-work/cache",
+  "private_output_root": "C:/SuperDJ/superdj-work/private-results",
+  "delivery_root": "C:/SuperDJ/Ready-Sets",
+  "track_history": "C:/SuperDJ/superdj-work/history/used-tracks.json",
+  "default_style": "zhilin",
+  "zhilin_profile": "C:/SuperDJ/AI-Super-DJ/assets/zhilin-reference-v1.json",
+  "cue_model": "C:/Users/YourUser/.cache/superdj/cue-detr",
+  "cue_python": "C:/SuperDJ/AI-Super-DJ/.venv/Scripts/python.exe",
+  "stem_python": "C:/SuperDJ/AI-Super-DJ/.venv/Scripts/python.exe",
+  "beat_checkpoint": "final0",
+  "beat_device": "cpu",
+  "cue_device": "cpu",
+  "stem_device": "cpu"
+}
