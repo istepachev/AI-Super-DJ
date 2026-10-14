@@ -59,6 +59,8 @@ random selection only within our allowed shortlist cannot explain both.
 Keep this native-table discrepancy separate from ranking, actual key changes,
 audio quality and the still unknown DJ.Studio support or random distribution.
 
+The [three-Key-repeat supplement](benchmark-20261014-key-repeats.md) preserves the published policy and the old-six 63.19% literal Top3. The expanded nine-reference estimate is 61.70%; about 94.8% of its decline is due to condition weights. Equal-control macro changes from 61.86% to 61.74%. It also compares unshifted positions and full-route windows. For requested accuracy-preserving model updates, compare baseline and candidate on the same frozen references, controls and denominators; the report records current baselines. This retrospective regression gate cannot guarantee a nondecreasing estimate under arbitrary future test mixtures. No new model is promoted.
+
 The profiles are experimental. Local Top3, whole-order adjacent matches and
 contiguous three/four-track chains show different tradeoffs. The completed
 comparisons do not establish a universal winner. The evaluated order variants share sources
