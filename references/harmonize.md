@@ -61,6 +61,8 @@ audio quality and the still unknown DJ.Studio support or random distribution.
 
 The [three-Key-repeat supplement](benchmark-20261014-key-repeats.md) preserves the published policy and the old-six 63.19% literal Top3. The expanded nine-reference estimate is 61.70%; about 94.8% of its decline is due to condition weights. Equal-control macro changes from 61.86% to 61.74%. It also compares unshifted positions and full-route windows. For requested accuracy-preserving model updates, compare baseline and candidate on the same frozen references, controls and denominators; the report records current baselines. This retrospective regression gate cannot guarantee a nondecreasing estimate under arbitrary future test mixtures. No new model is promoted.
 
+The [eight-order batch4 report](benchmark-20261014-batch4.md) evaluates a distinct120-occurrence/119-source pool with unchanged0.17.0 profiles: Next72.41% on new orders and63.78% over17 references. Actual-width eligible random chance rises to28.75%; absolute excess falls to43.66pp, so raw coverage growth is not an algorithm update.32 new full routes use the inherited budgets. Two unknown-key occurrences are preserved; count their links separately from known incompatible keys. Literal occurrence comparisons remain primary; source-equivalence sensitivity uses separately labelled views and denominators.
+
 The profiles are experimental. Local Top3, whole-order adjacent matches and
 contiguous three/four-track chains show different tradeoffs. The completed
 comparisons do not establish a universal winner. The evaluated order variants share sources
