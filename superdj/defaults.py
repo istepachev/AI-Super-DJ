@@ -9,8 +9,9 @@ ENERGY_ARCS = ("build", "release", "wave", "flat", "none")
 def planning_defaults(*, style=None, harmonic_mode=None, energy_arc=None, runtime=None):
     """Resolve CLI > private workstation setting > portable product default.
 
-    ``default`` remains the original ordinary-SYNC style alias. Selecting a
-    mixing style does not implicitly change key rules or the musical arc.
+    ``default`` remains the original ordinary-SYNC style alias. Zhilin uses
+    Mood unless explicitly overridden; other styles retain Classic. The
+    musical arc is selected independently.
     """
     runtime = {} if runtime is None else runtime
     resolved = {}
@@ -20,6 +21,8 @@ def planning_defaults(*, style=None, harmonic_mode=None, energy_arc=None, runtim
         ("harmonic_mode", harmonic_mode, "default_harmonic_mode", "classic", HARMONIC_MODES),
         ("energy_arc", energy_arc, "default_energy_arc", "build", ENERGY_ARCS),
     ):
+        if name == "harmonic_mode" and resolved["style"] == "zhilin":
+            portable = "mood"
         configured = runtime.get(config_key)
         value = explicit if explicit is not None else configured if configured is not None else portable
         if value not in choices:

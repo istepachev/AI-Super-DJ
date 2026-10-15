@@ -20,7 +20,10 @@ def feature(identity, key='8A', bpm=124, intensity=.5):
 
 
 @pytest.mark.parametrize('runtime,explicit,expected', [
-    ({}, {}, ('zhilin','classic','build')),
+    ({}, {}, ('zhilin','mood','build')),
+    ({}, {'style':'sync'}, ('default','classic','build')),
+    ({}, {'style':'zhilin','harmonic_mode':'classic'}, ('zhilin','classic','build')),
+    ({'default_style':'zhilin','default_harmonic_mode':'classic'}, {}, ('zhilin','classic','build')),
     ({'default_style':'default'}, {}, ('default','classic','build')),
     ({'default_style':'sync','default_harmonic_mode':'fuzzy','default_energy_arc':'wave'},
         {}, ('default','fuzzy','wave')),
@@ -60,7 +63,7 @@ def test_classic_cost_and_unknown_keys_are_explicit():
     assert 'unknown' in planned['edges'][0]['harmonic_relation']
 
 
-def test_bare_plan_twenty_keeps_general_build_and_uses_zhilin_sections(tmp_path,monkeypatch):
+def test_bare_plan_twenty_uses_mood_build_and_zhilin_sections(tmp_path,monkeypatch):
     import superdj.cues
     monkeypatch.setattr(superdj.cues,'runtime_config',lambda:{})
     rows=[]
@@ -77,7 +80,7 @@ def test_bare_plan_twenty_keeps_general_build_and_uses_zhilin_sections(tmp_path,
     source.write_text(json.dumps(rows),encoding='utf-8')
     main(['plan','--records',str(source),'--work',str(tmp_path/'plan')])
     result=json.loads((tmp_path/'plan/plan.json').read_text(encoding='utf-8'))
-    assert result['style']=='zhilin' and result['harmonic_mode']=='classic'
+    assert result['style']=='zhilin' and result['harmonic_mode']=='mood'
     assert result['set_arc']['shape']=='build'
     assert result['order'][0]=='t00' and result['order'][-1]=='t19'
     assert len(result['order'])==len(set(result['order']))==20
@@ -117,7 +120,7 @@ def test_make_dispatch_carries_resolved_defaults_and_keep_order(tmp_path,monkeyp
         output=str(tmp_path/'out'),work=str(tmp_path/'work')))
     argv=calls[0]
     assert argv[argv.index('--style')+1]=='zhilin'
-    assert argv[argv.index('--harmonic-mode')+1]=='classic'
+    assert argv[argv.index('--harmonic-mode')+1]=='mood'
     assert argv[argv.index('--energy-arc')+1]=='build'
     assert argv[argv.index('--mode')+1]=='fixed'
     playlist=json.loads((tmp_path/'work/playlist.json').read_text(encoding='utf-8'))
