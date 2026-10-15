@@ -25,7 +25,7 @@ def collect(inputs):
     return files
 
 
-def make(args):
+def _make(args):
     from .adapters import master_set, prepare_tracks
     from .quality import export_audio, measure_audio
     files = collect(args.inputs)
@@ -42,7 +42,9 @@ def make(args):
         energy_arc=getattr(args, 'energy_arc', None), runtime=runtime)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S_%f")
     output = private_path(args.output or runtime.get('private_output_root') or runtime.get("output_root") or files[0].parent / "AI_Super_DJ")
-    work = private_path(args.work or Path(runtime.get("cache", Path.home() / ".cache" / "superdj")) / "runs" / stamp)
+    from .execution import current
+    work = private_path(args.work or current().work)
+    args._performance_output = output
     output.mkdir(parents=True, exist_ok=True)
     work.mkdir(parents=True, exist_ok=True)
     from .naming import dated_name
@@ -97,10 +99,27 @@ def make(args):
             "--energy-arc", preferences['energy_arc'],
             "--mode", "fixed" if args.keep_order else "auto", "--no-mp3",
             "--sample-rate", str(sample_rate)]
-    if runtime.get("cache"):
-        argv += ["--cache", runtime["cache"]]
+    argv += ["--cache", str(current().root)]
     if runtime.get("beat_checkpoint"):
         argv += ["--checkpoint", runtime["beat_checkpoint"]]
     if runtime.get("beat_device"):
         argv += ["--device", runtime["beat_device"]]
     main(argv)
+
+
+def make(args):
+    from .execution import execution
+    from .storage import write_json
+    runtime = runtime_config()
+    explicit_cache = getattr(args, 'cache', None)
+    cache = None if getattr(args, 'no_cache', False) else (explicit_cache or
+        (runtime.get('cache_root') if runtime.get('cache_mode') == 'persistent' else None))
+    jobs = getattr(args, 'jobs', None) or runtime.get('jobs', 1)
+    session = None
+    try:
+        with execution(cache, jobs=jobs, devices=runtime.get('gpu_devices', ())) as session:
+            return _make(args)
+    finally:
+        report_root = getattr(args, '_performance_output', None) or args.output or runtime.get('private_output_root') or runtime.get('output_root')
+        if report_root and session is not None:
+            write_json(Path(report_root) / 'performance.json', session.metrics)

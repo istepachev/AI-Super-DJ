@@ -5,7 +5,9 @@ from pathlib import Path
 import random
 from typing import Any
 
-MEDIA = {".flac", ".mp3", ".wav", ".aif", ".aiff", ".m4a", ".ogg", ".opus"}
+from .audio import AUDIO_EXTENSIONS
+
+MEDIA = AUDIO_EXTENSIONS
 
 
 def private_path(path: str | Path) -> Path:
@@ -23,9 +25,16 @@ def read_json(path: str | Path) -> Any:
 def write_json(path: str | Path, value: Any) -> None:
     target = private_path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    temporary = target.with_suffix(target.suffix + ".partial")
-    temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2, allow_nan=False), encoding="utf-8")
-    temporary.replace(target)
+    import os, tempfile
+    fd, name = tempfile.mkstemp(prefix=target.name + '-', suffix='.partial', dir=target.parent)
+    os.close(fd)
+    temporary = Path(name)
+    try:
+        temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2, allow_nan=False), encoding='utf8')
+        temporary.replace(target)
+    finally:
+        temporary.unlink(missing_ok=True)
+
 
 
 def select_tracks(folder: str | Path, count: int, seed: int, *, history=None, allow_repeats=False) -> dict:

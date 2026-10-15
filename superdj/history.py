@@ -2,10 +2,11 @@
 from pathlib import Path
 from contextlib import contextmanager
 import hashlib,json,os,re,time,unicodedata
+from .audio import AUDIO_EXTENSIONS
 
 def track_key(path):
     name=Path(path).name
-    while Path(name).suffix.lower() in {'.flac','.mp3','.wav','.aif','.aiff','.m4a','.ogg','.opus'}:
+    while Path(name).suffix.lower() in AUDIO_EXTENSIONS:
         name=Path(name).stem
     name=re.sub(r'^unknown artist\s*-\s*','',name,flags=re.I)
     name=unicodedata.normalize('NFKD',name.casefold())

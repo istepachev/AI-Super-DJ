@@ -5,9 +5,17 @@ description: Enhance local music files or build DJ sets with structural cues, be
 
 # AI Super DJ
 
+## Execution and cache policy
+
+Use `make` without a persistent audio cache by default. Its engine scratch files require temporary disk space and are removed on success or failure. Keep models, history, reports and delivered masters outside that scratch area. Enable a persistent content cache only when the user chooses its location or has already configured `cache_mode: persistent` and `cache_root`; an explicit `--no-cache` overrides it. Do not repeatedly ask this workstation's user for an already chosen location. Reuse verified stages automatically after interruptions with caching enabled. Use bounded jobs and only configured available GPU devices; do not change musical decisions, neural precision, sync tolerances or FLAC compression to claim faster processing. Read [references/performance.md](references/performance.md) for commands, storage limits and measurements.
+
 Deliver listenable audio, retaining originals and recording actual processing. One input file means enhancement and mastering; several files or a folder mean a mixed set. Use `superdj make` on a prepared workstation. Read [README.md](README.md) for commands, [references/workflow.md](references/workflow.md) for detailed checks, and [THIRD_PARTY.md](THIRD_PARTY.md) before changing a backend.
 
 Optionally read private `~/.cache/superdj/runtime.local.json` for workstation paths. Keep audio, playlists, external model weights, private fitted profiles, caches and reports outside the source repository; only portable parameters and intentionally published reusable resources belong in it. Installing instructions alone does not install engines or weights. For first installation or a friend's reproducible DJ Zhilin setup, read [references/friend-setup.md](references/friend-setup.md). A fresh runtime uses DJ Zhilin. An explicit style wins over the workstation preference; `default_style` can select another style for subsequent calls. Do not infer another workstation's default from this machine's private config.
+
+## Audio input without per-format setup
+
+Use the same configured FFmpeg decoder for source analysis, CUE-DETR input, preparation and stems. The neural cue worker receives the executable path explicitly; never make M4A/AAC depend on `librosa.load`, audioread, system codec packs or changes to PATH. `superdj.audio` reads the actual container and first audio stream, including mislabeled/double extensions. Ordinary folder selection recognizes the shared `AUDIO_EXTENSIONS` list, including MP3, FLAC, WAV, AIFF/AIFC, M4A/M4B (AAC or ALAC), AAC, Ogg/Opus, WMA, APE, WavPack and audio-containing MP4/MKA/WebM. No separate codec installation is needed on the prepared workstation. Read [references/audio-formats.md](references/audio-formats.md) for the decoder contract and verification. A new computer still needs the initial engine/model preparation; do not represent a Markdown-only skill install as a bundled workstation runtime.
 
 ## Preserve musical intent
 

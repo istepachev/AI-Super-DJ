@@ -17,6 +17,7 @@ import numpy as np
 
 MODEL_SHA256 = "195b80f5c94e4b424b417a7c04e0aac238082c584ddcb65d01be8a97c69cadd3"
 MODEL_ID = "disco-eth/cue-detr"
+_MODELS = {}
 
 
 def download_checkpoint(directory):
@@ -61,14 +62,16 @@ def configuration() -> dict | None:
     if not directory:
         return None
     model = Path(directory).expanduser().resolve(strict=True)
-    digest = hashlib.sha256((model / "model.safetensors").read_bytes()).hexdigest()
+    from .execution import current, sha256
+    digest_file = current().digest if current() else sha256
+    digest = digest_file(model / "model.safetensors")
     if digest != MODEL_SHA256:
         raise ValueError("CUE-DETR checkpoint differs from the audited weights")
     for name, expected in {
         "config.json": "f83ea58534fb101f52f4cd6ca35a6daa978c8414e629f8483f2665f02f574077",
         "preprocessor_config.json": "0673fea2a6d3cf92cdbab3c7426c0ecdf8a4729a2a4d5199033dcd66a2b8759b",
     }.items():
-        if hashlib.sha256((model / name).read_bytes()).hexdigest() != expected:
+        if digest_file(model / name) != expected:
             raise ValueError("CUE-DETR configuration differs from audited content")
     return {"model": str(model), "sha256": digest,
             "python": os.environ.get("SUPERDJ_CUE_PYTHON") or runtime.get("cue_python") or sys.executable,
@@ -76,6 +79,8 @@ def configuration() -> dict | None:
 
 
 def infer(source: str | Path, cache: Path, config: dict) -> dict:
+    from .audio import ffmpeg_executable, DECODER_VERSION
+    config = {**config, 'ffmpeg': ffmpeg_executable(config.get('ffmpeg')), 'audio_decoder': DECODER_VERSION}
     directory = cache / "cue-detr-jobs"
     directory.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="infer-", dir=directory) as temporary:
@@ -83,6 +88,9 @@ def infer(source: str | Path, cache: Path, config: dict) -> dict:
         result = Path(temporary) / "result.json"
         job.write_text(json.dumps({**config, "source": str(source)}), encoding="utf-8")
         env = dict(os.environ, PYTHONPATH=str(Path(__file__).resolve().parents[1]), PYTHONUTF8="1")
+        from .execution import current
+        if current() is not None:
+            return current().model(config["python"], "cue", {**config, "source": str(source)})
         process = subprocess.run([config["python"], "-m", "superdj.cues", str(job), str(result)],
                                  env=env, capture_output=True)
         if process.returncode:
@@ -98,7 +106,10 @@ def _worker(job: dict) -> dict:
     from transformers import DetrForObjectDetection, DetrImageProcessor
     from scipy.signal import find_peaks
 
-    audio, rate = librosa.load(job["source"], sr=22050)
+    from .audio import decode_mono, ffmpeg_executable, DECODER_VERSION
+    rate = 22050
+    decoder = ffmpeg_executable(job.get('ffmpeg'))
+    audio = decode_mono(job['source'], sample_rate=rate, ffmpeg=decoder)
     mel = librosa.feature.melspectrogram(y=audio, sr=rate, n_fft=2048, hop_length=512, n_mels=128)
     db = librosa.power_to_db(mel, ref=np.max)[::-1]
     mapper = cm.ScalarMappable(cmap="viridis")
@@ -114,15 +125,19 @@ def _worker(job: dict) -> dict:
             raise ValueError("Invalid spectrogram window")
         images.append(segment)
         borders.append(left)
-    processor = DetrImageProcessor.from_pretrained(job["model"], local_files_only=True)
-    model, loading = DetrForObjectDetection.from_pretrained(job["model"], local_files_only=True,
-        use_safetensors=True, use_pretrained_backbone=False, output_loading_info=True)
-    if loading["missing_keys"] or loading["unexpected_keys"] or loading.get("mismatched_keys"):
-        raise ValueError("Incomplete CUE-DETR weight loading")
     device = job.get("device", "auto")
     if device == "auto":
         device = "cuda" if torch.cuda.is_available() else "cpu"
-    model.to(device).eval()
+    signature = (job['model'], job.get('sha256'), device)
+    if signature not in _MODELS:
+        processor = DetrImageProcessor.from_pretrained(job["model"], local_files_only=True)
+        model, loading = DetrForObjectDetection.from_pretrained(job["model"], local_files_only=True,
+            use_safetensors=True, use_pretrained_backbone=False, output_loading_info=True)
+        if loading["missing_keys"] or loading["unexpected_keys"] or loading.get("mismatched_keys"):
+            raise ValueError("Incomplete CUE-DETR weight loading")
+        model.to(device).eval()
+        _MODELS[signature] = (processor, model)
+    processor, model = _MODELS[signature]
     positions, raw_scores = [], []
     # Whole-track normalization; bounded inference batches can differ slightly
     # from upstream's single batch. Keep the executed batch size in provenance.
@@ -145,7 +160,8 @@ def _worker(job: dict) -> dict:
                   if 0 <= ordered[i][0] * 512 / rate < len(audio) / rate]
     return {"candidates": candidates, "provenance": {"executed": True, "model": MODEL_ID,
             "model_sha256": job["sha256"], "device": device, "batch_size": batch_size,
-            "preprocessing": "librosa 22050Hz, 128 mel bins, 2048 FFT/512 hop, inverted viridis RGB, 355px windows/266 padding",
+            "preprocessing": "FFmpeg mono float PCM at 22050Hz; librosa 128 mel bins, 2048 FFT/512 hop, inverted viridis RGB, 355px windows/266 padding",
+            "audio_decoder": {"method": DECODER_VERSION, "executable": decoder, "sample_rate": rate, "frames": len(audio), "stream": "0:a:0"},
             "selection": "upstream normalized-score peaks; distance=16 query indices, not musical bars",
             "score_kind": "within-track min/max normalized object scores; not calibrated cue probabilities",
             "packages": {name: importlib.metadata.version(name) for name in ("torch", "transformers", "librosa", "numpy")}}}

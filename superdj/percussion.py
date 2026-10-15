@@ -14,7 +14,8 @@ def final_drum_estimates(outgoing,incoming,sample_rate,directory,*,ffmpeg='ffmpe
     config=configuration()
     if config is None:raise RuntimeError('Percussion handoff requires the configured local Demucs runtime')
     from .cues import runtime_config
-    shared_cache=runtime_config().get('cache')
+    from .execution import current
+    shared_cache=current().root if current() else None
     cache=Path(shared_cache)/'final-percussion' if shared_cache else Path(directory)
     directory=Path(directory);directory.mkdir(parents=True,exist_ok=True);estimates=[];reports=[]
     for role,pcm in (('out',outgoing),('in',incoming)):

@@ -31,6 +31,8 @@ On Windows use forward slashes or escaped backslashes in JSON. Optional `cue_mod
 
 ## Structural cues
 
+All source containers use the existing FFmpeg input decoder, including the separate CUE-DETR worker. `superdj.audio` resolves the caller's explicit executable, otherwise `SUPERDJ_FFMPEG`, private runtime `ffmpeg`, then system discovery. Pass the selected executable into the cue job; workers do not need FFmpeg on PATH or extra Python/system codec packages. Decode to mono float PCM at 22.05 kHz for model input and retain the original source. Decoder identity is included in cue configuration/cache keys and provenance so previous librosa-decoded neural cues are not silently reused. See [audio-formats.md](audio-formats.md).
+
 `superdj.cues` adapts upstream CUE-DETR spectrogram/image inference: 22.05 kHz, 128 mel bins, 2048 FFT, 512 hop, 355-frame overlapping patches. GPU batches of 32 bound memory and can introduce small numerical differences from upstream's whole-track batch. Provenance records preprocessing, actual versions, device, hashes, raw detections and normalized relative scores. Relative scores are not probabilities.
 
 Original fusion considers RMS, bass and high-band changes around bar-grid candidates and supporting model cues near those changes. Reviewed imported cues remain exact. It does not snap every detection to a presumed sixteen-bar phrase or label model timing human verified. Beat/downbeat confidence, structural support and phrase review remain separate. CUE-DETR does not determine kick phase or recognize screenshots: it analyzes a spectrogram generated from original audio.

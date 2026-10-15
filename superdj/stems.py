@@ -11,6 +11,7 @@ import sys
 import numpy as np
 
 from .cues import runtime_config
+_MODELS = {}
 
 
 def configuration():
@@ -21,29 +22,58 @@ def configuration():
         if find_spec("demucs") is None:
             return None
         python = sys.executable
-    return {"python": python, "device": runtime.get("stem_device", "auto"), "model": "htdemucs", "version": "4.0.1", "include_drums": True}
+    from .execution import current, sha256, environment
+    digest = current().digest if current() else sha256
+    weights = {p.name: digest(p) for p in (Path(os.getenv('TORCH_HOME') or Path(os.getenv('XDG_CACHE_HOME') or Path.home()/'.cache')/'torch')/'hub/checkpoints').glob('955717e8-*.th')}
+    return {"python": python, "device": runtime.get("stem_device", "auto"), "model": "htdemucs", "version": "4.0.1", "include_drums": True, "weights": weights, "environment": environment(python)}
 
 
 def separate(source, source_hash, cache, config, ffmpeg):
+    from .execution import object_lock, key_for
+    cache = Path(cache)
+    key = key_for({'source': source_hash, 'config': config, 'ffmpeg': ffmpeg})
+    with object_lock(cache / 'stem-locks' / (key + '.lock')):
+        return _separate(source, source_hash, cache, config, ffmpeg)
+
+
+def _separate(source, source_hash, cache, config, ffmpeg):
     from .storage import write_json
-    key = hashlib.sha256(json.dumps({"source": source_hash, "config": config, "adapter": 1}, sort_keys=True).encode()).hexdigest()
+    key = hashlib.sha256(json.dumps({"source": source_hash, "config": config, "ffmpeg": str(ffmpeg), "adapter": 2}, sort_keys=True).encode()).hexdigest()
     directory = cache / "vocals" / key
     directory.mkdir(parents=True, exist_ok=True)
     result_file = directory / "result.json"
     if result_file.is_file():
-        result = json.loads(result_file.read_text(encoding="utf-8"))
-        if Path(result["path"]).is_file() and (not config.get('include_drums') or Path(result.get('drums_path','')).is_file()):
+        try:
+            result = json.loads(result_file.read_text(encoding="utf-8"))
+        except (ValueError, OSError):
+            result = {}
+        from .execution import sha256
+        hashes = result.get('artifact_sha256', {}) if isinstance(result, dict) else {}
+        try:
+            valid = hashes and all(sha256(result[name]) == digest for name, digest in hashes.items())
+        except (OSError, KeyError):
+            valid = False
+        if valid and 'path' in hashes and (not config.get('include_drums') or 'drums_path' in hashes):
             return result
     job_file = directory / "job.json"
     write_json(job_file, {**config, "source": str(source), "ffmpeg": ffmpeg,
                          "output": str(directory / "vocals.wav"),
                          **({'drums_output':str(directory/'drums.wav')} if config.get('include_drums') else {})})
     env = dict(os.environ, PYTHONPATH=str(Path(__file__).resolve().parents[1]), PYTHONUTF8="1")
+    from .execution import current, sha256
+    if current() is not None:
+        result = current().model(config['python'], 'stem', json.loads(job_file.read_text(encoding='utf8')))
+        result['artifact_sha256'] = {name: sha256(result[name]) for name in ('path', 'drums_path') if result.get(name)}
+        write_json(result_file, result)
+        return result
     result = subprocess.run([config["python"], "-m", "superdj.stems", str(job_file), str(result_file)], env=env, capture_output=True)
     (directory / "inference.log").write_bytes(result.stdout + result.stderr)
     if result.returncode:
         raise RuntimeError("Local vocal separation failed: " + result.stderr.decode("utf-8", "replace")[-2000:])
-    return json.loads(result_file.read_text(encoding="utf-8"))
+    result = json.loads(result_file.read_text(encoding="utf-8"))
+    result['artifact_sha256'] = {name: sha256(result[name]) for name in ('path', 'drums_path') if result.get(name)}
+    write_json(result_file, result)
+    return result
 
 
 def _worker(job):
@@ -56,11 +86,13 @@ def _worker(job):
 
     if importlib.metadata.version("demucs") != "4.0.1":
         raise ValueError("Vocal adapter requires audited Demucs 4.0.1")
-    model = get_model("htdemucs")
     device = job.get("device", "auto")
     if device == "auto":
         device = "cuda" if torch.cuda.is_available() else "cpu"
-    model.to(device).eval()
+    signature = (device, json.dumps(job.get("weights", {}), sort_keys=True))
+    if signature not in _MODELS:
+        _MODELS[signature] = get_model("htdemucs").to(device).eval()
+    model = _MODELS[signature]
     rate = model.samplerate
     decoded = Path(job["output"]).with_name("decoded.wav")
     try:

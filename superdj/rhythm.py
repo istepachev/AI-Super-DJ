@@ -1,9 +1,6 @@
 """Measured bass availability for automatic transition-window selection."""
 from pathlib import Path
-import hashlib
-import json
 import subprocess
-import tempfile
 import os
 import numpy as np
 from scipy.signal import butter, sosfiltfilt
@@ -12,18 +9,22 @@ from .cues import runtime_config
 
 
 def bass_profile(record, *, ffmpeg=None):
+    from .execution import current, execution, cached
+    if current() is None:
+        with execution():
+            return bass_profile(record, ffmpeg=ffmpeg)
+    decoder = ffmpeg or os.getenv('SUPERDJ_FFMPEG') or runtime_config().get('ffmpeg', 'ffmpeg')
+    return cached('bass_profile', {'source': record.get('path'), 'beats': record.get('beats'),
+        'duration': record.get('duration', record.get('duration_seconds')), 'decoder': decoder},
+        lambda: _bass_profile(record, ffmpeg=decoder), current().work)
+
+
+def _bass_profile(record, *, ffmpeg=None):
     """Beat-level 35–180Hz RMS; not a classifier or a perceived-energy score."""
     source = Path(record.get('path', ''))
     if not source.is_file():
         return {'executed': False, 'reason': 'source unavailable for bass evidence'}
     runtime = runtime_config()
-    cache = Path(runtime.get('cache', Path.home() / '.cache' / 'superdj')) / 'bass_profiles'
-    options = {'version': 3, 'source': str(source.resolve()), 'size': source.stat().st_size,
-               'mtime_ns': source.stat().st_mtime_ns, 'beats': record.get('beats', [])}
-    key = hashlib.sha256(json.dumps(options, sort_keys=True).encode()).hexdigest()
-    target = cache / (key + '.json')
-    if target.exists():
-        return json.loads(target.read_text(encoding='utf-8'))
     sr = 8000
     process = subprocess.run([str(ffmpeg or os.getenv('SUPERDJ_FFMPEG') or runtime.get('ffmpeg', 'ffmpeg')), '-nostdin', '-v', 'error',
         '-i', str(source.resolve()), '-vn', '-ac', '1', '-ar', str(sr), '-f', 'f32le', 'pipe:1'],
@@ -46,11 +47,6 @@ def bass_profile(record, *, ffmpeg=None):
               'reference_dbfs': reference, 'threshold_dbfs': reference - 16.,
               'source_sha256': (record.get('provenance') or {}).get('source_sha256'),
               'bass_presence_not_kick_classification': True, 'rows': rows}
-    cache.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', dir=cache, suffix='.partial', delete=False) as handle:
-        json.dump(result, handle, ensure_ascii=False)
-        temporary = Path(handle.name)
-    temporary.replace(target)
     return result
 
 

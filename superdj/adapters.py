@@ -93,12 +93,29 @@ def _worker(job: dict) -> dict:
         preset = {"target_lufs": job["target_lufs"], "compress_ratio": 1.0, "output_bits": 24,
                   "dither_bits": 24, "processing_oversample": 1, "limiter_lookahead_ms": job.get("limiter_lookahead_ms", 5),
                   "limiter_release_ms": 100, "track_gap": 0}
-        result = master_track(job["input"], job["output"], ceiling_db=job["ceiling_db"], preset=preset)
+        # Long sets can exceed RIFF's four-gigabyte size field. Keep the same
+        # PCM mastering path, selecting its large-file container at the write.
+        original_write = sf.write
+        output_container = []
+        def write_large_wav(file, data, samplerate, *args, **kwargs):
+            channels = data.shape[1] if data.ndim > 1 else 1
+            subtype = kwargs.get("subtype", "PCM_16")
+            bytes_per_sample = {"PCM_24": 3, "PCM_32": 4, "FLOAT": 4, "DOUBLE": 8}.get(subtype, 2)
+            if Path(file).suffix.lower() == ".wav" and len(data) * channels * bytes_per_sample + 4096 >= 2**32:
+                kwargs["format"] = "RF64"
+                output_container.append("RF64")
+            return original_write(file, data, samplerate, *args, **kwargs)
+        sf.write = write_large_wav
+        try:
+            result = master_track(job["input"], job["output"], ceiling_db=job["ceiling_db"], preset=preset)
+        finally:
+            sf.write = original_write
         if result.get("skipped") or not Path(job["output"]).is_file():
             raise RuntimeError("Mastering skipped the input")
         return {"path": job["output"], "provenance": {**job["checkout"], "executed": True,
                 "function": "tools.mastering.master_tracks.master_track", "preset": preset,
-                "ceiling_db": job["ceiling_db"], "upstream_measurements_before_encoded_QA": result}}
+                "ceiling_db": job["ceiling_db"], "large_file_container": output_container or None,
+                "upstream_measurements_before_encoded_QA": result}}
     raise ValueError("Unknown adapter action")
 
 
@@ -116,7 +133,27 @@ def run_worker(job: dict, directory: str | Path, tag: str) -> dict:
     return read_json(result_file)
 
 
-def prepare_tracks(records: list[dict], work_dir: str | Path, *, audamcp: str | Path, ffmpeg="ffmpeg", git="git", noise_profiles=None, progress=print,
+def prepare_tracks(records, work_dir, *, audamcp, ffmpeg="ffmpeg", git="git", noise_profiles=None, progress=print, sample_rate=44100):
+    from .execution import current, cached
+    session = current()
+    if session is None:
+        return _prepare_tracks_uncached(records, work_dir, audamcp=audamcp, ffmpeg=ffmpeg, git=git,
+            noise_profiles=noise_profiles, progress=progress, sample_rate=sample_rate)
+    checkout = checkout_info(audamcp, 'audamcp', git)
+    def one(record):
+        track_id = record['id']
+        dependencies = {'source': record['path'], 'stems': record.get('vocal_stem'), 'checkout': checkout,
+            'rate': sample_rate, 'decoder': ffmpeg, 'noise': (noise_profiles or {}).get(track_id)}
+        def produce():
+            return _prepare_tracks_uncached([record], work_dir, audamcp=audamcp, ffmpeg=ffmpeg, git=git,
+                noise_profiles=noise_profiles, progress=progress, sample_rate=sample_rate)[track_id]
+        result = cached('preparation', dependencies, produce, Path(work_dir) / 'prepared')
+        result['provenance']['original'] = record['path']
+        return track_id, result
+    return dict(session.map(one, records))
+
+
+def _prepare_tracks_uncached(records: list[dict], work_dir: str | Path, *, audamcp: str | Path, ffmpeg="ffmpeg", git="git", noise_profiles=None, progress=print,
                    sample_rate=44100) -> dict:
     directory = private_path(work_dir) / "prepared"
     directory.mkdir(parents=True, exist_ok=True)

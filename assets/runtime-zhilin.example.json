@@ -5,7 +5,6 @@
   "ffprobe": "ffprobe",
   "rubberband": "rubberband",
   "git": "git",
-  "cache": "C:/SuperDJ/superdj-work/cache",
   "private_output_root": "C:/SuperDJ/superdj-work/private-results",
   "delivery_root": "C:/SuperDJ/Ready-Sets",
   "track_history": "C:/SuperDJ/superdj-work/history/used-tracks.json",
@@ -16,5 +15,8 @@
   "beat_checkpoint": "final0",
   "beat_device": "cpu",
   "cue_device": "cpu",
-  "stem_device": "cpu"
+  "stem_device": "cpu",
+  "cache_mode": "temporary",
+  "jobs": 1,
+  "model_cache": "C:/SuperDJ/superdj-work/cache"
 }

@@ -976,7 +976,15 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
             if edge.get(key) is not None:transition[key]=edge[key]
     clips: list[dict[str, Any]] = []
     prepared_files = prepared_files or {}
-    for position, identity in enumerate(order):
+    # All keyword render controls participate in object identity.
+    import inspect
+    from .execution import cached
+    render_local_values = locals().copy()
+    render_controls = {name: locals_value for name, locals_value in render_local_values.items()
+        if name in inspect.signature(render_plan).parameters and name not in
+        {'plan', 'records', 'prepared_files', 'output_path', 'work_dir', 'progress'}}
+    overlap_files = []
+    def prepare_clip(position, identity):
         record = by_id[identity]
         source_path = Path(record["path"])
         prepared = prepared_files.get(identity, prepared_files.get(str(source_path), str(source_path)))
@@ -1096,6 +1104,9 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                         warp['native_attack_preservation']['roles']=['head','tail']
                     audit = rendered_attack_audit(clip_output,warp,sample_rate) if use_kicks else transient_drift(clip_input, clip_output, warp, sample_rate)
                     audits.append(audit)
+                    from .execution import current
+                    if current() and attempt:
+                        current().count("acoustic_rerender_attempts")
                     maximum = audit["maximum_measured_drift_seconds"]
                     if maximum is not None and (best is None or maximum<best[0]):
                         best=(maximum,deepcopy(warp),deepcopy(audit));shutil.copy2(clip_output,best_file)
@@ -1204,6 +1215,110 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                 clips[-1]["rendered_selected_span_in_3_4_minutes"] = 180 <= clips[-1]["duration_seconds"] <= 240
             if 'target_solo_seconds' not in section and not clips[-1]["rendered_selected_span_in_3_4_minutes"]:
                 warnings.append(f"{identity}: rendered selected span outside 3–4 minutes; source/tempo/manual exception retained")
+        return {'clip': clips.pop(), 'warnings': warnings[warning_start:],
+                'previous_transition': transitions[position-1] if position else None,
+                'next_transition': transitions[position] if position < len(transitions) else None}
+
+    def prepare_overlap(position):
+        clip = clips[position]
+        transition = transitions[position-1]
+        incoming = transition['overlap_frames']
+        if not incoming:
+            return None
+        def produce():
+            nonlocal transition
+            with sf.SoundFile(clips[position-1]['audio_path']) as source:
+                source.seek(clips[position-1]['output_frames'] - incoming)
+                previous_tail = source.read(incoming, dtype='float32', always_2d=True)
+            with sf.SoundFile(clip['audio_path']) as source:
+                block = source.read(incoming, dtype='float32', always_2d=True)
+            previous_vocal = None
+            if clips[position-1].get('aligned_vocal_path'):
+                with sf.SoundFile(clips[position-1]['aligned_vocal_path']) as source:
+                    source.seek(clips[position-1]['output_frames'] - incoming)
+                    previous_vocal = source.read(incoming, dtype='float32', always_2d=True)
+            if len(previous_tail) != incoming or len(block) != incoming:
+                raise RenderError('Missing overlap audio')
+            mode = transitions[position - 1]["mode"]
+            if mode == "free_time_echo_bridge":
+                from .bridges import echo_bridge
+                mixed, evidence = echo_bridge(previous_tail, block, sample_rate,
+                    **transitions[position - 1]["echo_parameters"])
+                transitions[position - 1]["echo_processing"] = evidence
+            elif mode == "outgoing_only_vinyl":
+                from .creative import mix_tape_exit
+                parameters = transitions[position - 1]["vinyl_parameters"]
+                mixed, evidence = mix_tape_exit(previous_tail, block, sample_rate,
+                    outgoing_release_seconds=parameters["outgoing_release_seconds"], bass_hz=bass_hz)
+                transitions[position - 1]["vinyl_gain_processing"] = evidence
+            else:
+                from .mixing import blend
+                from .stems import handoff
+                transition = transitions[position - 1]
+                incoming_vocal = None
+                if clip.get("aligned_vocal_path"):
+                    with sf.SoundFile(clip["aligned_vocal_path"]) as voice:
+                        incoming_vocal = voice.read(incoming, dtype="float32", always_2d=True)
+                previous_tail, block, voice_report = handoff(previous_tail, block, previous_vocal, incoming_vocal)
+                transition["vocal_processing"] = voice_report
+                risk = any(float((transition.get(role) or {}).get("sustained_midband_proxy") or 0) > .5
+                           for role in ("outgoing_cue", "incoming_cue"))
+                clock = transition.get('shared_clock')
+                beat_phase = (np.interp(np.arange(incoming), clock['output_frames'], clock['phase']) / clock['beats']) if clock else None
+                if beat_phase is not None:
+                    beat_phase[-1] = 1.
+                from .percussion import needs_handoff,final_drum_estimates
+                percussion_args={}
+                if mode=='beatmapped_bass_swap' and needs_handoff(clips[position-1].get('warp'),clip.get('warp'),style=plan.get('style','default')):
+                    percussion_args,percussion_report=final_drum_estimates(previous_tail,block,sample_rate,directory/f'percussion-{position:02}',ffmpeg=ffmpeg)
+                    transition['percussion_estimates']=percussion_report
+                mixed, evidence = blend(previous_tail, block, sample_rate,
+                    bass_hz=bass_hz if mode == "beatmapped_bass_swap" else 0.0,
+                    beats=transition.get("beats", 64), tonal_conflict=risk, beat_phase=beat_phase,
+                    style=plan.get('style','default'),
+                    mid_handoff_bars=transition.get('mid_handoff_bars'),
+                    bass_handoff_beats=transition.get('bass_handoff_beats'),**percussion_args)
+                transition["frequency_processing"] = evidence
+                if percussion_args:
+                    from .percussion import verify_blended_fronts
+                    from .mixing import envelopes
+                    gains,_=envelopes(incoming,transition.get('beats',64),beat_phase=beat_phase,style=plan.get('style','default'),mid_handoff_bars=transition.get('mid_handoff_bars'),bass_handoff_beats=transition.get('bass_handoff_beats'))
+                    mixed,front_report=verify_blended_fronts(mixed,sample_rate,clips[position-1].get('warp'),clip.get('warp'),gains,directory/f'percussion-fronts-{position:02}',ffmpeg=ffmpeg)
+                    transition['blended_front_audit']=front_report
+            path = directory / f'verified-overlap-{position:02d}.wav'
+            sf.write(path, mixed, sample_rate, subtype='FLOAT')
+            return {'path': str(path), 'transition': transitions[position-1]}
+        value = cached('overlap', {'outgoing': clips[position-1], 'incoming': clip,
+            'transition': transition, 'style': plan.get('style', 'default'), 'bass_hz': bass_hz,
+            'sample_rate': sample_rate}, produce, directory)
+        transitions[position-1] = value['transition']
+        return value['path']
+
+    for position, identity in enumerate(order):
+        warning_start = len(warnings)
+        dependencies = {'record': by_id[identity], 'prepared': prepared_files.get(identity, prepared_files.get(str(by_id[identity]['path']), str(by_id[identity]['path']))),
+            'head': head[identity], 'tail': tail[identity], 'reset_head': reset_head.get(identity), 'reset_tail': reset_tail.get(identity),
+             'section': sections.get(identity),
+            'previous': transitions[position-1] if position else None,
+            'next': transitions[position] if position < len(transitions) else None, 'controls': render_controls}
+        result = cached('clip', dependencies, lambda: prepare_clip(position, identity), directory)
+        del warnings[warning_start:]
+        warnings.extend(result['warnings'])
+        clip = result['clip']
+        clip['id'] = identity
+        clip['source_path'] = str(by_id[identity]['path'])
+        clips.append(clip)
+        if position:
+            transitions[position-1] = result['previous_transition']
+        if position < len(transitions):
+            transitions[position] = result['next_transition']
+        if position:
+            from .kick_grid import validate_overlap_attacks
+            try:
+                validate_overlap_attacks(clips[-2:], [transitions[position-1]])
+            except ValueError as error:
+                raise RenderError(str(error)) from error
+            overlap_files.append(prepare_overlap(position))
     from .kick_grid import validate_overlap_attacks
     try:
         validate_overlap_attacks(clips,transitions)
@@ -1216,7 +1331,9 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
     previous_tail: np.ndarray | None = None
     previous_vocal: np.ndarray | None = None
     try:
-        with sf.SoundFile(temporary, "w", samplerate=sample_rate, channels=2, subtype="FLOAT", format="WAV") as dest:
+        predicted_frames = sum(c['output_frames'] for c in clips) - sum(t['overlap_frames'] for t in transitions)
+        container = "RF64" if predicted_frames * 8 + 4096 >= 2**32 else "WAV"
+        with sf.SoundFile(temporary, "w", samplerate=sample_rate, channels=2, subtype="FLOAT", format=container) as dest:
             for position, clip in enumerate(clips):
                 incoming = transitions[position - 1]["overlap_frames"] if position else 0
                 outgoing = transitions[position]["overlap_frames"] if position < len(transitions) else 0
@@ -1230,55 +1347,11 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                         block = original.read(incoming, dtype="float32", always_2d=True)
                         if previous_tail is None or len(block) != incoming:
                             raise RenderError("Missing overlap audio")
-                        mode = transitions[position - 1]["mode"]
-                        if mode == "free_time_echo_bridge":
-                            from .bridges import echo_bridge
-                            mixed, evidence = echo_bridge(previous_tail, block, sample_rate,
-                                **transitions[position - 1]["echo_parameters"])
-                            transitions[position - 1]["echo_processing"] = evidence
-                            dest.write(mixed)
-                        elif mode == "outgoing_only_vinyl":
-                            from .creative import mix_tape_exit
-                            parameters = transitions[position - 1]["vinyl_parameters"]
-                            mixed, evidence = mix_tape_exit(previous_tail, block, sample_rate,
-                                outgoing_release_seconds=parameters["outgoing_release_seconds"], bass_hz=bass_hz)
-                            transitions[position - 1]["vinyl_gain_processing"] = evidence
-                            dest.write(mixed)
-                        else:
-                            from .mixing import blend
-                            from .stems import handoff
-                            transition = transitions[position - 1]
-                            incoming_vocal = None
-                            if clip.get("aligned_vocal_path"):
-                                with sf.SoundFile(clip["aligned_vocal_path"]) as voice:
-                                    incoming_vocal = voice.read(incoming, dtype="float32", always_2d=True)
-                            previous_tail, block, voice_report = handoff(previous_tail, block, previous_vocal, incoming_vocal)
-                            transition["vocal_processing"] = voice_report
-                            risk = any(float((transition.get(role) or {}).get("sustained_midband_proxy") or 0) > .5
-                                       for role in ("outgoing_cue", "incoming_cue"))
-                            clock = transition.get('shared_clock')
-                            beat_phase = (np.interp(np.arange(incoming), clock['output_frames'], clock['phase']) / clock['beats']) if clock else None
-                            if beat_phase is not None:
-                                beat_phase[-1] = 1.
-                            from .percussion import needs_handoff,final_drum_estimates
-                            percussion_args={}
-                            if mode=='beatmapped_bass_swap' and needs_handoff(clips[position-1].get('warp'),clip.get('warp'),style=plan.get('style','default')):
-                                percussion_args,percussion_report=final_drum_estimates(previous_tail,block,sample_rate,directory/f'percussion-{position:02}',ffmpeg=ffmpeg)
-                                transition['percussion_estimates']=percussion_report
-                            mixed, evidence = blend(previous_tail, block, sample_rate,
-                                bass_hz=bass_hz if mode == "beatmapped_bass_swap" else 0.0,
-                                beats=transition.get("beats", 64), tonal_conflict=risk, beat_phase=beat_phase,
-                                style=plan.get('style','default'),
-                                mid_handoff_bars=transition.get('mid_handoff_bars'),
-                                bass_handoff_beats=transition.get('bass_handoff_beats'),**percussion_args)
-                            transition["frequency_processing"] = evidence
-                            if percussion_args:
-                                from .percussion import verify_blended_fronts
-                                from .mixing import envelopes
-                                gains,_=envelopes(incoming,transition.get('beats',64),beat_phase=beat_phase,style=plan.get('style','default'),mid_handoff_bars=transition.get('mid_handoff_bars'),bass_handoff_beats=transition.get('bass_handoff_beats'))
-                                mixed,front_report=verify_blended_fronts(mixed,sample_rate,clips[position-1].get('warp'),clip.get('warp'),gains,directory/f'percussion-fronts-{position:02}',ffmpeg=ffmpeg)
-                                transition['blended_front_audit']=front_report
-                            dest.write(mixed)
+                        with sf.SoundFile(overlap_files[position-1]) as verified:
+                            mixed = verified.read(dtype='float32', always_2d=True)
+                        if len(mixed) != incoming:
+                            raise RenderError('Verified overlap length changed')
+                        dest.write(mixed)
                         transitions[position - 1]["set_start_frame"] = cursor - incoming
                         transitions[position - 1]["set_end_frame"] = cursor
                         transitions[position - 1]["set_start_seconds"] = (cursor - incoming) / sample_rate

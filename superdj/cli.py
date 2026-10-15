@@ -26,21 +26,24 @@ def analyze(args):
     from .analysis import analyze_track
     playlist = _playlist(args)
     overrides = read_json(args.grid_json) if args.grid_json else {}
-    records = []
-    for index, track in enumerate(playlist["tracks"], 1):
+    from .execution import current
+    def one(index_track):
+        index, track = index_track
         print(f"Analyzing {index}/{len(playlist['tracks'])}: {Path(track['path']).name}", flush=True)
-        records.append(analyze_track(track["path"], track_id=track["id"], ffmpeg=args.ffmpeg,
+        result = analyze_track(track["path"], track_id=track["id"], ffmpeg=args.ffmpeg,
             backend=args.backend, cache_dir=args.cache, checkpoint=args.checkpoint, device=args.device,
-            grid=overrides.get(track["id"]), allow_model_download=args.download_model))
+            grid=overrides.get(track["id"]), allow_model_download=args.download_model)
         if track.get("protected_ranges"):
             import math
             ranges = track["protected_ranges"]
             if not isinstance(ranges, list) or any(not isinstance(r, list) or len(r) != 2 or
                 any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) for v in r) or
-                not 0 <= r[0] < r[1] <= records[-1]["duration"] for r in ranges):
+                not 0 <= r[0] < r[1] <= result["duration"] for r in ranges):
                 raise ValueError("Protected ranges must be valid [start,end] source seconds")
-            records[-1]["protected_ranges"] = ranges
-        write_json(Path(args.work) / "records.partial.json", records)
+            result["protected_ranges"] = ranges
+        return result
+    values = list(enumerate(playlist['tracks'], 1))
+    records = current().map(one, values) if current() else list(map(one, values))
     write_json(Path(args.work) / "records.json", records)
     return records
 
@@ -148,8 +151,10 @@ def render(args, records=None, planned=None):
     for record in records:
         item = prepared[record["id"]]
         if item.get("loudness_lufs") is None:
-            measured = measure_audio(item["path"], ffmpeg=args.ffmpeg, ffprobe=args.ffprobe,
-                                     log=work / f"{record['id']}_prepared_qa.log")
+            from .execution import cached
+            measured = cached("prepared_measurements", {"audio": item["path"], "ffmpeg": args.ffmpeg, "ffprobe": args.ffprobe},
+                lambda: measure_audio(item["path"], ffmpeg=args.ffmpeg, ffprobe=args.ffprobe,
+                                     log=work / f"{record['id']}_prepared_qa.log"), work / "measurement_artifacts")
             item["source_measurements"] = measured
             item["loudness_lufs"] = measured["integrated_lufs"]
         record["loudness_lufs"] = item["loudness_lufs"]
@@ -565,6 +570,9 @@ def main(argv=None):
     mp.add_argument("--output")
     mp.add_argument("--name")
     mp.add_argument("--work", help=argparse.SUPPRESS)
+    mp.add_argument("--cache", help="Opt in to a persistent content cache outside the repository")
+    mp.add_argument("--no-cache", action="store_true", help="Use temporary scratch only; remove it after the run")
+    mp.add_argument("--jobs", type=int, choices=range(1,5), help="Bound independent track tasks (1-4)")
     ap = subs.add_parser("analyze")
     ap.add_argument("--work", required=True)
     _audio(ap); _source(ap)
@@ -651,7 +659,13 @@ def main(argv=None):
     elif args.command == "render":
         render(args)
     elif args.command == "run":
-        records = analyze(args); planned = plan(args, records); render(args, records, planned)
+        from .execution import execution
+        from .cues import runtime_config
+        runtime = runtime_config()
+        with execution(args.cache, jobs=runtime.get('jobs', 1), devices=runtime.get('gpu_devices', ()),
+                       report=Path(args.output) / 'performance.json') as session:
+            args.cache = str(session.root)
+            records = analyze(args); planned = plan(args, records); render(args, records, planned)
     elif args.command == "archive-audit":
         archive_audit(args)
     else:

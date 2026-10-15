@@ -21,7 +21,8 @@ from typing import Any, Mapping
 import numpy as np
 
 SCHEMA_VERSION = 1
-ANALYSIS_VERSION = "superdj-analysis-1.6"
+ANALYSIS_VERSION = "superdj-analysis-1.7"
+_TRACKERS = {}
 SAMPLE_RATE = 22050
 HOP = 512
 N_FFT = 2048
@@ -50,6 +51,9 @@ def _cache_directory(path: str | Path | None) -> Path:
 
 
 def _sha256(path: Path) -> str:
+    from .execution import current
+    if current():
+        return current().digest(path)
     digest = hashlib.sha256()
     with path.open("rb") as stream:
         for block in iter(lambda: stream.read(1024 * 1024), b""):
@@ -95,17 +99,12 @@ def prepare_beat_model(checkpoint: str = "final0", *, cache_dir: str | Path | No
 
 
 def _decode(path: Path, cache: Path, ffmpeg: str) -> tuple[Path, np.memmap]:
+    from .audio import decode_f32_file
     fd, name = tempfile.mkstemp(prefix="analysis-", suffix=".f32", dir=cache)
     os.close(fd)
     temporary = Path(name)
     try:
-        result = subprocess.run([str(ffmpeg), "-nostdin", "-hide_banner", "-v", "error", "-i", str(path),
-                                 "-map", "0:a:0", "-ac", "1", "-ar", str(SAMPLE_RATE),
-                                 "-f", "f32le", "-y", str(temporary)], capture_output=True)
-        if result.returncode:
-            raise RuntimeError(result.stderr.decode("utf-8", errors="replace")[-2000:])
-        if temporary.stat().st_size < 4 or temporary.stat().st_size % 4:
-            raise ValueError("Decoder returned no usable audio")
+        decode_f32_file(path, temporary, sample_rate=SAMPLE_RATE, ffmpeg=ffmpeg)
         return temporary, np.memmap(temporary, dtype="<f4", mode="r")
     except BaseException:
         temporary.unlink(missing_ok=True)
@@ -347,7 +346,10 @@ def _beat_this(signal: np.ndarray, checkpoint: Path, device: str) -> tuple[np.nd
     # A CPU profile should not spawn dozens of workers for a single track.
     if device == "cpu":
         torch.set_num_threads(min(4, os.cpu_count() or 1))
-    tracker = Audio2Frames(checkpoint_path=str(checkpoint), device=device, float16=False)
+    signature = (str(checkpoint), _sha256(checkpoint), device)
+    if signature not in _TRACKERS:
+        _TRACKERS[signature] = Audio2Frames(checkpoint_path=str(checkpoint), device=device, float16=False)
+    tracker = _TRACKERS[signature]
     beat_logits, downbeat_logits = tracker(np.asarray(signal), SAMPLE_RATE)
     beats, raw_downbeats = Postprocessor(type="minimal")(beat_logits, downbeat_logits)
     beats = np.asarray(beats, dtype=float)
@@ -556,20 +558,52 @@ def analyze_track(path: str | Path, *, ffmpeg: str = "ffmpeg", cache_dir: str | 
     from .cues import configuration, infer, hybrid_candidates
     from .stems import configuration as stem_configuration, separate
     cue_config = configuration() if cue_backend == "hybrid" else None
+    if cue_config is not None:
+        from .audio import ffmpeg_executable, DECODER_VERSION
+        cue_config = {**cue_config, 'ffmpeg': ffmpeg_executable(ffmpeg), 'audio_decoder': DECODER_VERSION}
     stem_config = stem_configuration()
-    cache = _cache_directory(cache_dir)
+    from .execution import current
+    cache = _cache_directory(cache_dir or (current().root if current() else None))
     source_hash = _sha256(source)
-    model_path = prepare_beat_model(checkpoint, cache_dir=cache, allow_download=allow_model_download) if backend == "beat_this" and grid is None else None
+    from .cues import runtime_config
+    runtime = runtime_config()
+    model_cache = runtime.get('model_cache') or runtime.get('cache')
+    if cache_dir and (Path(cache_dir)/'models'/f'{checkpoint}.ckpt').is_file():
+        model_cache = cache_dir
+    model_path = prepare_beat_model(checkpoint, cache_dir=model_cache, allow_download=allow_model_download) if backend == "beat_this" and grid is None else None
     model_hash = _sha256(model_path) if model_path else None
     options = {"version": ANALYSIS_VERSION, "source_sha256": source_hash, "backend": backend,
-               "model_sha256": model_hash, "device": device, "grid": grid, "track_id": track_id,
+               "model_sha256": model_hash, "device": device, "grid": grid, "decoder": ffmpeg,
                "cue_backend": cue_backend, "cue_configuration": cue_config, "stem_configuration": stem_config}
+    from .execution import identity
+    options["decoder"] = identity(ffmpeg)
+    options["engine"] = current().objects.engine if current() else None
+    options["gpu_devices"] = list(current().devices) if current() else []
+    from .execution import environment
+    options['cue_environment'] = environment(cue_config['python']) if cue_config else None
+    options['stem_environment'] = environment(stem_config['python']) if stem_config else None
+    options['beat_environment'] = environment(runtime.get('beat_python') or __import__('sys').executable)
     cache_key = hashlib.sha256(json.dumps(options, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
     record_path = cache / "analysis" / f"{cache_key}.json"
-    if use_cache and record_path.is_file():
-        record = json.loads(record_path.read_text(encoding="utf-8"))
-        record["path"] = str(source)
-        return record
+    digest_path = record_path.with_suffix(".digest.json")
+    if use_cache and record_path.is_file() and digest_path.is_file():
+        try:
+            from .execution import sha256
+            if sha256(record_path) != json.loads(digest_path.read_text(encoding="utf8"))["sha256"]:
+                raise ValueError("Analysis cache checksum mismatch")
+            record = json.loads(record_path.read_text(encoding="utf-8"))
+            from .execution import sha256
+            vocal = record.get('vocal_stem') or {}
+            hashes = vocal.get('artifact_sha256', {})
+            valid = not vocal or (hashes and all(sha256(vocal[name]) == digest for name, digest in hashes.items()))
+            if valid:
+                record['id'] = track_id or source_hash[:16]
+                record['path'] = str(source)
+                if current(): current().count('analysis_hits')
+                return record
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
+    if current(): current().count('analysis_misses')
     temporary, audio = _decode(source, cache, ffmpeg)
     try:
         duration = len(audio) / SAMPLE_RATE
@@ -577,7 +611,18 @@ def analyze_track(path: str | Path, *, ffmpeg: str = "ffmpeg", cache_dir: str | 
         if grid is not None:
             beats, downbeats, grid_info = _imported_grid(grid, duration)
         elif backend == "beat_this":
-            beats, downbeats, model_info = _beat_this(audio, model_path, device)
+            if current():
+                from .cues import runtime_config
+                python = runtime_config().get('beat_python') or __import__('sys').executable
+                signal_file = temporary.with_suffix('.npy')
+                try:
+                    np.save(signal_file, audio)
+                    result = current().model(python, 'beat', {'signal': str(signal_file), 'checkpoint': str(model_path), 'device': device})
+                    beats, downbeats, model_info = np.asarray(result[0]), np.asarray(result[1]), result[2]
+                finally:
+                    signal_file.unlink(missing_ok=True)
+            else:
+                beats, downbeats, model_info = _beat_this(audio, model_path, device)
             beats, downbeats = _times(beats, duration, "beats"), _times(downbeats, duration, "downbeats")
             grid_info = {"status": "model_predicted", "source": MODEL_SOURCE, "human_reviewed": False, **model_info,
                          "first_downbeat_s": float(downbeats[0]) if len(downbeats) else None}
@@ -671,6 +716,9 @@ def analyze_track(path: str | Path, *, ffmpeg: str = "ffmpeg", cache_dir: str | 
         try:
             atomic.write_text(json.dumps(record, ensure_ascii=False, indent=2, allow_nan=False), encoding="utf-8")
             atomic.replace(record_path)
+            from .storage import write_json
+            from .execution import sha256
+            write_json(digest_path, {"sha256": sha256(record_path)})
         finally:
             atomic.unlink(missing_ok=True)
         return record
