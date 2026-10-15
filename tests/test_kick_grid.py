@@ -111,6 +111,37 @@ def test_missing_source_hit_is_not_reported_as_verified(tmp_path):
     assert 12 not in supported
     assert warp['anchors'][0]['source_frame']==0 and warp['anchors'][-1]['source_frame']==sf.info(path).frames
 
+
+def test_bass_recovery_finds_a_real_missed_shape_but_not_a_missing_kick(tmp_path):
+    from superdj.kick_grid import augment_source_attacks
+    source,warp,sr=fixture(tmp_path,missing=12)
+    audio,_=sf.read(source,dtype='float32',always_2d=True)
+    times=np.arange(.3,17.4,.503)
+    centres=[p['source_seconds'] for p in warp['input_output_beat_mapping']['head'][1:-1]]
+    # Withhold a real event and one actually absent kick from the established
+    # family. Bass recovery must distinguish them using native waveform data.
+    accepted=[{'index':i,'time':float(times[i+1]),'eligible':True}
+              for i in range(len(centres)) if i not in (11,19)]
+    recovered=augment_source_attacks(audio,sr,centres,accepted,attack_band_hz=(35,180))
+    added={r['index']:r for r in recovered if r['index'] not in {p['index'] for p in accepted}}
+    assert 19 in added and abs(added[19]['time']-times[20])<.001
+    assert 11 not in added
+
+
+def test_fine_alignment_combines_views_without_duplicate_timing_controls(tmp_path):
+    source,warp,sr=fixture(tmp_path)
+    calls=[]
+    def measure(path,mapping,rate):
+        calls.append(True)
+        delay=.004 if len(calls)==1 else 0.
+        events=[{'role':'head','beat':i,'view':view,'grid_output_seconds':.3+i*.5,
+                 'observed_seconds':.3+i*.5+delay}
+                for i in range(1,30) for view in ('primary','bass_body')]
+        return {'measured':events,'maximum_measured_drift_seconds':delay,'unverified':[]}
+    fine_align_rendered(source,warp,sr,audit_function=measure)
+    times=warp['fine_attack_timing']['head']['times']
+    assert len(times)==len(set(times)) and len(times)==31
+
 def test_zero_coverage_stays_explicit(tmp_path):
     path,warp,sr=fixture(tmp_path)
     t=np.arange(sf.info(path).frames)/sr;sf.write(path,np.column_stack([.05*np.sin(2*np.pi*150*t)]*2),sr,subtype='FLOAT')
@@ -176,6 +207,37 @@ def test_one_missed_hit_cannot_hide_in_average_or_source_latency():
 def test_zero_common_events_cannot_pass():
     with pytest.raises(ValueError,match='no adequate shared'):
         validate_overlap_attacks([{'warp':{}},{'warp':{}}],[{'from':'a','to':'b','tempo_technique':'shared_phase_sync','beats':128}])
+
+
+def test_correct_primary_front_cannot_hide_one_late_bass_attack():
+    def clip(role):
+        points=[{'role':role,'beat':i,'view':view,'grid_output_seconds':i*.5,
+                 'observed_seconds':i*.5+(.02 if role=='tail' and view=='bass_body' and i==41 else 0.)}
+                for i in range(1,128) for view in ('primary','bass_body')]
+        return {'warp':{'post_render_transient_audit':{'final':{'measured':points}}}}
+    with pytest.raises(ValueError,match='20.00 ms'):
+        validate_overlap_attacks([clip('tail'),clip('head')],
+            [{'from':'a','to':'b','tempo_technique':'shared_phase_sync','beats':128}])
+
+
+def test_equal_primary_observations_cannot_hide_opposing_bass_residuals():
+    def clip(role):
+        points=[{'role':role,'beat':i,'view':view,'grid_output_seconds':i*.5,
+                 'observed_seconds':i*.5+(.002 if view=='primary' or role=='head' else -.002)}
+                for i in range(1,128) for view in ('primary','bass_body')]
+        return {'warp':{'post_render_transient_audit':{'final':{'measured':points}}}}
+    with pytest.raises(ValueError,match='4.00 ms'):
+        validate_overlap_attacks([clip('tail'),clip('head')],
+            [{'from':'a','to':'b','tempo_technique':'shared_phase_sync','beats':128}])
+
+
+def test_recovered_bass_event_cannot_disappear_from_rendered_verification():
+    clip={'id':'a','warp':{'source_kick_alignment':{'tail':{
+        'low_frequency_gap_recovery':{'recovered_beats':[41]}}},
+        'post_render_transient_audit':{'final':{'measured':[]}}}}
+    with pytest.raises(ValueError,match='recovered source bass attacks remain unverified'):
+        validate_overlap_attacks([clip,{'warp':{}}],
+            [{'from':'a','to':'b','tempo_technique':'shared_phase_sync','beats':128}])
 
 def test_interlocking_rhythms_keep_individual_clock_verification():
     def clip(role,indices,miss=None):

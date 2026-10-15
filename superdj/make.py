@@ -36,10 +36,11 @@ def _make(args):
         from .history import unseen_files
         files,exclusions=unseen_files(files)
         if not files:raise ValueError('No unused tracks remain in the folder; provide another collection or explicitly allow repeats')
-    from .defaults import planning_defaults
+    from .defaults import planning_defaults,playback_defaults
     preferences = planning_defaults(style=getattr(args, 'style', None),
         harmonic_mode=getattr(args, 'harmonic_mode', None),
         energy_arc=getattr(args, 'energy_arc', None), runtime=runtime)
+    playback_defaults(long_play=getattr(args,'long_play',False),target_play_seconds=getattr(args,'track_play_seconds',None))
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S_%f")
     output = private_path(args.output or runtime.get('private_output_root') or runtime.get("output_root") or files[0].parent / "AI_Super_DJ")
     from .execution import current
@@ -99,6 +100,8 @@ def _make(args):
             "--energy-arc", preferences['energy_arc'],
             "--mode", "fixed" if args.keep_order else "auto", "--no-mp3",
             "--sample-rate", str(sample_rate)]
+    if getattr(args,'long_play',False):argv.append('--long-play')
+    if getattr(args,'track_play_seconds',None) is not None:argv += ['--track-play-seconds',str(args.track_play_seconds)]
     argv += ["--cache", str(current().root)]
     if runtime.get("beat_checkpoint"):
         argv += ["--checkpoint", runtime["beat_checkpoint"]]

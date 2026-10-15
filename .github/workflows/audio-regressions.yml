@@ -1,0 +1,32 @@
+name: Audio regressions
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      SUPERDJ_FFMPEG: /usr/bin/ffmpeg
+      SUPERDJ_FFPROBE: /usr/bin/ffprobe
+      SUPERDJ_RUBBERBAND: /usr/bin/rubberband
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Prepare real audio backends
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes ffmpeg rubberband-cli libsndfile1
+      - name: Install engine and test dependencies
+        run: python -m pip install -e '.[test,repair]'
+      - name: Check defaults, duration limits, attack alignment and export
+        run: python -m pytest -q
