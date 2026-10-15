@@ -1,9 +1,8 @@
 # Transition preference policy
 
-Version 0.9 uses F shared-phase SYNC as the standard transition for newly built
-sets, following the user's later listening feedback. This supersedes the older
-ordinary-first/fallback policy. Reviewed montages and explicit cue locks remain
-constraints.
+Newly built sets use DJ Zhilin shared-phase SYNC with Mood ordering by default.
+The older F/SYNC envelopes remain available through explicit `--style sync`.
+Reviewed montages and explicit cue locks remain constraints.
 
 Both decks consume one integrated cubic tempo curve and identical beat output
 frames. Solo bodies retain native tempo. The intended map is checked separately
@@ -14,12 +13,21 @@ estimates and locally valid beat/bar windows. Prefer 32-bar overlaps, 16 above
 20% temporary tempo change; DJ Zhilin also prefers 32 at close tempos. Automatically
 shorten when evidence or a short source would otherwise erase its core.
 
-Target 180–240 seconds of solo music; hard cap 300. Keep at least 120 seconds
-including overlaps. A small deficit can use one short stable whole-bar repeat
+Target 180–240 seconds of full playback including both overlaps; hard cap 300
+on actual rendered frames. Solo time excludes the overlaps and receives no extra
+three-to-four-minute allowance. Keep at least 120 seconds including overlaps. A small deficit can use one short stable whole-bar repeat
 inside the body: at most four bars and ten seconds. Apply it identically to
 prepared mixture and voice, retain the source and record the timeline edit.
 Protected ranges/approved locks do not receive this edit. Larger/unrepairable
 deficits stop instead of silently bypassing the minimum.
+
+Long playback is a per-request opt-in: `--long-play` targets 360 seconds with
+a 420-second full-play cap; `--track-play-seconds` can set another requested
+target. Without that flag, targets outside 180–240 seconds are rejected and
+the full-play cap cannot exceed 300. The renderer also rejects a raised cap
+in section metadata without `allow_long_play: true`. Workstation preferences
+do not enable this mode. Old plans with a solo-only budget still receive the
+ordinary 300-second full-play check.
 
 Complementary bands at 180/3500 Hz reconstruct the source. Bass transfers over
 four shared beats near 55% of the transition. Mids transfer over 8–16 beats
@@ -38,7 +46,7 @@ F long, F short, E partial rhythms, C for an upward tempo change, deliberate
 cut only by explicit request. The standard CLI does not automatically run that
 entire creative ladder. Lower-level legacy auto, echo, vinyl and partial-rhythm
 APIs remain available for reviewed experiments. New plan/run/make sets use
-shared SYNC and a solo duration budget.
+shared SYNC and a full playback duration budget.
 
 Explicit overlap_bars supports 2/4/8/16/32/40/44. Native exceptions of 8–256 beats
 require both exact source locks; 51 beats is not a whole 4/4 phrase. Preserve

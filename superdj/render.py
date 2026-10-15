@@ -549,6 +549,17 @@ def _warp_anchors(record: Mapping[str, Any], *, trim_start: float,
             "trim_start_seconds": trim_start, "trim_end_seconds": trim_end}
 
 
+def _validate_playback_budget(clip, section, sample_rate):
+    """Enforce the full duration of timed PCM, also for legacy solo plans."""
+    maximum = float(section.get('maximum_play_seconds', 300.))
+    if not np.isfinite(maximum) or maximum <= 0:
+        raise RenderError('Full playback maximum must be finite and positive')
+    if maximum > 300 and section.get('allow_long_play') is not True:
+        raise RenderError('Full playback above five minutes requires explicit long-play permission in the plan')
+    if clip['output_frames']/sample_rate > maximum + 1/sample_rate:
+        raise RenderError(f"{clip['id']}: full rendered playback exceeds {maximum:g}s including both overlaps; replan this source")
+
+
 def _measure(path: Path, block: int = 262144) -> dict[str, float]:
     square_sum = 0.0
     count = 0
@@ -1130,7 +1141,9 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                     final_attack=fine_align_rendered(clip_output,warp,sample_rate)
                     protection_roles=[role for role,r in warp.get('source_kick_alignment',{}).items()
                         if len(r['events'])>=8 and (sum(e['role']==role for e in final_attack['measured'])<8
-                        or max((abs(e['delay_seconds']) for e in final_attack['measured'] if e['role']==role),default=0)>.003)]
+                        or max((abs(e['delay_seconds']) for e in final_attack['measured'] if e['role']==role),default=0)>.003
+                        or set((r.get('low_frequency_gap_recovery') or {}).get('recovered_beats',[]))-
+                           {e['beat'] for e in final_attack['measured'] if e['role']==role and e.get('view')=='bass_body'})]
                     if protection_roles:
                         preserve_rendered_attacks(clip_output,prepared_path,warp,sample_rate,gain=gain,roles=protection_roles)
                         warp['native_attack_preservation']['roles']=protection_roles
@@ -1279,11 +1292,13 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                     mid_handoff_bars=transition.get('mid_handoff_bars'),
                     bass_handoff_beats=transition.get('bass_handoff_beats'),**percussion_args)
                 transition["frequency_processing"] = evidence
-                if percussion_args:
-                    from .percussion import verify_blended_fronts
+                if (mode == 'beatmapped_bass_swap' and transition.get('tempo_technique') == 'shared_phase_sync'
+                        and plan.get('style') == 'zhilin'):
+                    from .percussion import verify_blended_fronts,verification_components
                     from .mixing import envelopes
                     gains,_=envelopes(incoming,transition.get('beats',64),beat_phase=beat_phase,style=plan.get('style','default'),mid_handoff_bars=transition.get('mid_handoff_bars'),bass_handoff_beats=transition.get('bass_handoff_beats'))
-                    mixed,front_report=verify_blended_fronts(mixed,sample_rate,clips[position-1].get('warp'),clip.get('warp'),gains,directory/f'percussion-fronts-{position:02}',ffmpeg=ffmpeg)
+                    components=verification_components(previous_tail,block,sample_rate,gains,bass_hz=bass_hz,**percussion_args)
+                    mixed,front_report=verify_blended_fronts(mixed,sample_rate,clips[position-1].get('warp'),clip.get('warp'),gains,directory/f'percussion-fronts-{position:02}',ffmpeg=ffmpeg,components=components)
                     transition['blended_front_audit']=front_report
             path = directory / f'verified-overlap-{position:02d}.wav'
             sf.write(path, mixed, sample_rate, subtype='FLOAT')
@@ -1307,6 +1322,7 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
         clip = result['clip']
         clip['id'] = identity
         clip['source_path'] = str(by_id[identity]['path'])
+        _validate_playback_budget(clip, sections.get(identity) or {}, sample_rate)
         clips.append(clip)
         if position:
             transitions[position-1] = result['previous_transition']
@@ -1324,6 +1340,10 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
         validate_overlap_attacks(clips,transitions)
     except ValueError as error:
         raise RenderError(str(error)) from error
+    # Check actual timed PCM, including both overlaps. A legacy solo-only
+    # plan must not bypass the ordinary five-minute full playback maximum.
+    for clip in clips:
+        _validate_playback_budget(clip, sections.get(clip['id']) or {}, sample_rate)
     temporary = output.with_name(output.stem + ".partial.wav")
     if temporary.exists():
         raise FileExistsError(temporary)

@@ -51,11 +51,13 @@ def analyze(args):
 def plan(args, records=None):
     from .planner import plan_tracks
     from .cues import runtime_config
-    from .defaults import planning_defaults
+    from .defaults import planning_defaults,playback_defaults
     runtime = runtime_config()
     preferences = planning_defaults(style=getattr(args, 'style', None),
         harmonic_mode=getattr(args, 'harmonic_mode', None),
         energy_arc=getattr(args, 'energy_arc', None), runtime=runtime)
+    playback = playback_defaults(long_play=getattr(args,'long_play',False),
+        target_play_seconds=getattr(args,'track_play_seconds',None))
     records = records if records is not None else _records(args.records)
     order = read_json(args.fixed_order) if args.fixed_order else None
     result = plan_tracks(records, mode=args.mode, fixed_order=order, first_id=args.first, last_id=args.last,
@@ -100,18 +102,20 @@ def plan(args, records=None):
                     raise ValueError("transition_policy must be auto, sync or review")
                 edges[pair]["transition_policy"] = policy
             seen.add(pair)
-    # Automatic sets have one shared-phase mixer and an explicit solo budget.
-    # Zhilin prefers 32-bar overlaps with the same 180–240s solo budget.
+    # Automatic sets include both shared-phase overlaps in the full playback
+    # budget. Zhilin prefers compatible 32-bar overlaps within that budget.
     result['style'] = preferences['style']
     result['workflow_preferences'] = preferences
     result['mixing_preferences'] = dict(preferred_overlap_bars=32,
-        target_solo_seconds=210, target_solo_range_seconds=[180, 240], maximum_solo_seconds=300,
+        **playback,
+        duration_budget_basis='full deck including incoming and outgoing overlaps',
         curve_profile_status=('configured DJ Zhilin reference; validated during mixing'
             if runtime.get('zhilin_profile') else 'packaged approved DJ Zhilin reference; validated during mixing')
             if preferences['style'] == 'zhilin' else 'ordinary SYNC band curves')
     from .compact import arrange_sync
     if all(row.get('downbeats') and row.get('duration', row.get('duration_seconds')) for row in records):
-        result = arrange_sync(result, records, zhilin=preferences['style'] == 'zhilin', ffmpeg=getattr(args, 'ffmpeg', None))
+        result = arrange_sync(result, records, zhilin=preferences['style'] == 'zhilin', ffmpeg=getattr(args, 'ffmpeg', None),
+            **{k:playback[k] for k in ['target_play_seconds','maximum_play_seconds','allow_long_play']})
     else:
         result['section_warnings'] = ['Order-only plan: audio analysis/grid required before compact SYNC rendering']
     write_json(Path(args.work) / "plan.json", result)
@@ -504,7 +508,8 @@ def _planning(parser, seed=True):
     parser.add_argument("--style", choices=STYLE_CHOICES, default=None,
                         help="Mixing curves: portable default zhilin; sync/default selects ordinary SYNC")
     parser.add_argument("--harmonic-mode", choices=HARMONIC_MODES, default=None,
-                        help="Automatic key preference: unchanged classic default; mood/fuzzy are explicit alternatives")
+                        help="Key preference: Mood for DJ Zhilin by default; explicit choices override it")
+    _playback_options(parser)
     parser.add_argument("--mode", choices=("auto", "fixed"), default="auto")
     parser.add_argument("--fixed-order", help="JSON array of every track id, in user order")
     parser.add_argument("--transition-overrides", help="Private JSON array of {from,to,cue_locks?,overlap_bars?} for existing adjacent pairs")
@@ -519,6 +524,11 @@ def _planning(parser, seed=True):
                             help="Opt in to wider shared-tempo plans; disabled by default")
     if seed:
         parser.add_argument("--seed", type=int, default=0)
+
+
+def _playback_options(parser):
+    parser.add_argument('--long-play',action='store_true',help='Explicitly request long track playback; default target 360s, including both overlaps')
+    parser.add_argument('--track-play-seconds',type=float,help='Full playback target including both overlaps: ordinary 180–240s; longer values require --long-play')
 
 
 def _rendering(parser):
@@ -565,6 +575,7 @@ def main(argv=None):
     mp.add_argument("--style", choices=STYLE_CHOICES, default=None)
     mp.add_argument("--harmonic-mode", choices=HARMONIC_MODES, default=None)
     mp.add_argument("--energy-arc", choices=ENERGY_ARCS, default=None)
+    _playback_options(mp)
     mp.add_argument('--allow-repeats',action='store_true',help='Explicitly allow previously used sources in automatic folder selection')
     mp.add_argument("--keep-order", action="store_true", help="Keep supplied file order")
     mp.add_argument("--output")

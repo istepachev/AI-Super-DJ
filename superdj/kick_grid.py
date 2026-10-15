@@ -190,11 +190,24 @@ def refine_source_controls(path,warp,sample_rate,evidence=None):
                     comparison={'matched_source_events':len(pairs),'body_minus_upper_median_seconds':median,'body_minus_upper_10_90_spread_seconds':spread,'upper_front_selected':selected}
                     if selected:band_hz=(180,1200);rows=upper_rows;accepted=upper
             accepted=augment_source_attacks(audio,rate,centres,accepted,attack_band_hz=band_hz)
+        # An upper click family can miss a real kick behind a different fill.
+        # Recover only the already-established same-source waveform in bass;
+        # do not refit a straight line that would discard these events again.
+        bass_recovered=[]
+        if stem and not isolated and len(accepted)>=8:
+            known={r['index'] for r in accepted}
+            recovered=augment_source_attacks(audio,rate,centres,accepted,attack_band_hz=(35,180))
+            bass_recovered=[r for r in recovered if r['index'] not in known]
+            accepted=recovered
         reports[role]={'method':'repeated band-limited attack onset; 20% novelty rise, not amplitude/body maximum',
                        'evidence':'estimated drums' if stem else 'original mixture',
                        'detected':len(rows),'supported':len(accepted),'unsupported':len(rows)-len(accepted),'events':[]}
         reports[role]['attack_band_hz']=list(band_hz)
         if comparison:reports[role]['attack_front_comparison']=comparison
+        reports[role]['low_frequency_gap_recovery']={'executed':bool(stem and not isolated),
+            'recovered_source_events':len(bass_recovered),'attack_band_hz':[35,180],
+            'recovered_beats':[r['index']+1 for r in bass_recovered],
+            'method':'same-source waveform recognition; correlation >=0.90, alternative margin >=0.05; no grid-only events'}
         if stem and stem.get('allow_variable_attack_family'):
             reports[role]['variable_native_meter_evidence_authorized']=True
         reports[role]['attack_kind']='isolated_peak' if isolated else 'percussive_onset'
@@ -224,6 +237,13 @@ def refine_source_controls(path,warp,sample_rate,evidence=None):
             template_path=Path(path).with_name(Path(path).stem+f'-{role}-attack-templates.npz')
             np.savez_compressed(template_path,templates=np.asarray(templates,dtype='float32'))
             reports[role]['attack_templates_path']=str(template_path)
+            # Independently retain the bass-body view of every recognized
+            # source attack, including those recovered behind stronger fills.
+            bass=sosfiltfilt(butter(3,(35,180),btype='bandpass',fs=8000,output='sos'),resample_poly(np.mean(audio,axis=1),8000//divisor,rate//divisor))
+            low_templates=[bass[round(row['time']*8000)-96:round(row['time']*8000)+360] for row in accepted]
+            low_path=Path(path).with_name(Path(path).stem+f'-{role}-bass-attack-templates.npz')
+            np.savez_compressed(low_path,templates=np.asarray(low_templates,dtype='float32'))
+            reports[role]['bass_attack_templates_path']=str(low_path)
         times.append(end);offsets.append(0.)
         reports[role]['inferred_grid_points']=len(mapping)-2-len(accepted)
         for anchor in warp['anchors']:
@@ -273,7 +293,7 @@ def preserve_rendered_attacks(path, source_path, warp, sample_rate, gain=1., sou
         if f.samplerate!=sample_rate:raise ValueError('Attack preservation rate mismatch')
         audio=f.read(dtype='float32',always_2d=True)
     events=sorted(((role,e) for role,r in warp.get('source_kick_alignment',{}).items() if role in roles for e in r['events']),key=lambda item:item[1]['output_seconds'])
-    islands=[];templates_by_role={}
+    islands=[];templates_by_role={};bass_templates_by_role={}
     with sf.SoundFile(source_path) as source:
         if source.samplerate!=sample_rate:raise ValueError('Native attack source rate mismatch')
         for i,(role,event) in enumerate(events):
@@ -290,9 +310,11 @@ def preserve_rendered_attacks(path, source_path, warp, sample_rate, gain=1., sou
                 centre=(event['source_seconds']-source_origin_seconds)*sample_rate;lo=max(0,round(centre-.25*sample_rate));hi=min(source.frames,round(centre+.25*sample_rate));source.seek(lo)
                 context=source.read(hi-lo,dtype='float32',always_2d=True);divisor=math.gcd(sample_rate,8000);band=resample_poly(context.mean(axis=1),8000//divisor,sample_rate//divisor)
                 band_hz=warp['source_kick_alignment'][role].get('attack_band_hz',(100,1400))
+                low=sosfiltfilt(butter(3,(35,180),btype='bandpass',fs=8000,output='sos'),band)
                 band=sosfiltfilt(butter(3,band_hz,btype='bandpass',fs=8000,output='sos'),band);c=round((centre-lo)*8000/sample_rate)
                 if c<96 or c+360>len(band):raise ValueError('Protected attack template lacks context')
                 templates_by_role.setdefault(role,[]).append(band[c-96:c+360])
+                bass_templates_by_role.setdefault(role,[]).append(low[c-96:c+360])
     if not islands:raise ValueError('No supported source attacks to preserve')
     sf.write(path,audio,sample_rate,subtype='FLOAT')
     if record_templates:
@@ -300,6 +322,11 @@ def preserve_rendered_attacks(path, source_path, warp, sample_rate, gain=1., sou
         for role,templates in templates_by_role.items():
             template_path=Path(path).with_name(Path(path).stem+f'-protected-{role}-mixture-templates.npz');np.savez_compressed(template_path,templates=np.asarray(templates,dtype='float32'));paths[role]=str(template_path)
         warp['native_attack_preservation']={'method':'unpitched native attack islands with cosine joins outside the attack template; rendered PCM still requires independent verification','events':islands,'maximum_island_seconds':max(p['frames']/sample_rate for p in islands),'mixture_attack_templates':paths,'template_evidence':'Prepared native mixture at the already identified source percussion attack; require strong waveform identity in actual output PCM'}
+        low_paths={}
+        for role,templates in bass_templates_by_role.items():
+            target=Path(path).with_name(Path(path).stem+f'-protected-{role}-bass-mixture-templates.npz')
+            np.savez_compressed(target,templates=np.asarray(templates,dtype='float32'));low_paths[role]=str(target)
+        warp['native_attack_preservation']['bass_mixture_attack_templates']=low_paths
     return islands
 
 
@@ -324,11 +351,17 @@ def rendered_attack_audit(path,warp,sample_rate):
         if source.get('attack_kind')=='isolated_peak':
             by_index={r['index']:r for r in rows}
             rows=[{**by_index.get(i,{'time':float(centre)}),'eligible':i in by_index} for i,centre in enumerate(centres)]
-        for row,event in zip(rows,source['events']):
+        views=[('primary',rows)]
+        if source.get('bass_attack_templates_path'):
+            protected_bass=warp.get('native_attack_preservation',{}).get('bass_mixture_attack_templates',{}).get(role)
+            with np.load(protected_bass or source['bass_attack_templates_path']) as saved:low_templates=saved['templates']
+            views.append(('bass_body',template_attack_rows(audio,sample_rate,centres,low_templates,minimum_correlation=.90,attack_band_hz=(35,180))))
+        for view,view_rows in views:
+          for row,event in zip(view_rows,source['events']):
             if not row['eligible']:
-                pending.append({'role':role,'beat':event['beat'],'reason':'output attack ambiguous'});continue
+                pending.append({'role':role,'beat':event['beat'],'view':view,'reason':'output attack ambiguous'});continue
             actual=first/sample_rate+row['time'];target=event['output_seconds']
-            measured.append({'role':role,'beat':event['beat'],'expected_seconds':target,'observed_seconds':actual,
+            measured.append({'role':role,'beat':event['beat'],'view':view,'expected_seconds':target,'observed_seconds':actual,
                              'grid_output_seconds':target,'delay_seconds':actual-target,
                              **{k:row[k] for k in ('template_correlation','alternative_peak_margin') if k in row}})
     return {'measured':measured,'unverified':pending,
@@ -341,13 +374,24 @@ def validate_overlap_attacks(clips,transitions,tolerance_seconds=.003):
     reports=[]
     for index,edge in enumerate(transitions):
         if edge.get('tempo_technique')!='shared_phase_sync':continue
-        sides=[]
+        sides=[];observations=[]
         for clip,role in ((clips[index],'tail'),(clips[index+1],'head')):
             audit=(clip.get('warp') or {}).get('post_render_transient_audit',{}).get('final',{})
+            recovered=((clip.get('warp') or {}).get('source_kick_alignment',{}).get(role,{}).get('low_frequency_gap_recovery') or {}).get('recovered_beats',[])
+            observed_bass={p['beat'] for p in audit.get('measured',[]) if p['role']==role and p.get('view')=='bass_body'}
+            if set(recovered)-observed_bass:
+                raise ValueError(f"{clip['id']}: recovered source bass attacks remain unverified in rendered PCM; review the source window")
             # Legacy latency checks retained source offsets. Subtract the
             # actual shared grid here, so two individually accurate warps
             # cannot hide different original attack offsets.
-            sides.append({p['beat']:p['observed_seconds']-p['grid_output_seconds'] for p in audit.get('measured',[]) if p['role']==role})
+            side={};points={}
+            for p in audit.get('measured',[]):
+                if p['role']!=role:continue
+                error=p['observed_seconds']-p['grid_output_seconds']
+                points.setdefault(p['beat'],[]).append(error)
+                if p['beat'] not in side or abs(error)>abs(side[p['beat']]):side[p['beat']]=error
+            sides.append(side)
+            observations.append(points)
         common=sorted(set(sides[0])&set(sides[1]));beats=int(edge['beats'])
         side_maxima=[max((abs(v) for v in side.values()),default=None) for side in sides]
         sparse=len(common)<min(8,beats-1)
@@ -355,7 +399,7 @@ def validate_overlap_attacks(clips,transitions,tolerance_seconds=.003):
             raise ValueError(f"{edge['from']} → {edge['to']}: no adequate shared acoustic attack evidence")
         if any(v is not None and v>tolerance_seconds for v in side_maxima):
             raise ValueError(f"{edge['from']} → {edge['to']}: an individual rendered attack misses the shared clock by {max(v for v in side_maxima if v is not None)*1000:.2f} ms")
-        errors=[{'beat':k,'error_seconds':sides[0][k]-sides[1][k]} for k in common]
+        errors=[{'beat':k,'error_seconds':max((a-b for a in observations[0][k] for b in observations[1][k]),key=abs)} for k in common]
         maximum=max(abs(e['error_seconds']) for e in errors)
         report={'verified_common_beats':len(common),'unverified_beat_indices':[k for k in range(1,beats) if k not in common],
                 'maximum_pair_error_seconds':maximum,'tolerance_seconds':tolerance_seconds,'events':errors,
@@ -414,7 +458,15 @@ def fine_align_rendered(path,warp,sample_rate,attempts=4,tolerance_seconds=.0015
         if audit['maximum_measured_drift_seconds']<=tolerance_seconds:break
         previous=deepcopy(warp.get('fine_attack_timing',{}));controls={}
         for role in ('head','tail'):
-            events=sorted((p for p in audit['measured'] if p['role']==role),key=lambda p:p['grid_output_seconds'])
+            grouped={}
+            for point in audit['measured']:
+                if point['role']==role:grouped.setdefault(point['grid_output_seconds'],[]).append(point)
+            # Primary and bass are independent observations of one physical
+            # event. Use one minimax timing control, then recheck both views.
+            events=[]
+            for stamp,points in sorted(grouped.items()):
+                delays=[p['observed_seconds']-stamp for p in points]
+                events.append({'grid_output_seconds':stamp,'observed_seconds':stamp+(min(delays)+max(delays))/2})
             if not events:continue
             mapping=warp['input_output_beat_mapping'][role]
             start=mapping[0]['output_seconds'];end=mapping[-1]['output_seconds']

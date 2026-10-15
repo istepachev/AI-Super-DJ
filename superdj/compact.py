@@ -1,4 +1,4 @@
-"""Source-only SYNC selection with an explicit solo-play duration budget."""
+"""Source-only SYNC selection with a full-deck playback duration budget."""
 from __future__ import annotations
 
 from copy import deepcopy
@@ -9,18 +9,28 @@ from .sync import shared_clock
 from .rhythm import bass_profile, support, weak_gap
 
 
-def arrange_sync(plan, records, *, target_solo_seconds=210., maximum_solo_seconds=300.,
-                 minimum_play_seconds=120., sample_rate=48000, zhilin=False, ffmpeg=None):
+def arrange_sync(plan, records, *, target_solo_seconds=None, maximum_solo_seconds=None,
+                 target_play_seconds=210., maximum_play_seconds=300.,
+                 minimum_play_seconds=120., sample_rate=48000, zhilin=False, ffmpeg=None,
+                 allow_long_play=False):
     """Choose energetic cores and stable overlap windows without project timings.
 
-    Solo means neither adjacent overlap, not the full deck span. Short sources
+    Full playback includes both adjacent overlaps. Solo excludes them. Short sources
     retain as much usable content as possible. Insufficient evidence/source
     length is recorded, never hidden by silence, repetition or a hard cut.
     Explicit locks/overlap lengths remain mandatory.
     """
-    if not 180 <= target_solo_seconds <= 240 or not target_solo_seconds <= maximum_solo_seconds <= 300:
-        raise ValueError("Solo target must be 180–240 seconds; maximum at most 300")
-    if minimum_play_seconds < 120 or minimum_play_seconds > target_solo_seconds:
+    if (not np.isfinite(target_play_seconds) or not np.isfinite(maximum_play_seconds)
+            or target_play_seconds < 180 or maximum_play_seconds < target_play_seconds
+            or (not allow_long_play and (target_play_seconds > 240 or maximum_play_seconds > 300))):
+        raise ValueError("Full playback target must be 180–240 seconds; maximum at most 300")
+    play_low,play_high=(max(120.,target_play_seconds-30),target_play_seconds+30) if allow_long_play else (180.,240.)
+    if maximum_solo_seconds is None:maximum_solo_seconds=maximum_play_seconds
+    if target_solo_seconds is not None and not 180 <= target_solo_seconds <= 240:
+        raise ValueError("Legacy solo target must be 180–240 seconds; full playback cap still applies")
+    if not 8 <= maximum_solo_seconds <= maximum_play_seconds:
+        raise ValueError("Solo maximum must fit within the full playback maximum")
+    if minimum_play_seconds < 120 or minimum_play_seconds > target_play_seconds:
         raise ValueError("Minimum selected playback must be 120 seconds or longer")
     result = deepcopy(plan)
     by_id = {str(row['id']): row for row in records}
@@ -143,9 +153,15 @@ def arrange_sync(plan, records, *, target_solo_seconds=210., maximum_solo_second
                 if any(start > float(r[0]) or end < float(r[1]) for r in protected):
                     continue
                 played = solo + in_duration + out_duration
-                # Prioritise minimum total playback, then the solo target. A
+                if played > maximum_play_seconds + 1e-6:
+                    continue
+                # Prioritise minimum total playback, then the full-deck target. A
                 # short radio edit is not extended artificially to hit a goal.
-                score = abs(solo - target_solo_seconds) / 30 + 20 * max(0, minimum_play_seconds - played)
+                target_distance = abs(played - target_play_seconds)
+                if target_solo_seconds is not None:
+                    target_distance = abs(solo - target_solo_seconds)
+                score = target_distance / 30 + 20 * max(0, minimum_play_seconds - played)
+                score += 5 * max(0, play_low-played, played-play_high) / 30
                 score -= 4 * mean_between(cumulative, core_start, core_end)
                 score -= .5 * (cue_scores.get(round(start, 4), 0) + cue_scores.get(round(end, 4), 0))
                 score += .7 * (mean_between(activity_sum, start, core_start) + mean_between(activity_sum, core_end, end))
@@ -164,14 +180,15 @@ def arrange_sync(plan, records, *, target_solo_seconds=210., maximum_solo_second
 
     # A source can support each overlap separately but not both and a useful
     # body. Prefer long transitions, but reduce them if doing so recovers the
-    # minimum playback or a three-minute core of an extended source.
+    # minimum playback or the full playback target, including both overlaps.
     def deficiency(position, selection):
         if selection is None:
             return 10000.
         missing = max(0, minimum_play_seconds - selection[4]) * 20
         duration = float(by_id[order[position]].get('duration', by_id[order[position]].get('duration_seconds')))
-        solo_floor = 180 if duration >= 300 else min(120, max(8, duration - 40))
-        missing += max(0, solo_floor - selection[3])
+        play_floor = min(play_low, duration)
+        missing += max(0, play_floor - selection[4])
+        missing += max(0, selection[4]-play_high)
         return missing
 
     for _ in range(len(counts) * 3 + 1):
@@ -192,7 +209,7 @@ def arrange_sync(plan, records, *, target_solo_seconds=210., maximum_solo_second
                     counts[edge_index] = old
         if not trials or max(trials)[0] <= 0:
             if any(s is None for s in selections):
-                raise RenderError(f"{order[failures[0]]}: locks/source/grid leave no compact section")
+                raise RenderError(f"{order[failures[0]]}: locks/source/grid leave no compact section within the {maximum_play_seconds:g}s full playback maximum; review cues/grid instead of extending the track")
             break  # Keep the best evidence-supported short-source exception.
         _, edge_index, count = max(trials)
         counts[edge_index] = count
@@ -204,18 +221,21 @@ def arrange_sync(plan, records, *, target_solo_seconds=210., maximum_solo_second
         _, start, end, solo, played, head, tail = selected
         sections[identity] = {'start': start, 'end': end, 'source_span_seconds': end - start,
             'predicted_solo_seconds': solo, 'predicted_play_seconds': played,
-            'target_solo_seconds': target_solo_seconds, 'maximum_solo_seconds': maximum_solo_seconds,
+            'target_solo_seconds': max(8., target_play_seconds-(played-solo)), 'maximum_solo_seconds': maximum_solo_seconds,
+            'target_play_seconds': target_play_seconds, 'maximum_play_seconds': maximum_play_seconds,
+            'target_play_range_seconds': [play_low,play_high], 'allow_long_play': bool(allow_long_play),
+            'duration_budget_basis': 'full deck including incoming and outgoing overlaps',
             'minimum_play_seconds': minimum_play_seconds,
             'selection': 'energetic source core; CUE-DETR/structure candidates and valid beat/bar windows; no project timing',
             'head_local_evidence': head[3], 'tail_local_evidence': tail[3],
             'incoming_posthandoff_weak_bass_maximum_seconds': weak_gap(profiles[identity], start + .55 * (head[1] - start), head[1]) if position else 0.,
             'locked_start': (result['edges'][position - 1].get('cue_locks') or {}).get('incoming_start_seconds') is not None if position else False,
             'locked_end': (result['edges'][position].get('cue_locks') or {}).get('outgoing_end_seconds') is not None if position < len(result['edges']) else False,
-            'duration_exception': played < minimum_play_seconds or solo < 180}
+            'duration_exception': not play_low <= played <= play_high}
         if played < minimum_play_seconds:
             warnings.append(f"{identity}: source and stable grid permit only {played:.2f}s playback before minimum-playback preparation")
-        elif solo < 180:
-            warnings.append(f"{identity}: short source/grid leaves {solo:.2f}s solo, {played:.2f}s including overlaps")
+        elif not play_low <= played <= play_high:
+            warnings.append(f"{identity}: source/grid/locks leave {played:.2f}s full playback outside the {play_low:g}–{play_high:g}s target; {solo:.2f}s solo")
     for i, edge in enumerate(result['edges']):
         edge.update(transition_policy='sync')
         if not natives[i]:
@@ -223,5 +243,6 @@ def arrange_sync(plan, records, *, target_solo_seconds=210., maximum_solo_second
         edge.setdefault('cue_locks', {}).update(outgoing_end_seconds=sections[edge['from']]['end'],
                                                incoming_start_seconds=sections[edge['to']]['start'])
     result.update(sections=sections, section_warnings=warnings, rhythm_profiles=profiles, style='zhilin' if zhilin else 'default',
-        section_policy='shared-phase SYNC; target 180–240s solo, maximum 300s; minimum 120s including overlaps required before export; short solo exceptions recorded')
+        section_policy=f'shared-phase SYNC; target {play_low:g}–{play_high:g}s full playback including both overlaps, hard maximum {maximum_play_seconds:g}s; minimum 120s; target exceptions recorded',
+        long_play_explicit=bool(allow_long_play))
     return result

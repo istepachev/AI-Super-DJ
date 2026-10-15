@@ -14,6 +14,17 @@ from superdj.defaults import planning_defaults
 from superdj.planner import plan_tracks, transition_score
 
 
+def test_full_playback_defaults_require_an_explicit_long_request():
+    from superdj.defaults import playback_defaults
+    assert playback_defaults()=={'target_play_seconds':210.,'maximum_play_seconds':300.,
+        'target_play_range_seconds':[180.,240.],'allow_long_play':False}
+    with pytest.raises(ValueError,match='--long-play'):playback_defaults(target_play_seconds=360)
+    assert playback_defaults(long_play=True)['target_play_seconds']==360
+    assert playback_defaults(long_play=True,target_play_seconds=600)['maximum_play_seconds']==660
+    for bad in [float('nan'),float('inf'),-1]:
+        with pytest.raises(ValueError):playback_defaults(long_play=True,target_play_seconds=bad)
+
+
 def feature(identity, key='8A', bpm=124, intensity=.5):
     return dict(id=identity, key_camelot=key, bpm=bpm, intensity=intensity,
         bass_intensity=intensity, key_confidence=1., bpm_confidence=1.)
@@ -85,7 +96,7 @@ def test_bare_plan_twenty_uses_mood_build_and_zhilin_sections(tmp_path,monkeypat
     assert result['order'][0]=='t00' and result['order'][-1]=='t19'
     assert len(result['order'])==len(set(result['order']))==20
     assert all(edge['overlap_bars']==32 for edge in result['edges'])
-    assert all(180<=section['predicted_solo_seconds']<=240 for section in result['sections'].values())
+    assert all(180<=section['predicted_play_seconds']<=240 for section in result['sections'].values())
     assert all(section['predicted_solo_seconds']<=300 for section in result['sections'].values())
     assert 'packaged' in result['mixing_preferences']['curve_profile_status']
     assert result['workflow_preferences']['preference_sources']['style']=='portable default'
@@ -104,7 +115,8 @@ def test_order_only_style_propagates_and_explicit_override_keeps_order(tmp_path,
     assert result['order']==['a','c','b'] and result['set_arc']['shape']=='none'
 
 
-def test_make_dispatch_carries_resolved_defaults_and_keep_order(tmp_path,monkeypatch):
+@pytest.mark.parametrize('long_play',[False,True])
+def test_make_dispatch_carries_resolved_defaults_and_keep_order(tmp_path,monkeypatch,long_play):
     import superdj.make as make_module
     import superdj.cli
     files=[]
@@ -117,12 +129,15 @@ def test_make_dispatch_carries_resolved_defaults_and_keep_order(tmp_path,monkeyp
     calls=[]
     monkeypatch.setattr(superdj.cli,'main',lambda argv:calls.append(argv))
     make_module.make(Namespace(inputs=files,style=None,keep_order=True,name='default-flow',
-        output=str(tmp_path/'out'),work=str(tmp_path/'work')))
+        output=str(tmp_path/'out'),work=str(tmp_path/'work'),long_play=long_play,
+        track_play_seconds=420 if long_play else None))
     argv=calls[0]
     assert argv[argv.index('--style')+1]=='zhilin'
     assert argv[argv.index('--harmonic-mode')+1]=='mood'
     assert argv[argv.index('--energy-arc')+1]=='build'
     assert argv[argv.index('--mode')+1]=='fixed'
+    assert ('--long-play' in argv)==long_play
+    if long_play:assert argv[argv.index('--track-play-seconds')+1]=='420'
     playlist=json.loads((tmp_path/'work/playlist.json').read_text(encoding='utf-8'))
     assert [r['path'] for r in playlist['tracks']]==files
 

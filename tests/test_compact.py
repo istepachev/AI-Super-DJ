@@ -15,7 +15,7 @@ from superdj.rhythm import support
 from test_new_workflow import record
 
 
-def test_extended_energetic_core_and_solo_budget_are_distinct_from_deck_span():
+def test_full_playback_budget_includes_both_long_overlaps():
     records = [record('a', 480), record('b', 450), record('c', 480)]
     for row in records:
         row['structure'] = [{'time': t, 'energy': 1. if 100 <= t < 360 else .1,
@@ -26,17 +26,18 @@ def test_extended_energetic_core_and_solo_budget_are_distinct_from_deck_span():
     assert all(edge['transition_policy'] == 'sync' for edge in result['edges'])
     assert all(edge['overlap_bars'] == 32 for edge in result['edges'])
     middle = result['sections']['b']
-    assert 180 <= middle['predicted_solo_seconds'] <= 240
+    assert 180 <= middle['predicted_play_seconds'] <= 240
+    assert middle['predicted_solo_seconds'] < 180
+    assert all(s['predicted_play_seconds'] <= 300 for s in result['sections'].values())
     assert middle['source_span_seconds'] > middle['predicted_solo_seconds'] + 100
     assert middle['start'] > 20
     assert 'sections' not in original
 
 
-def test_short_sources_reduce_overlaps_instead_of_erasing_the_solo_core():
+def test_short_sources_keep_useful_body_and_record_full_duration_exception():
     rows = [record('a', 420), record('b', 150), record('c', 420)]
     result = arrange_sync(plan_tracks(rows, mode='fixed'), rows)
-    assert all(e['overlap_bars'] == 8 for e in result['edges'])
-    assert result['sections']['b']['predicted_solo_seconds'] >= 110
+    assert result['sections']['b']['predicted_solo_seconds'] >= 8
     assert result['sections']['b']['predicted_play_seconds'] >= 120
     assert result['sections']['b']['duration_exception']
 
@@ -72,6 +73,46 @@ def test_explicit_review_is_not_silently_replaced_with_sync():
     plan['edges'][0]['transition_policy'] = 'review'
     with pytest.raises(ValueError, match='cannot be overwritten'):
         arrange_sync(plan, rows)
+
+
+def test_explicit_long_overlaps_never_expand_full_playback_past_five_minutes():
+    rows=[record('a',600),record('b',600),record('c',600)]
+    plan=plan_tracks(rows,mode='fixed')
+    for edge in plan['edges']:edge['overlap_bars']=32
+    result=arrange_sync(plan,rows,target_solo_seconds=240)
+    assert all(section['predicted_play_seconds']<=300 for section in result['sections'].values())
+    assert result['sections']['b']['predicted_solo_seconds']<180
+
+
+@pytest.mark.parametrize('section',[{}, {'target_solo_seconds':210}, {'maximum_play_seconds':300}])
+def test_rendered_full_duration_cannot_bypass_cap_with_legacy_solo_metadata(section):
+    from superdj.render import _validate_playback_budget,RenderError
+    # Same failure as the reported seventh track: its solo was under five
+    # minutes but its complete timed PCM exceeded seven minutes.
+    with pytest.raises(RenderError,match='including both overlaps'):
+        _validate_playback_budget({'id':'seven','output_frames':round(426.136*44100)},section,44100)
+    _validate_playback_budget({'id':'seven','output_frames':300*44100},section,44100)
+
+
+@pytest.mark.parametrize('maximum',[float('nan'),float('inf'),0,-1])
+def test_invalid_rendered_playback_cap_cannot_disable_the_guard(maximum):
+    from superdj.render import _validate_playback_budget,RenderError
+    with pytest.raises(RenderError,match='finite and positive'):
+        _validate_playback_budget({'id':'track','output_frames':210*44100},
+                                  {'maximum_play_seconds':maximum,'allow_long_play':True},44100)
+
+
+def test_long_playback_is_available_only_after_explicit_opt_in():
+    from superdj.render import _validate_playback_budget,RenderError
+    rows=[record('a',600),record('b',600),record('c',600)]
+    original=plan_tracks(rows,mode='fixed')
+    with pytest.raises(ValueError):arrange_sync(original,rows,target_play_seconds=360,maximum_play_seconds=420)
+    result=arrange_sync(original,rows,target_play_seconds=360,maximum_play_seconds=420,allow_long_play=True)
+    assert result['long_play_explicit']
+    assert all(330<=s['predicted_play_seconds']<=390 and s['allow_long_play'] for s in result['sections'].values())
+    _validate_playback_budget({'id':'long','output_frames':360*44100},result['sections']['b'],44100)
+    with pytest.raises(RenderError,match='explicit long-play'):
+        _validate_playback_budget({'id':'long','output_frames':360*44100},{'maximum_play_seconds':420},44100)
 
 
 def test_bass_support_uses_actual_duration_not_number_of_irregular_bins():
@@ -171,7 +212,7 @@ def test_real_compact_render_matches_solo_budget_and_shared_phase(tmp_path):
     for track in result['tracks']:
         expected = plan['sections'][track['id']]['predicted_solo_seconds']
         assert abs(track['solo_seconds'] - expected) < .001
-        assert 180 <= track['solo_seconds'] <= 240
+        assert 180 <= track['output_frames']/sr <= 240
     assert sf.info(tmp_path / 'set.wav').frames == result['total_frames']
 
 

@@ -109,7 +109,12 @@ def compensate_backend_drift(warp: dict, drift: dict, sample_rate: int, *, stren
     """
     for role in ("head", "tail"):
         mapping = warp["input_output_beat_mapping"][role]
-        measured = [p for p in drift["measured"] if p["role"] == role]
+        grouped = {}
+        for point in drift['measured']:
+            if point['role'] == role:
+                grouped.setdefault(point['grid_output_seconds'], []).append(point['delay_seconds'])
+        measured = [{'grid_output_seconds': t, 'delay_seconds': (min(v)+max(v))/2}
+                    for t,v in sorted(grouped.items())]
         if not mapping or not measured:
             continue
         times = np.array([mapping[0]["output_seconds"]] +
