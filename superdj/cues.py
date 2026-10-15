@@ -109,7 +109,9 @@ def _worker(job: dict) -> dict:
     from .audio import decode_mono, ffmpeg_executable, DECODER_VERSION
     rate = 22050
     decoder = ffmpeg_executable(job.get('ffmpeg'))
-    audio = decode_mono(job['source'], sample_rate=rate, ffmpeg=decoder)
+    from .audio import read_decoded
+    audio = (read_decoded(job['decoded_input'], sample_rate=rate, channels=1)
+             if job.get('decoded_input') else decode_mono(job['source'], sample_rate=rate, ffmpeg=decoder))
     mel = librosa.feature.melspectrogram(y=audio, sr=rate, n_fft=2048, hop_length=512, n_mels=128)
     db = librosa.power_to_db(mel, ref=np.max)[::-1]
     mapper = cm.ScalarMappable(cmap="viridis")

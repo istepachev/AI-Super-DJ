@@ -141,9 +141,11 @@ def prepare_tracks(records, work_dir, *, audamcp, ffmpeg="ffmpeg", git="git", no
             noise_profiles=noise_profiles, progress=progress, sample_rate=sample_rate)
     checkout = checkout_info(audamcp, 'audamcp', git)
     def one(record):
+        from .audio import ffmpeg_executable
         track_id = record['id']
         dependencies = {'source': record['path'], 'stems': record.get('vocal_stem'), 'checkout': checkout,
-            'rate': sample_rate, 'decoder': ffmpeg, 'noise': (noise_profiles or {}).get(track_id)}
+            'rate': sample_rate, 'decoder': ffmpeg_executable(ffmpeg),
+            'noise': (noise_profiles or {}).get(track_id)}
         def produce():
             return _prepare_tracks_uncached([record], work_dir, audamcp=audamcp, ffmpeg=ffmpeg, git=git,
                 noise_profiles=noise_profiles, progress=progress, sample_rate=sample_rate)[track_id]
@@ -163,7 +165,8 @@ def _prepare_tracks_uncached(records: list[dict], work_dir: str | Path, *, audam
         track_id = record["id"]
         decoded, output = directory / f"{track_id}_decoded.wav", directory / f"{track_id}.wav"
         progress(f"Preparing {index}/{len(records)}: {Path(record['path']).name}")
-        execute([ffmpeg, "-nostdin", "-hide_banner", "-v", "error", "-y", "-i", record["path"], "-map", "0:a:0", "-ac", "2", "-ar", str(sample_rate), "-c:a", "pcm_f32le", "-rf64", "auto", str(decoded)])
+        from .audio import decode_wave_file
+        decode_wave_file(record['path'], decoded, sample_rate=sample_rate, ffmpeg=ffmpeg)
         result = run_worker({"action": "prepare", "checkout": checkout, "decoded": str(decoded), "output": str(output),
                             "noise_profile": (noise_profiles or {}).get(track_id)}, directory, track_id)
         result["provenance"]["original"] = record["path"]

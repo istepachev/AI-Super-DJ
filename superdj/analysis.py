@@ -549,6 +549,8 @@ def analyze_track(path: str | Path, *, ffmpeg: str = "ffmpeg", cache_dir: str | 
     unless separately imported and reviewed.
     """
     source = Path(path).expanduser().resolve(strict=True)
+    from .audio import ffmpeg_executable
+    ffmpeg = ffmpeg_executable(ffmpeg)
     if not source.is_file():
         raise ValueError("An audio file is required")
     if backend not in ("librosa", "beat_this"):
@@ -577,7 +579,8 @@ def analyze_track(path: str | Path, *, ffmpeg: str = "ffmpeg", cache_dir: str | 
                "cue_backend": cue_backend, "cue_configuration": cue_config, "stem_configuration": stem_config}
     from .execution import identity
     options["decoder"] = identity(ffmpeg)
-    options["engine"] = current().objects.engine if current() else None
+    from .execution import stage_fingerprint
+    options["engine"] = current().objects.engine_for('analysis') if current() else stage_fingerprint('analysis')
     options["gpu_devices"] = list(current().devices) if current() else []
     from .execution import environment
     options['cue_environment'] = environment(cue_config['python']) if cue_config else None

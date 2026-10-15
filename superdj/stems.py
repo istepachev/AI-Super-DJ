@@ -25,11 +25,15 @@ def configuration():
     from .execution import current, sha256, environment
     digest = current().digest if current() else sha256
     weights = {p.name: digest(p) for p in (Path(os.getenv('TORCH_HOME') or Path(os.getenv('XDG_CACHE_HOME') or Path.home()/'.cache')/'torch')/'hub/checkpoints').glob('955717e8-*.th')}
-    return {"python": python, "device": runtime.get("stem_device", "auto"), "model": "htdemucs", "version": "4.0.1", "include_drums": True, "weights": weights, "environment": environment(python)}
+    from .execution import stage_fingerprint
+    return {"python": python, "device": runtime.get("stem_device", "auto"), "model": "htdemucs", "version": "4.0.1", "include_drums": True, "weights": weights, "environment": environment(python),
+            "adapter_engine": current().objects.engine_for('stem') if current() else stage_fingerprint('stem')}
 
 
 def separate(source, source_hash, cache, config, ffmpeg):
     from .execution import object_lock, key_for
+    from .audio import ffmpeg_executable
+    ffmpeg = ffmpeg_executable(ffmpeg)
     cache = Path(cache)
     key = key_for({'source': source_hash, 'config': config, 'ffmpeg': ffmpeg})
     with object_lock(cache / 'stem-locks' / (key + '.lock')):
@@ -96,9 +100,13 @@ def _worker(job):
     rate = model.samplerate
     decoded = Path(job["output"]).with_name("decoded.wav")
     try:
-        execute([job["ffmpeg"], "-nostdin", "-v", "error", "-y", "-i", job["source"],
-                 "-map", "0:a:0", "-ac", "2", "-ar", str(rate), "-c:a", "pcm_f32le", str(decoded)])
-        audio, rate = sf.read(decoded, dtype="float32", always_2d=True)
+        if job.get('decoded_input'):
+            from .audio import read_decoded
+            audio = read_decoded(job['decoded_input'], sample_rate=rate, channels=2)
+        else:
+            execute([job["ffmpeg"], "-nostdin", "-v", "error", "-y", "-i", job["source"],
+                     "-map", "0:a:0", "-ac", "2", "-ar", str(rate), "-c:a", "pcm_f32le", str(decoded)])
+            audio, rate = sf.read(decoded, dtype="float32", always_2d=True)
         mixture = torch.from_numpy(audio.T.copy())
         reference = mixture.mean(0)
         mean, std = reference.mean(), reference.std()

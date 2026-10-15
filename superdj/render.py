@@ -994,8 +994,19 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
     render_controls = {name: locals_value for name, locals_value in render_local_values.items()
         if name in inspect.signature(render_plan).parameters and name not in
         {'plan', 'records', 'prepared_files', 'output_path', 'work_dir', 'progress'}}
+    from .audio import ffmpeg_executable
+    import shutil
+    render_controls['ffmpeg'] = ffmpeg_executable(ffmpeg)
+    render_controls['rubberband'] = shutil.which(str(rubberband)) or str(rubberband)
     overlap_files = []
+    from copy import deepcopy
+    transition_inputs = deepcopy(transitions)
     def prepare_clip(position, identity):
+        from copy import deepcopy
+        transitions = deepcopy(transition_inputs)
+        warnings = []
+        warning_start = 0
+        clips = []
         record = by_id[identity]
         source_path = Path(record["path"])
         prepared = prepared_files.get(identity, prepared_files.get(str(source_path), str(source_path)))
@@ -1008,8 +1019,8 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
         decoded = directory / f"track-{position + 1:02d}-decoded.wav"
         clip_input = directory / f"track-{position + 1:02d}-input.wav"
         clip_output = directory / f"track-{position + 1:02d}-warped.wav"
-        _run([ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-i", str(prepared_path),
-              "-vn", "-ac", "2", "-ar", str(sample_rate), "-c:a", "pcm_f32le", str(decoded)])
+        from .audio import decode_wave_file
+        decode_wave_file(prepared_path, decoded, sample_rate=sample_rate, ffmpeg=ffmpeg)
         info = sf.info(decoded)
         duration = _finite(record.get("duration", record.get("duration_seconds")), "duration")
         if abs(info.duration - duration) > 0.05:
@@ -1108,6 +1119,14 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                 audits = []
                 use_kicks=any(r['events'] for r in warp.get('source_kick_alignment',{}).values())
                 best=None;best_file=directory/f'track-{position+1:02d}-acoustic-best.wav'
+                def rerender():
+                    map_path.write_text(''.join(f"{p['source_frame']} {p['output_frame']}\n"
+                                               for p in warp['anchors']), encoding='ascii')
+                    _run([rubberband, *engine_args, '--centre-focus', '--ignore-clipping', '--quiet',
+                          '--time', f'{ratio:.12f}', '--timemap', map_path.name,
+                          clip_input.name, clip_output.name], cwd=directory)
+                    if sf.info(clip_output).frames != warp['output_frames']:
+                        raise RenderError('Compensated SYNC render did not retain its exact declared duration')
                 for attempt in range(10):
                     if warp.get('source_attack_controls_unapplied'):
                         from .kick_grid import preserve_rendered_attacks
@@ -1121,17 +1140,42 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                     maximum = audit["maximum_measured_drift_seconds"]
                     if maximum is not None and (best is None or maximum<best[0]):
                         best=(maximum,deepcopy(warp),deepcopy(audit));shutil.copy2(clip_output,best_file)
+                    if attempt == 1 and current() and maximum is not None and maximum > .003:
+                        from .acoustic_preview import screen_correction
+                        auditor = (lambda source, output, mapping, rate: rendered_attack_audit(output, mapping, rate)) if use_kicks else transient_drift
+                        try:
+                            candidate = screen_correction(clip_input, warp, audit, sample_rate,
+                                directory/f'track-{position+1:02d}-preview', rubberband=rubberband,
+                                engine_args=engine_args, run=_run, audit=auditor)
+                        except (ValueError, RuntimeError):
+                            candidate = None
+                            current().count('acoustic_preview_fallbacks')
+                        if candidate:
+                            screen_start = deepcopy(warp)
+                            screen_file = directory/f'track-{position+1:02d}-preview-start.wav'
+                            shutil.copy2(clip_output,screen_file)
+                            warp = candidate
+                            rerender()
+                            current().count('acoustic_rerender_attempts')
+                            full_audit = auditor(clip_input, clip_output, warp, sample_rate)
+                            full_maximum = full_audit['maximum_measured_drift_seconds']
+                            covered = lambda evidence: {(p['role'], p['beat'], p.get('view')) for p in evidence['measured']}
+                            if (full_maximum is not None and full_maximum <= .003
+                                    and set().union(*(covered(previous) for previous in audits)) <= covered(full_audit)):
+                                audits.append(full_audit)
+                                best=(full_maximum,deepcopy(warp),deepcopy(full_audit))
+                                shutil.copy2(clip_output,best_file)
+                                current().count('acoustic_preview_confirmed')
+                                screen_file.unlink()
+                                break
+                            current().count('acoustic_preview_fallbacks')
+                            warp=screen_start;screen_file.replace(clip_output)
                     if maximum is None or maximum <= .003 or attempt == 9:
                         break
                     # The backend can switch a transient's alignment at a
                     # detector threshold. Damped follow-ups prevent oscillation.
                     compensate_backend_drift(warp, audit, sample_rate, strength=1.0 if attempt < 2 else .5)
-                    map_path.write_text("".join(f"{p['source_frame']} {p['output_frame']}\n" for p in warp["anchors"]), encoding="ascii")
-                    _run([rubberband, *engine_args, "--centre-focus", "--ignore-clipping", "--quiet",
-                          "--time", f"{ratio:.12f}", "--timemap", map_path.name,
-                          clip_input.name, clip_output.name], cwd=directory)
-                    if sf.info(clip_output).frames != warp["output_frames"]:
-                        raise RenderError("Compensated SYNC render did not retain its exact declared duration")
+                    rerender()
                 if best is None:
                     best_file.unlink(missing_ok=True)
                     raise RenderError(f'{identity}: acoustic attack alignment unresolved; select a supported window or provide percussion evidence')
@@ -1228,9 +1272,12 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                 clips[-1]["rendered_selected_span_in_3_4_minutes"] = 180 <= clips[-1]["duration_seconds"] <= 240
             if 'target_solo_seconds' not in section and not clips[-1]["rendered_selected_span_in_3_4_minutes"]:
                 warnings.append(f"{identity}: rendered selected span outside 3–4 minutes; source/tempo/manual exception retained")
+        def updates(index):
+            return {k: v for k, v in transitions[index].items()
+                    if k not in transition_inputs[index] or v != transition_inputs[index][k]}
         return {'clip': clips.pop(), 'warnings': warnings[warning_start:],
-                'previous_transition': transitions[position-1] if position else None,
-                'next_transition': transitions[position] if position < len(transitions) else None}
+                'previous_transition': updates(position-1) if position else {},
+                'next_transition': updates(position) if position < len(transitions) else {}}
 
     def prepare_overlap(position):
         clip = clips[position]
@@ -1303,38 +1350,53 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
             path = directory / f'verified-overlap-{position:02d}.wav'
             sf.write(path, mixed, sample_rate, subtype='FLOAT')
             return {'path': str(path), 'transition': transitions[position-1]}
+        from .zhilin import reference_profile
+        from .percussion import needs_handoff
+        from .stems import configuration as stem_configuration
+        from .execution import current
+        uses_drums = (transition['mode'] == 'beatmapped_bass_swap' and
+                      needs_handoff(clips[position-1].get('warp'), clip.get('warp'), style=plan.get('style','default')))
         value = cached('overlap', {'outgoing': clips[position-1], 'incoming': clip,
             'transition': transition, 'style': plan.get('style', 'default'), 'bass_hz': bass_hz,
-            'sample_rate': sample_rate}, produce, directory)
+            'sample_rate': sample_rate, 'decoder': render_controls['ffmpeg'],
+            'zhilin_profile': reference_profile() if plan.get('style') == 'zhilin' else None,
+            'stem_configuration': stem_configuration() if uses_drums else None,
+            'gpu_devices': list(current().devices) if current() and uses_drums else []}, produce, directory)
         transitions[position-1] = value['transition']
         return value['path']
 
-    for position, identity in enumerate(order):
-        warning_start = len(warnings)
+    def render_one(item):
+        position, identity = item
         dependencies = {'record': by_id[identity], 'prepared': prepared_files.get(identity, prepared_files.get(str(by_id[identity]['path']), str(by_id[identity]['path']))),
             'head': head[identity], 'tail': tail[identity], 'reset_head': reset_head.get(identity), 'reset_tail': reset_tail.get(identity),
              'section': sections.get(identity),
-            'previous': transitions[position-1] if position else None,
-            'next': transitions[position] if position < len(transitions) else None, 'controls': render_controls}
-        result = cached('clip', dependencies, lambda: prepare_clip(position, identity), directory)
-        del warnings[warning_start:]
-        warnings.extend(result['warnings'])
-        clip = result['clip']
-        clip['id'] = identity
-        clip['source_path'] = str(by_id[identity]['path'])
-        _validate_playback_budget(clip, sections.get(identity) or {}, sample_rate)
-        clips.append(clip)
-        if position:
-            transitions[position-1] = result['previous_transition']
-        if position < len(transitions):
-            transitions[position] = result['next_transition']
-        if position:
-            from .kick_grid import validate_overlap_attacks
-            try:
-                validate_overlap_attacks(clips[-2:], [transitions[position-1]])
-            except ValueError as error:
-                raise RenderError(str(error)) from error
-            overlap_files.append(prepare_overlap(position))
+            'previous': transition_inputs[position-1] if position else None,
+            'next': transition_inputs[position] if position < len(transitions) else None, 'controls': render_controls}
+        return position, identity, cached('clip', dependencies, lambda: prepare_clip(position, identity), directory)
+
+    from contextlib import closing, nullcontext
+    from .execution import current
+    session = current()
+    rendered = session.imap(render_one, enumerate(order)) if session else map(render_one, enumerate(order))
+    with closing(rendered) if session else nullcontext(rendered) as results:
+        for position, identity, result in results:
+            warnings.extend(result['warnings'])
+            clip = result['clip']
+            clip['id'] = identity
+            clip['source_path'] = str(by_id[identity]['path'])
+            _validate_playback_budget(clip, sections.get(identity) or {}, sample_rate)
+            clips.append(clip)
+            if position:
+                transitions[position-1].update(result['previous_transition'])
+            if position < len(transitions):
+                transitions[position].update(result['next_transition'])
+            if position:
+                from .kick_grid import validate_overlap_attacks
+                try:
+                    validate_overlap_attacks(clips[-2:], [transitions[position-1]])
+                except ValueError as error:
+                    raise RenderError(str(error)) from error
+                overlap_files.append(prepare_overlap(position))
     from .kick_grid import validate_overlap_attacks
     try:
         validate_overlap_attacks(clips,transitions)

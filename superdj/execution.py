@@ -14,6 +14,42 @@ import sys
 import tempfile
 import threading
 import time
+import ast
+
+
+_STAGE_ROOTS = {
+    'decode': ('audio',), 'analysis': ('analysis', 'model_worker'), 'preparation': ('adapters',),
+    'stem': ('stems', 'model_worker'),
+    'prepared_measurements': ('quality',), 'bass_profile': ('rhythm',),
+    'clip': ('render', 'model_worker'), 'overlap': ('render', 'mixing', 'percussion', 'stems', 'model_worker'),
+}
+
+
+def stage_fingerprint(stage, source=None):
+    """Include transitive local imports; unknown stages conservatively use all code."""
+    source = Path(source or Path(__file__).parent)
+    pending = list(_STAGE_ROOTS.get(stage, (p.stem for p in source.glob('*.py'))))
+    pending.append('execution')
+    files = {}
+    while pending:
+        name = pending.pop()
+        path = source / (name + '.py')
+        if name in files or not path.is_file():
+            continue
+        data = path.read_bytes()
+        files[name] = hashlib.sha256(data).hexdigest()
+        for node in ast.walk(ast.parse(data)):
+            if isinstance(node, ast.ImportFrom) and node.level == 1:
+                # execution owns orchestration only: stage-specific imports below
+                # are deliberately not transitive dependencies of every stage.
+                if name == 'execution':
+                    continue
+                pending.extend([node.module.split('.')[0]] if node.module else [a.name for a in node.names])
+    if 'zhilin' in files:
+        for folder in ('assets', 'superdj/profiles'):
+            for path in (source.parent / folder).glob('zhilin*.json'):
+                files[str(path.relative_to(source.parent))] = sha256(path)
+    return hashlib.sha256(json.dumps({'code': files, 'environment': environment()}, sort_keys=True).encode()).hexdigest()
 
 _current = ContextVar('superdj_execution', default=None)
 
@@ -64,7 +100,8 @@ def environment(python=sys.executable):
     root = Path(python).expanduser().absolute().parent.parent
     sites = [root/'Lib/site-packages', *root.glob('lib/python*/site-packages')]
     prefixes = ('torch-', 'torchaudio-', 'torchvision-', 'numpy-', 'scipy-', 'librosa-',
-                'transformers-', 'timm-', 'demucs-', 'beat_this-', 'soundfile-')
+                'transformers-', 'timm-', 'demucs-', 'beat_this-', 'soundfile-',
+                'matplotlib-', 'pillow-', 'safetensors-', 'pyloudnorm-', 'pedalboard-', 'noisereduce-')
     result = {}
     for site in sites:
         for metadata in site.glob('*.dist-info/METADATA'):
@@ -108,12 +145,15 @@ class Objects:
     """Immutable stage results: manifest committed only after all copies complete."""
     def __init__(self, root):
         self.root = Path(root)
-        # Any engine change invalidates derived PCM; portable across identical installs.
-        self.engine = hashlib.sha256(b''.join(p.read_bytes() for p in sorted(Path(__file__).parent.glob('*.py'))) +
-            json.dumps(environment(), sort_keys=True).encode()).hexdigest()
+        self.engines = {}
 
     def location(self, stage, key):
-        return self.root / 'objects-v1' / self.engine[:20] / stage / key
+        return self.root / 'objects-v2' / self.engine_for(stage)[:20] / stage / key
+
+    def engine_for(self, stage):
+        if stage not in self.engines:
+            self.engines[stage] = stage_fingerprint(stage)
+        return self.engines[stage]
 
     def get(self, stage, key):
         directory = self.location(stage, key)
@@ -240,6 +280,7 @@ class Session:
         self.thread_devices = {}
         self.digests = {}
         self.memo = {}
+        self.decode_locks = {}
         self.lock = threading.Lock()
         scratch_root = self.root / "scratch"
         scratch_root.mkdir(exist_ok=True)
@@ -268,6 +309,11 @@ class Session:
             times[name] = times.get(name, 0.) + seconds
 
     def model(self, python, kind, job):
+        if kind in {'cue', 'stem'}:
+            from .audio import decoded_artifact
+            job = {**job, 'decoded_input': decoded_artifact(job['source'],
+                sample_rate=22050 if kind == 'cue' else 44100,
+                channels=1 if kind == 'cue' else 2, ffmpeg=job.get('ffmpeg'))}
         # One process per interpreter/device, shared by cue and stem tasks.
         device = job.get('device', 'cpu')
         if self.devices and device != 'cpu':
@@ -285,13 +331,38 @@ class Session:
         return worker.run(kind, job)
 
     def map(self, function, values):
+        return list(self.imap(function, values))
+
+    def imap(self, function, values):
+        """Bounded ordered pipeline; closing it cancels work not started yet."""
         if self.jobs == 1:
-            return list(map(function, values))
+            yield from map(function, values)
+            return
+        from collections import deque
         pool = ThreadPoolExecutor(max_workers=self.jobs)
+        values = iter(values)
+        futures = deque()
         try:
-            futures = [pool.submit(copy_context().run, function, value) for value in values]
-            return [f.result() for f in futures]
+            for _ in range(self.jobs):
+                try:
+                    value = next(values)
+                except StopIteration:
+                    break
+                futures.append(pool.submit(copy_context().run, function, value))
+            while futures:
+                result = futures.popleft().result()
+                # Start the next independent deck while its ready neighbours
+                # are being checked/blended by the consuming thread.
+                try:
+                    value = next(values)
+                except StopIteration:
+                    pass
+                else:
+                    futures.append(pool.submit(copy_context().run, function, value))
+                yield result
         finally:
+            for future in futures:
+                future.cancel()
             pool.shutdown(wait=True, cancel_futures=True)
 
     def close(self):
