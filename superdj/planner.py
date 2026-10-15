@@ -162,7 +162,16 @@ def _weights(overrides: Mapping[str, float] | None) -> dict[str, float]:
     return weights
 
 
-def _harmonic(a: _Track, b: _Track) -> tuple[float, str]:
+def _harmonic(a: _Track, b: _Track, harmonic_mode: str = "classic") -> tuple[float, str]:
+    if harmonic_mode != "classic":
+        # Lazy import: harmonize reuses this module's generic path solvers.
+        from .harmonize import harmonic_relation
+        relation = harmonic_relation(f"{a.key[0]}{a.key[1]}" if a.key else None,
+            f"{b.key[0]}{b.key[1]}" if b.key else None, mode=harmonic_mode)
+        reason = f"{harmonic_mode} key table: {relation['relation']}"
+        if relation['relation'] == 'incompatible':
+            reason += '; distant key, melodic overlap needs review'
+        return relation['cost'], reason
     if a.key is None or b.key is None:
         return 0.75, "unknown key relationship"
     number_a, letter_a = a.key
@@ -218,9 +227,10 @@ def _tempo(a: _Track, b: _Track, limit: float,
 
 
 def _edge(a: _Track, b: _Track, limit: float, weights: Mapping[str, float],
-          allow_reset: bool, ramp_limit: float | None = None) -> dict[str, Any]:
+          allow_reset: bool, ramp_limit: float | None = None,
+          harmonic_mode: str = "classic") -> dict[str, Any]:
     tempo = _tempo(a, b, limit, ramp_limit)
-    harmonic_base, harmonic_reason = _harmonic(a, b)
+    harmonic_base, harmonic_reason = _harmonic(a, b, harmonic_mode)
     confidence = min(a.key_confidence, b.key_confidence)
     harmonic = confidence * harmonic_base + (1 - confidence) * 0.75
     bpm_confidence = min(a.bpm_confidence, b.bpm_confidence)
@@ -263,6 +273,7 @@ def _edge(a: _Track, b: _Track, limit: float, weights: Mapping[str, float],
     return {"from": a.id, "to": b.id, "cost": cost, "components": components,
             "tempo": tempo, "tempo_reset": reset, "transition_review_required": reset,
             "harmonic_relation": harmonic_reason,
+            "harmonic_mode": harmonic_mode,
             "confidence": {"key": confidence, "bpm": bpm_confidence},
             "reasons": reasons}
 
@@ -271,11 +282,14 @@ def transition_score(a: Mapping[str, Any], b: Mapping[str, Any], *,
                      max_tempo_change: float = 0.06,
                      weights: Mapping[str, float] | None = None,
                      allow_tempo_reset: bool = True,
-                     tempo_ramp_max_change: float | None = None) -> dict[str, Any]:
+                     tempo_ramp_max_change: float | None = None,
+                     harmonic_mode: str = "classic") -> dict[str, Any]:
     """Explain one edge with distinct ordinary and smooth-ramp tempo caps."""
     limit = _validate_limit(max_tempo_change)
     ramp_limit = _ramp_limit(tempo_ramp_max_change, limit)
-    edge = _edge(_normalise(a), _normalise(b), limit, _weights(weights), allow_tempo_reset, ramp_limit)
+    if harmonic_mode not in {'mood', 'fuzzy', 'classic'}:
+        raise ValueError('harmonic_mode must be mood, fuzzy or classic')
+    edge = _edge(_normalise(a), _normalise(b), limit, _weights(weights), allow_tempo_reset, ramp_limit, harmonic_mode)
     return _json_edge(edge)
 
 
@@ -474,7 +488,8 @@ def plan_tracks(records: Sequence[Mapping[str, Any]], *, mode: str = "auto",
                 energy_arc: str | Sequence[float] = "build", allow_tempo_reset: bool = True,
                 weights: Mapping[str, float] | None = None, exact_limit: int = 17,
                 beam_width: int = 256,
-                tempo_ramp_max_change: float | None = None) -> dict[str, Any]:
+                tempo_ramp_max_change: float | None = None,
+                harmonic_mode: str = "classic") -> dict[str, Any]:
     """Plan every input once, or diagnose a user-defined fixed order.
 
     ``id`` defaults to ``path``. BPM may be unknown; key accepts standard
@@ -495,9 +510,15 @@ def plan_tracks(records: Sequence[Mapping[str, Any]], *, mode: str = "auto",
     wave includes an intervening valley. Missing evidence has zero position
     cost. Targets are preferences, not edits to playback tempo or audio.
     Seed resolves equal-cost choices only.
+    The original classic Camelot cost remains the default. Mood and Fuzzy
+    directed key rules are explicit optional experiments. These are soft costs
+    balanced with the measured musical arc, not a hard harmonic gate or the
+    separate BPM/key-only fitted route preset.
     """
     if mode not in {"auto", "fixed"}:
         raise ValueError("mode must be auto or fixed")
+    if harmonic_mode not in {'mood', 'fuzzy', 'classic'}:
+        raise ValueError('harmonic_mode must be mood, fuzzy or classic')
     if mode == "auto" and fixed_order is not None:
         raise ValueError("fixed_order requires mode='fixed'")
     if not 1 <= exact_limit <= 18:
@@ -537,7 +558,7 @@ def plan_tracks(records: Sequence[Mapping[str, Any]], *, mode: str = "auto",
                 if bass_targets and t.bass_intensity is not None else 0.0,
     } for t in tracks] for p in range(len(tracks))]
     nodes = [[sum(parts.values()) for parts in row] for row in position_parts]
-    edges = [[_edge(a, b, limit, objective_weights, allow_tempo_reset, ramp_limit)
+    edges = [[_edge(a, b, limit, objective_weights, allow_tempo_reset, ramp_limit, harmonic_mode)
               for b in tracks] for a in tracks]
     costs = [[edge["cost"] for edge in row] for row in edges]
     tie_order = list(range(len(tracks)))
@@ -607,7 +628,7 @@ def plan_tracks(records: Sequence[Mapping[str, Any]], *, mode: str = "auto",
         warnings.append(f"{reset_count} transitions use or need a separately reviewed creative technique; they are not ordinary 1:1 common-tempo blends")
     warnings.append("This plan does not validate bar-one or phrase boundaries; verify them before rendering")
     return {
-        "schema_version": 1, "mode": mode, "method": method,
+        "schema_version": 1, "mode": mode, "method": method, "harmonic_mode": harmonic_mode,
         "optimal_for_declared_objective": optimal,
         "order": [tracks[i].id for i in order],
         "ordered_paths": [tracks[i].path for i in order],

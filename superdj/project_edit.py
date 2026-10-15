@@ -8,7 +8,7 @@ import math
 from pathlib import Path
 import zipfile
 
-from .djstudio import DJStudioError, load_djs
+from .project_archive import ArchiveError, load_djs
 from .storage import private_path
 
 
@@ -27,20 +27,20 @@ def rewrite_djs(source, output, *, cue_updates=None, transition_updates=None, na
     data = deepcopy(project.mixdata)
     for index, cue in (cue_updates or {}).items():
         if isinstance(index, bool) or not isinstance(index, int) or not 0 <= index < len(data["mix"]) or not isinstance(cue, dict):
-            raise DJStudioError("Invalid cue record update")
+            raise ArchiveError("Invalid cue record update")
         data["mix"][index].setdefault("cueData", {}).update(deepcopy(cue))
     for index, update in (transition_updates or {}).items():
         if isinstance(index, bool) or not isinstance(index, int) or not 0 <= index < len(data["autoEffects"]):
-            raise DJStudioError("Invalid transition record update")
+            raise ArchiveError("Invalid transition record update")
         allowed = {"duration", "primaryAutomation", "secondaryAutomation", "locked", "manual"}
         if not isinstance(update, dict) or set(update) - allowed:
-            raise DJStudioError("Patch supports only explicit duration/curve/lock fields")
+            raise ArchiveError("Patch supports only explicit duration/curve/lock fields")
         if "duration" in update:
             duration = update["duration"]
             if isinstance(duration, bool) or not isinstance(duration, (int, float)) or not math.isfinite(duration) or duration <= 0:
-                raise DJStudioError("Native transition duration must be positive and finite")
+                raise ArchiveError("Native transition duration must be positive and finite")
         if any(key in update and not isinstance(update[key], bool) for key in ("locked", "manual")):
-            raise DJStudioError("Native lock/manual fields must be boolean")
+            raise ArchiveError("Native lock/manual fields must be boolean")
         data["autoEffects"][index].update(deepcopy(update))
     if name is not None:
         data["name"] = str(name)
@@ -53,7 +53,7 @@ def rewrite_djs(source, output, *, cue_updates=None, transition_updates=None, na
     try:
         with zipfile.ZipFile(source) as old, zipfile.ZipFile(staged, "w", allowZip64=True) as new:
             if len(old.namelist()) != len(set(old.namelist())):
-                raise DJStudioError("Duplicate archive members")
+                raise ArchiveError("Duplicate archive members")
             for info in old.infolist():
                 if info.filename == "mixdata.json":
                     new.writestr(deepcopy(info), payload)
@@ -66,7 +66,7 @@ def rewrite_djs(source, output, *, cue_updates=None, transition_updates=None, na
                     hashes[info.filename] = digest.hexdigest()
         reread = load_djs(staged)
         if reread.mixdata != data:
-            raise DJStudioError("Native metadata roundtrip changed content")
+            raise ArchiveError("Native metadata roundtrip changed content")
         with zipfile.ZipFile(staged) as archive:
             for member, expected in hashes.items():
                 digest = hashlib.sha256()
@@ -74,7 +74,7 @@ def rewrite_djs(source, output, *, cue_updates=None, transition_updates=None, na
                     while block := reader.read(1024 * 1024):
                         digest.update(block)
                 if digest.hexdigest() != expected:
-                    raise DJStudioError("Embedded member changed")
+                    raise ArchiveError("Embedded member changed")
         staged.replace(output)
     except BaseException:
         staged.unlink(missing_ok=True)

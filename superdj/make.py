@@ -36,7 +36,10 @@ def make(args):
         from .history import unseen_files
         files,exclusions=unseen_files(files)
         if not files:raise ValueError('No unused tracks remain in the folder; provide another collection or explicitly allow repeats')
-    style=getattr(args,'style',None) or runtime.get('default_style','default')
+    from .defaults import planning_defaults
+    preferences = planning_defaults(style=getattr(args, 'style', None),
+        harmonic_mode=getattr(args, 'harmonic_mode', None),
+        energy_arc=getattr(args, 'energy_arc', None), runtime=runtime)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S_%f")
     output = private_path(args.output or runtime.get('private_output_root') or runtime.get("output_root") or files[0].parent / "AI_Super_DJ")
     work = private_path(args.work or Path(runtime.get("cache", Path.home() / ".cache" / "superdj")) / "runs" / stamp)
@@ -56,7 +59,7 @@ def make(args):
     git = runtime.get("git", "git")
     records = [{"id": f"track_{i:02}", "path": str(p)} for i, p in enumerate(files, 1)]
     write_json(work / "playlist.json", {"tracks": records, "selection": "automatic folder history filtering" if folder_input else "all explicit supplied files retained",
-        'excluded_previous_sources':exclusions})
+        'excluded_previous_sources':exclusions, 'workflow_preferences':preferences})
     if len(files) == 1:
         before = measure_audio(files[0], ffmpeg=ffmpeg, ffprobe=ffprobe, log=work / "source_qa.log")
         prepared = prepare_tracks(records, work, audamcp=runtime["audamcp"], ffmpeg=ffmpeg, git=git,
@@ -90,7 +93,9 @@ def make(args):
             "--output", str(output), "--name", name, "--audamcp", runtime["audamcp"],
             "--bitwize", runtime["bitwize"], "--rubberband", runtime.get("rubberband", "rubberband"),
             "--git", git, "--ffmpeg", ffmpeg, "--ffprobe", ffprobe,
-            "--style", style, "--mode", "fixed" if args.keep_order else "auto", "--no-mp3",
+            "--style", preferences['style'], "--harmonic-mode", preferences['harmonic_mode'],
+            "--energy-arc", preferences['energy_arc'],
+            "--mode", "fixed" if args.keep_order else "auto", "--no-mp3",
             "--sample-rate", str(sample_rate)]
     if runtime.get("cache"):
         argv += ["--cache", runtime["cache"]]

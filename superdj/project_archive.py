@@ -1,4 +1,4 @@
-"""Read-only DJ.Studio project and CUE adapter.
+"""Read-only project archive project and CUE adapter.
 
 ``mixMap.time`` is a source-audio position, not an export timeline.  CUE INDEX
 01 positions delimit export chapters, not the whole audible span of a track.
@@ -19,12 +19,12 @@ from typing import Any, Mapping
 import zipfile
 
 
-class DJStudioError(ValueError):
+class ArchiveError(ValueError):
     """Unsupported or inconsistent project/CUE data."""
 
 
 @dataclass(frozen=True)
-class DJStudioProject:
+class ArchiveProject:
     mixdata: dict[str, Any]
     settings: dict[str, Any]
     archive_members: tuple[str, ...] = ()
@@ -46,10 +46,10 @@ def _finite_number(value: Any) -> float | None:
 
 
 def _bad_constant(value: str) -> None:
-    raise DJStudioError(f"Non-finite JSON number: {value}")
+    raise ArchiveError(f"Non-finite JSON number: {value}")
 
 
-def load_djs(path: str | Path, *, max_metadata_bytes: int = 64 * 1024 * 1024) -> DJStudioProject:
+def load_djs(path: str | Path, *, max_metadata_bytes: int = 64 * 1024 * 1024) -> ArchiveProject:
     """Read only JSON metadata from a ZIP .djs; never extract embedded audio.
 
     Every member name is checked, and duplicate metadata entries, encrypted
@@ -66,31 +66,31 @@ def load_djs(path: str | Path, *, max_metadata_bytes: int = 64 * 1024 * 1024) ->
             name = member.filename.replace("\\", "/")
             parts = PurePosixPath(name).parts
             if name.startswith("/") or ".." in parts or re.match(r"^[A-Za-z]:", name):
-                raise DJStudioError("Unsafe archive member name")
+                raise ArchiveError("Unsafe archive member name")
 
         def metadata(name: str, required: bool) -> tuple[dict[str, Any], bytes]:
             candidates = [m for m in members if m.filename == name]
             if not candidates and not required:
                 return {}, b""
             if len(candidates) != 1:
-                raise DJStudioError(f"Expected exactly one {name}")
+                raise ArchiveError(f"Expected exactly one {name}")
             member = candidates[0]
             if member.flag_bits & 1 or member.file_size > max_metadata_bytes:
-                raise DJStudioError(f"Encrypted or oversized {name}")
+                raise ArchiveError(f"Encrypted or oversized {name}")
             with archive.open(member) as stream:
                 raw = stream.read(max_metadata_bytes + 1)
             if len(raw) > max_metadata_bytes:
-                raise DJStudioError(f"Oversized {name}")
+                raise ArchiveError(f"Oversized {name}")
             value = json.loads(raw.decode("utf-8-sig"), parse_constant=_bad_constant)
             if not isinstance(value, dict):
-                raise DJStudioError(f"{name} must be an object")
+                raise ArchiveError(f"{name} must be an object")
             return value, raw
 
         mixdata, raw = metadata("mixdata.json", True)
         settings, _ = metadata("settings.json", False)
     if not isinstance(mixdata.get("mix"), list) or not isinstance(mixdata.get("audio"), list):
-        raise DJStudioError("Project must contain mix and audio lists")
-    return DJStudioProject(mixdata, settings, tuple(m.filename for m in members),
+        raise ArchiveError("Project must contain mix and audio lists")
+    return ArchiveProject(mixdata, settings, tuple(m.filename for m in members),
                            hashlib.sha256(raw).hexdigest())
 
 
@@ -98,10 +98,10 @@ def cue_timestamp(value: str) -> float:
     """CUE MM:SS:FF uses 75 frames per second; minutes may exceed 59."""
     match = re.fullmatch(r"(\d+):(\d{2}):(\d{2})", value.strip())
     if not match:
-        raise DJStudioError(f"Invalid CUE timestamp: {value}")
+        raise ArchiveError(f"Invalid CUE timestamp: {value}")
     minutes, seconds, frames = map(int, match.groups())
     if seconds >= 60 or frames >= 75:
-        raise DJStudioError(f"Invalid CUE timestamp: {value}")
+        raise ArchiveError(f"Invalid CUE timestamp: {value}")
     return minutes * 60 + seconds + frames / 75
 
 
@@ -109,7 +109,7 @@ def _cue_string(value: str) -> str:
     value = value.strip()
     if value.startswith('"'):
         if not value.endswith('"'):
-            raise DJStudioError("Unclosed CUE quoted string")
+            raise ArchiveError("Unclosed CUE quoted string")
         return value[1:-1].replace('\\"', '"')
     return value
 
@@ -135,17 +135,17 @@ def parse_cue_text(text: str) -> dict[str, Any]:
         if directive == "FILE":
             match = re.fullmatch(r'(?:"(.*)"|(\S+))\s+(\S+)', value)
             if not match:
-                raise DJStudioError(f"Invalid FILE at line {line_number}")
+                raise ArchiveError(f"Invalid FILE at line {line_number}")
             current_file = {"name": match.group(1) or match.group(2), "declared_type": match.group(3)}
             result["files"].append(current_file)
             current_track = None
         elif directive == "TRACK":
             match = re.fullmatch(r"(\d+)\s+(\S+)", value)
             if current_file is None or not match:
-                raise DJStudioError(f"Invalid TRACK at line {line_number}")
+                raise ArchiveError(f"Invalid TRACK at line {line_number}")
             number = int(match.group(1))
             if number <= 0 or any(t["number"] == number for t in result["tracks"]):
-                raise DJStudioError("Duplicate or non-positive CUE track number")
+                raise ArchiveError("Duplicate or non-positive CUE track number")
             current_track = {"number": number, "type": match.group(2), "title": "", "performer": "",
                              "file_index": len(result["files"]) - 1, "indexes": {}}
             result["tracks"].append(current_track)
@@ -155,27 +155,27 @@ def parse_cue_text(text: str) -> dict[str, Any]:
         elif directive == "INDEX":
             match = re.fullmatch(r"(\d{2})\s+(\S+)", value)
             if current_track is None or not match:
-                raise DJStudioError(f"Invalid INDEX at line {line_number}")
+                raise ArchiveError(f"Invalid INDEX at line {line_number}")
             key = match.group(1)
             if key in current_track["indexes"]:
-                raise DJStudioError("Duplicate CUE INDEX")
+                raise ArchiveError("Duplicate CUE INDEX")
             current_track["indexes"][key] = cue_timestamp(match.group(2))
         else:
             result["unknown_directives"].append({"line": line_number, "text": line})
     previous_by_file: dict[int, float] = {}
     for track in result["tracks"]:
         if track["type"].upper() != "AUDIO" or "01" not in track["indexes"]:
-            raise DJStudioError("Every CUE track must be AUDIO with INDEX 01")
+            raise ArchiveError("Every CUE track must be AUDIO with INDEX 01")
         start = track["indexes"]["01"]
         file_index = track["file_index"]
         if file_index in previous_by_file and start <= previous_by_file[file_index]:
-            raise DJStudioError("CUE INDEX 01 must increase within each file")
+            raise ArchiveError("CUE INDEX 01 must increase within each file")
         if track["indexes"].get("00", start) > start:
-            raise DJStudioError("CUE INDEX 00 is later than INDEX 01")
+            raise ArchiveError("CUE INDEX 00 is later than INDEX 01")
         previous_by_file[file_index] = start
         track["index01_s"] = start
     if not result["tracks"]:
-        raise DJStudioError("Empty CUE track list")
+        raise ArchiveError("Empty CUE track list")
     return result
 
 
@@ -234,7 +234,7 @@ def _bounds(beats: float, tempos: list[float]) -> list[float] | None:
     return [beats * 60 / max(tempos), beats * 60 / min(tempos)]
 
 
-def audit_djstudio(project: str | Path | DJStudioProject, *, cue: str | Path | Mapping[str, Any] | None = None,
+def audit_archive(project: str | Path | ArchiveProject, *, cue: str | Path | Mapping[str, Any] | None = None,
                    export_duration_s: float | None = None, minimum_track_s: float = 120,
                    include_native_state: bool = False) -> dict[str, Any]:
     """Produce a JSON-serializable structural audit, never changing input files.
@@ -245,7 +245,7 @@ def audit_djstudio(project: str | Path | DJStudioProject, *, cue: str | Path | M
     inside declared tempo envelopes; native synthesis is not reproduced here.
     Volume/EQ envelopes can make parts of that span effectively inaudible.
     """
-    project = load_djs(project) if not isinstance(project, DJStudioProject) else project
+    project = load_djs(project) if not isinstance(project, ArchiveProject) else project
     data = project.mixdata
     mixes = data.get("mix", [])
     library = {a["key"]: a for a in data.get("audio", []) if "key" in a}
@@ -282,7 +282,7 @@ def audit_djstudio(project: str | Path | DJStudioProject, *, cue: str | Path | M
     if cue_data and len(cue_data.get("files", [])) != 1:
         warnings.append("Multi-file CUE positions are file-local; one export timeline is unavailable")
     if cue_timing_usable and export_duration_s is not None and export_duration_s <= cue_tracks[-1]["index01_s"]:
-        raise DJStudioError("Export duration is not later than the final CUE chapter")
+        raise ArchiveError("Export duration is not later than the final CUE chapter")
 
     global_tempos = [_finite_number(data.get("minBpm")), _finite_number(data.get("maxBpm"))]
     global_tempos = [v for v in global_tempos if v is not None and v > 0]

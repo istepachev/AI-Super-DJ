@@ -30,7 +30,7 @@ def test_next_preset_cli_excludes_every_played_track_and_caps_suggestions(tmp_pa
     source.write_text(json.dumps(records), encoding='utf-8')
     prefix = tmp_path / 'played.json'
     prefix.write_text(json.dumps(['0', '1', '2']), encoding='utf-8')
-    main(['harmonize-rank', '--records', str(source), '--preset', 'djstudio-next-v1',
+    main(['harmonize-rank', '--records', str(source), '--preset', 'harmonic-next-v1',
           '--current', '2', '--played-prefix', str(prefix), '--harmonic-mode', 'mood',
           '--routing-priority', 'bpm', '--bpm-tolerance', '4', '--work', str(tmp_path / 'rank')])
     result = json.loads((tmp_path / 'rank/next_track_rankings.json').read_text(encoding='utf-8'))
@@ -46,7 +46,7 @@ def test_route_preset_assembles_twenty_unique_tracks_with_explicit_locks(tmp_pat
     source.write_text(json.dumps(records), encoding='utf-8')
     chains = tmp_path / 'chains.json'
     chains.write_text(json.dumps([['8', '9']]), encoding='utf-8')
-    main(['harmonize', '--records', str(source), '--preset', 'djstudio-route-v1',
+    main(['harmonize', '--records', str(source), '--preset', 'harmonic-route-v1',
           '--harmonic-mode', 'mood', '--routing-priority', 'bpm', '--priority', '0',
           '--bpm-tolerance', '4', '--direction', 'none', '--seed', '0',
           '--first', '0', '--last', '19', '--locked-chains', str(chains),
@@ -58,9 +58,9 @@ def test_route_preset_assembles_twenty_unique_tracks_with_explicit_locks(tmp_pat
     assert order[0] == '0' and order[-1] == '19'
     assert order[order.index('8') + 1] == '9'
     assert result['harmonic_matches'] == 19
-    assert result['ordering_preset'] == 'djstudio-route-v1'
+    assert result['ordering_preset'] == 'harmonic-route-v1'
     source.write_text(json.dumps(list(reversed(records))), encoding='utf-8')
-    main(['harmonize', '--records', str(source), '--preset', 'djstudio-route-v1',
+    main(['harmonize', '--records', str(source), '--preset', 'harmonic-route-v1',
           '--harmonic-mode', 'mood', '--routing-priority', 'bpm', '--priority', '0',
           '--bpm-tolerance', '4', '--direction', 'none', '--seed', '0',
           '--first', '0', '--last', '19', '--locked-chains', str(chains),
@@ -75,11 +75,12 @@ def test_preset_selector_rejects_unknown_and_conflicting_sources():
         ordering_profile('../private')
     with pytest.raises(SystemExit):
         main(['harmonize-rank', '--records', 'r.json', '--profile', 'private.json',
-              '--preset', 'djstudio-next-v1', '--current', 'a', '--work', 'w'])
+              '--preset', 'harmonic-next-v1', '--current', 'a', '--work', 'w'])
 
 
 @pytest.mark.parametrize('configured,explicit,expected', [
-    (None, None, 'default'), ('zhilin', None, 'zhilin'), ('zhilin', 'default', 'default'),
+    (None, None, 'zhilin'), ('zhilin', None, 'zhilin'), ('zhilin', 'default', 'default'),
+    ('default', None, 'default'), ('zhilin', 'sync', 'default'),
 ])
 def test_make_style_dispatch_and_explicit_twenty_track_selection(tmp_path, monkeypatch, configured, explicit, expected):
     import superdj.make as module

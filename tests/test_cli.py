@@ -11,7 +11,7 @@ import numpy as np
 import pytest
 import soundfile as sf
 
-from superdj.cli import djstudio_audit, main
+from superdj.cli import archive_audit, main
 
 
 def test_cli_plan_attaches_cue_locks_without_reordering(tmp_path):
@@ -81,12 +81,12 @@ def test_cli_plan_rejects_invalid_pair_length(tmp_path, bars):
 
 
 def test_audit_refuses_to_replace_its_project_input(tmp_path):
-    project = tmp_path / "djstudio_audit.json"
+    project = tmp_path / "archive_audit.json"
     project.write_bytes(b"untouched native input")
     args = SimpleNamespace(work=str(tmp_path), project=str(project), cue=None,
                            audio=None, measure=False)
     with pytest.raises(ValueError, match="must not overwrite"):
-        djstudio_audit(args)
+        archive_audit(args)
     assert project.read_bytes() == b"untouched native input"
 
 
@@ -100,7 +100,7 @@ def test_measurement_log_cannot_alias_audio_input(tmp_path):
     args = SimpleNamespace(work=str(tmp_path), project=str(tmp_path / "project.djs"),
                            cue=None, audio=str(audio), measure=True)
     with pytest.raises(ValueError, match="must not overwrite"):
-        djstudio_audit(args)
+        archive_audit(args)
     assert audio.read_bytes() == b"untouched audio input"
 
 
@@ -125,10 +125,10 @@ def test_audit_cli_full_measurement_on_generated_audio(tmp_path):
     paths = [audio, project, cue]
     hashes = [hashlib.sha256(p.read_bytes()).hexdigest() for p in paths]
     work = tmp_path / "private-review"
-    main(["djstudio-audit", "--project", str(project), "--cue", str(cue), "--audio", str(audio),
+    main(["archive-audit", "--project", str(project), "--cue", str(cue), "--audio", str(audio),
           "--work", str(work), "--ffmpeg", ffmpeg, "--ffprobe", ffprobe,
           "--measure", "--include-native-state"])
-    report = json.loads((work / "djstudio_audit.json").read_text(encoding="utf-8"))
+    report = json.loads((work / "archive_audit.json").read_text(encoding="utf-8"))
     assert report["cue_order_matches"] is True
     assert report["audio_measurement"]["full_decode_ok"] is True
     assert report["audio_measurement"]["true_peak_dbfs"] < -10

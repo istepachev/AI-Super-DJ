@@ -5,7 +5,7 @@ Neither identifiers nor playlist positions enter its features. Inner model
 selection holds out whole track-pool cohorts, including every repeated order
 and mode variant; outer validation never selects on its held-out cohort. This
 is not a global path optimizer, an audible
-quality model, or a reproduction of DJ.Studio's proprietary algorithm.
+quality model, or a reproduction of project archive's proprietary algorithm.
 """
 from __future__ import annotations
 

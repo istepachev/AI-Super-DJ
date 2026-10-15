@@ -38,7 +38,7 @@ Analysis 1.6 measures dimensionless intensity from relative envelope fullness, s
 
 Useful edge-cost terms are Camelot/key compatibility with uncertainty, stretch needed for common tempo, intensity difference relative to the intended arc, transition-region suitability, and vocals/bass overlap. An uncertain key should weaken its influence. The analyzer's sustained midband proxy is not a learned vocal detector: guitars and synths can resemble vocals. A high-confidence tempo conflict or missing phrase cue should remain visible even when the combined numerical score is good. Give proposed candidates and reasons when the user asks for the next track. The reported seven candidates use immediate edge plus next-position intensity/tempo/bass cost, not seven alternative globally optimized playlists. The old top-three field remains a compatibility subset.
 
-AI Super DJ's transparent optimizer is an independent approach. Do not describe it as an implementation or reproduction of DJStudio's proprietary Harmonize AI unless its internals have actually been made available and verified.
+AI Super DJ's transparent optimizer is an independent approach. Do not describe it as an implementation or reproduction of any external optimizer unless its internals have actually been made available and verified.
 
 ## Transition plan and review
 

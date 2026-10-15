@@ -22,7 +22,7 @@ The audamcp and Bitwize licenses were checked in the actual pinned local checkou
 - If a release later bundles or links FFmpeg/Rubber Band, review that release's build and distribution obligations and include the required source/license materials. The initial separate-executable design must not be represented as permission to relicense those programs.
 - Python dependency licenses are available from the installed distributions. Record the environment used; do not imply that this file replaces their notices.
 
-The sequence optimizer is an original, transparent implementation based on stated musical costs. DeckWave's harmonic-transition workflow and music-hearing's acoustic descriptors informed the design review; their code is not copied into this repository. SuperDJ has no affiliation with DJStudio and does not contain its Harmonize AI implementation.
+The sequence optimizer is an original, transparent implementation based on stated musical costs. DeckWave's harmonic-transition workflow and music-hearing's acoustic descriptors informed the design review; their code is not copied into this repository.
 
 Music and personal playlists are local inputs. The project's software license grants no rights to publish those recordings. The public code repository excludes them by design.
 

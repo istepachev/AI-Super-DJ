@@ -135,7 +135,7 @@ def test_native_explicit_tag_key_is_fallback_when_native_key_is_unknown(tmp_path
     assert "key_camelot" not in analysis[0]
 
 
-def native_analysis(tmp_path, key_fields, *, settings=None, source="djstudio"):
+def native_analysis(tmp_path, key_fields, *, settings=None, source="native"):
     path = tmp_path / "keys.djs"
     data = {"mix": [{"libraryKey": "library_a"}],
             "audio": [{"key": "library_a", "importLocation": "Alpha.flac", "bpm": 121,
@@ -155,7 +155,7 @@ def test_verified_native_keys_are_chromatic_indices_not_wheel_numbers(tmp_path, 
     record = native_analysis(tmp_path, {"camelotKey": native})
     assert record["key_camelot"] == expected
     assert record["native_key"] == native and record["native_key_values"]["camelotKey"] == native
-    assert record["key_source"] == "djstudio.camelotKey"
+    assert record["key_source"] == "native.camelotKey"
     assert record["key_source_fallback"] is False
     assert record["bpm"] == 121
 
@@ -178,7 +178,7 @@ def test_native_default_does_not_infer_selected_source_from_analysis_setting(tmp
     fields = {"camelotKey": 8, "mikKey": 15, "originalCamelotKey": 12, "tag": {"key": "A minor"}}
     record = native_analysis(tmp_path, fields, settings={"useMixedInKeyAnalysis": True})
     assert record["key_camelot"] == "4B"
-    assert record["key_source_requested"] == "djstudio"
+    assert record["key_source_requested"] == "native"
     assert record["native_key_values"]["mikKey"] == 15
     assert "key" not in record  # Explicit but conflicting tag never silently overrides the selection.
 
@@ -187,7 +187,7 @@ def test_native_default_does_not_infer_selected_source_from_analysis_setting(tmp
     ("mixedinkey", "mikKey", 15, "5A"), ("original", "originalCamelotKey", 12, "8A")])
 def test_alternate_native_source_requires_explicit_selection(tmp_path, source, field, native, expected):
     record = native_analysis(tmp_path, {"camelotKey": 8, field: native}, source=source)
-    assert record["key_camelot"] == expected and record["key_source"] == f"djstudio.{field}"
+    assert record["key_camelot"] == expected and record["key_source"] == f"native.{field}"
     assert record["native_key"] == 8 and record["native_key_values"][field] == native
     assert record["key_source_requested"] == source and record["key_source_fallback"] is False
 
@@ -197,7 +197,7 @@ def test_alternate_native_source_requires_explicit_selection(tmp_path, source, f
 def test_unavailable_selected_native_source_falls_back_with_disclosure(tmp_path, source, field, missing):
     fields = {"camelotKey": 8, **({} if missing else {field: -2})}
     record = native_analysis(tmp_path, fields, source=source)
-    assert record["key_camelot"] == "4B" and record["key_source"] == "djstudio.camelotKey"
+    assert record["key_camelot"] == "4B" and record["key_source"] == "native.camelotKey"
     assert record["key_source_requested"] == source and record["key_source_fallback"] is True
 
 
@@ -211,7 +211,7 @@ def test_invalid_native_source_selection_rejected(tmp_path):
         native_analysis(tmp_path, {"camelotKey": 8}, source="auto")
 
 
-def test_numeric_key_in_plain_json_is_not_assumed_to_be_djstudio_index(tmp_path):
+def test_numeric_key_in_plain_json_is_not_assumed_to_be_native_index(tmp_path):
     path = write_json(tmp_path, {"tracks": [{"id": "a", "camelotKey": 16, "bpm": 120}]})
     assert load_analysis(path, records()) == [
         {"id": "a", "bpm": 120, "native_key": 16, "key_mapping_status": "uninterpreted"}]

@@ -14,7 +14,7 @@ def sequence_ordering_preset(records, name, **settings):
     records = sorted(list(records), key=lambda row: str(row.get('id') or row.get('path')))
     profile = ordering_profile(name)
     primary = sequence_mode_tracks(records, profile, **settings)
-    if name != 'djstudio-route-v2':
+    if name != 'harmonic-route-v2':
         return primary
     safety_profile = validate_mode_ranker_profile(profile['safety_profile'])
     safety = sequence_mode_tracks(records, safety_profile, **settings)
@@ -39,6 +39,6 @@ def sequence_ordering_preset(records, name, **settings):
             {'role': 'primary', 'order': primary['order'], 'outside_mode_edges': primary_bad},
             {'role': 'safety', 'order': safety['order'], 'outside_mode_edges': safety_bad},
         ],
-        'scope': 'Two bounded complete routes; musical safety only, no global-optimum or DJ.Studio identity claim',
+        'scope': 'Two bounded complete routes; musical safety only, no global-optimum or project archive identity claim',
     }
     return result

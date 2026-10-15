@@ -798,7 +798,7 @@
   "harmony_gate": "Caller mode remains independent; blocked targets remain in every evaluation denominator",
   "training_support_rows_prefiltered": true,
   "publication": {
-    "preset": "djstudio-route-v2",
+    "preset": "harmonic-route-v2",
     "purpose": "Density complete route with an independently generated Paired safety alternative",
     "frozen_before_latest_forward_exports": true,
     "inference_parameters_unchanged": true,

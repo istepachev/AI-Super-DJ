@@ -15,9 +15,9 @@ def test_same_musical_safety_retains_primary_and_explicit_constraints():
     rows = records()
     arguments = dict(mode='mood', priority=0, routing_priority='bpm', bpm_tolerance=4,
                      direction='none', seed=0, first_id='0', last_id='19', locked_chains=[['8','9']])
-    result = sequence_ordering_preset(list(reversed(rows)), 'djstudio-route-v2', **arguments)
+    result = sequence_ordering_preset(list(reversed(rows)), 'harmonic-route-v2', **arguments)
     primary = sequence_mode_tracks(sorted(rows, key=lambda row:row['id']),
-                                   ordering_profile('djstudio-route-v2'), **arguments)
+                                   ordering_profile('harmonic-route-v2'), **arguments)
     assert result['order'] == primary['order']
     assert len(result['order']) == len(set(result['order'])) == 20
     assert result['order'][0] == '0' and result['order'][-1] == '19'
@@ -43,7 +43,7 @@ def test_safety_selection_uses_harmony_even_when_primary_utility_is_larger(monke
         calls.append((copy.deepcopy(inputs), settings))
         return copy.deepcopy(primary if len(calls) == 1 else safety)
     monkeypatch.setattr(module, 'sequence_mode_tracks', backend)
-    result = sequence_ordering_preset(rows, 'djstudio-route-v2', mode='fuzzy', direction='none', seed=0)
+    result = sequence_ordering_preset(rows, 'harmonic-route-v2', mode='fuzzy', direction='none', seed=0)
     assert result['order'] == safety['order']
     assert result['preset_route_selection']['selected'] == 'safety'
     assert calls[0] == calls[1]
@@ -55,4 +55,4 @@ def test_bad_candidate_membership_cannot_be_silently_selected(monkeypatch):
     monkeypatch.setattr(module, 'sequence_mode_tracks', lambda *args, **kw:
         dict(order=['missing'], edges=[], harmonic_matches=0))
     with pytest.raises(RuntimeError, match='occurrence membership'):
-        sequence_ordering_preset(records(), 'djstudio-route-v2')
+        sequence_ordering_preset(records(), 'harmonic-route-v2')

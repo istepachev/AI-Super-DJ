@@ -1,6 +1,6 @@
 """Auditable BPM/key sequencing inspired by published Harmonize behavior.
 
-Relation costs, weights and search are ours, not DJ.Studio internals. Fuzzy
+Relation costs, weights and search are explicit musical heuristics. Fuzzy
 and Mood are explicit experimental profiles; official descriptions conflict.
 Audio, energy, confidence and phrase data do not enter this order objective.
 """
@@ -342,11 +342,9 @@ def harmonize_tracks(records: Sequence[Mapping[str, Any]], *, mode="fuzzy", prio
         uncertainty={"warnings": warnings},
         render_readiness="order only; run grid, phrase, cue and temporary-tempo checks before SYNC rendering",
         proprietary_equivalence=False,
-        official_sources=["https://help.dj.studio/en/articles/7878402-harmonize-previously-automix",
-                          "https://help.dj.studio/en/articles/8118455-harmonic-matches-explained",
-                          "https://dj.studio/blog/fuzzy-keymixing"],
-        limitations=["Exact DJ.Studio weights and search are not published; this objective is ours",
-                     "Official Fuzzy/Mood descriptions conflict; our rules are explicit experimental profiles",
+        official_sources=[],
+        limitations=["Published musical costs and bounded search are transparent implementation heuristics",
+                     "Directed Mood/Fuzzy tables are explicit preferences, not guarantees of audible compatibility",
                      "Same order is not required for a good result; different analysis and tie breaks change it",
                      "No automatic key shifting, BPM octave correction or library-track insertion",
                      "Native detector disagreements are not repaired by changing the route search",

@@ -47,10 +47,17 @@ def analyze(args):
 
 def plan(args, records=None):
     from .planner import plan_tracks
+    from .cues import runtime_config
+    from .defaults import planning_defaults
+    runtime = runtime_config()
+    preferences = planning_defaults(style=getattr(args, 'style', None),
+        harmonic_mode=getattr(args, 'harmonic_mode', None),
+        energy_arc=getattr(args, 'energy_arc', None), runtime=runtime)
     records = records if records is not None else _records(args.records)
     order = read_json(args.fixed_order) if args.fixed_order else None
     result = plan_tracks(records, mode=args.mode, fixed_order=order, first_id=args.first, last_id=args.last,
-                         seed=args.seed or 0, energy_arc=args.energy_arc, max_tempo_change=args.max_tempo_change,
+                         seed=args.seed or 0, energy_arc=preferences['energy_arc'],
+                         harmonic_mode=preferences['harmonic_mode'], max_tempo_change=args.max_tempo_change,
                          tempo_ramp_max_change=args.tempo_ramp_max_change,
                          allow_tempo_reset=not args.no_tempo_reset)
     if args.transition_overrides:
@@ -91,10 +98,17 @@ def plan(args, records=None):
                 edges[pair]["transition_policy"] = policy
             seen.add(pair)
     # Automatic sets have one shared-phase mixer and an explicit solo budget.
-    # Zhilin prefers 40-bar overlaps using the same core selection/mixer.
+    # Zhilin prefers 32-bar overlaps with the same 180–240s solo budget.
+    result['style'] = preferences['style']
+    result['workflow_preferences'] = preferences
+    result['mixing_preferences'] = dict(preferred_overlap_bars=32,
+        target_solo_seconds=210, target_solo_range_seconds=[180, 240], maximum_solo_seconds=300,
+        curve_profile_status=('configured DJ Zhilin reference; validated during mixing'
+            if runtime.get('zhilin_profile') else 'packaged approved DJ Zhilin reference; validated during mixing')
+            if preferences['style'] == 'zhilin' else 'ordinary SYNC band curves')
     from .compact import arrange_sync
     if all(row.get('downbeats') and row.get('duration', row.get('duration_seconds')) for row in records):
-        result = arrange_sync(result, records, zhilin=getattr(args, 'style', 'default') == 'zhilin', ffmpeg=getattr(args, 'ffmpeg', None))
+        result = arrange_sync(result, records, zhilin=preferences['style'] == 'zhilin', ffmpeg=getattr(args, 'ffmpeg', None))
     else:
         result['section_warnings'] = ['Order-only plan: audio analysis/grid required before compact SYNC rendering']
     write_json(Path(args.work) / "plan.json", result)
@@ -205,15 +219,15 @@ def _audio(parser):
     parser.add_argument("--ffprobe", default="ffprobe")
 
 
-def djstudio_audit(args):
+def archive_audit(args):
     """Inspect native metadata and exported chapters without changing the mix."""
     import json
     import subprocess
-    from .djstudio import audit_djstudio
+    from .project_archive import audit_archive
     from .quality import measure_audio
     work = private_path(args.work)
     inputs = [Path(p).expanduser().resolve() for p in (args.project, args.cue, args.audio) if p]
-    for name in ("djstudio_audit.json", "djstudio_audit.json.partial", "export_qa.log"):
+    for name in ("archive_audit.json", "archive_audit.json.partial", "export_qa.log"):
         target = work / name
         if any(target.resolve() == source or
                (target.exists() and source.exists() and target.samefile(source)) for source in inputs):
@@ -240,7 +254,7 @@ def djstudio_audit(args):
                            "sample_rate": int(stream["sample_rate"]), "channels": int(stream["channels"]),
                            "duration_seconds": duration, "full_decode_ok": None,
                            "measurement": "container probe only; no loudness, peaks or full decode check"}
-    report = audit_djstudio(args.project, cue=args.cue, export_duration_s=duration,
+    report = audit_archive(args.project, cue=args.cue, export_duration_s=duration,
                             minimum_track_s=args.min_track_seconds,
                             include_native_state=args.include_native_state)
     report["audio_measurement"] = measurement
@@ -249,9 +263,9 @@ def djstudio_audit(args):
         report["warnings"].append("Project duration metadata differs from the exported audio; "
                                   "use the export duration for timeline review and investigate the mismatch.")
     report["listening_review"] = "pending; metadata and measurements do not certify audible quality"
-    write_json(work / "djstudio_audit.json", report)
+    write_json(work / "archive_audit.json", report)
     print(f"AI Super DJ: {report['track_count']} tracks, {report['transition_count']} transitions; "
-          f"CUE order matches: {report['cue_order_matches']}. Report: {work / 'djstudio_audit.json'}", flush=True)
+          f"CUE order matches: {report['cue_order_matches']}. Report: {work / 'archive_audit.json'}", flush=True)
     return report
 
 
@@ -481,13 +495,18 @@ def _routing_priority(args):
 
 
 def _planning(parser, seed=True):
-    parser.add_argument("--style", choices=("default", "zhilin"), default="default")
+    from .defaults import STYLE_CHOICES, HARMONIC_MODES, ENERGY_ARCS
+    parser.add_argument("--style", choices=STYLE_CHOICES, default=None,
+                        help="Mixing curves: portable default zhilin; sync/default selects ordinary SYNC")
+    parser.add_argument("--harmonic-mode", choices=HARMONIC_MODES, default=None,
+                        help="Automatic key preference: unchanged classic default; mood/fuzzy are explicit alternatives")
     parser.add_argument("--mode", choices=("auto", "fixed"), default="auto")
     parser.add_argument("--fixed-order", help="JSON array of every track id, in user order")
     parser.add_argument("--transition-overrides", help="Private JSON array of {from,to,cue_locks?,overlap_bars?} for existing adjacent pairs")
     parser.add_argument("--first")
     parser.add_argument("--last")
-    parser.add_argument("--energy-arc", choices=("build", "release", "wave", "flat", "none"), default="build")
+    parser.add_argument("--energy-arc", choices=ENERGY_ARCS, default=None,
+                        help="Musical development: portable default build; explicit order always wins")
     parser.add_argument("--max-tempo-change", type=float, default=0.06)
     parser.add_argument("--no-tempo-reset", action="store_true", help="Require a bounded common tempo; disallow native-tempo fallback bridges")
     if "--tempo-ramp-max-change" not in parser._option_string_actions:
@@ -535,9 +554,12 @@ def _rendering(parser):
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="ai-super-dj", description="AI Super DJ: offline analysis, ordering, rendering and verified export")
     subs = parser.add_subparsers(dest="command", required=True)
-    mp = subs.add_parser("make", help="One file → mastered FLAC; multiple files → mixed FLAC")
+    mp = subs.add_parser("make", help="One file to mastered FLAC; multiple files to mixed FLAC")
     mp.add_argument("inputs", nargs="+", help="Audio files or a folder")
-    mp.add_argument("--style", choices=("default", "zhilin"), default=None)
+    from .defaults import STYLE_CHOICES, HARMONIC_MODES, ENERGY_ARCS
+    mp.add_argument("--style", choices=STYLE_CHOICES, default=None)
+    mp.add_argument("--harmonic-mode", choices=HARMONIC_MODES, default=None)
+    mp.add_argument("--energy-arc", choices=ENERGY_ARCS, default=None)
     mp.add_argument('--allow-repeats',action='store_true',help='Explicitly allow previously used sources in automatic folder selection')
     mp.add_argument("--keep-order", action="store_true", help="Keep supplied file order")
     mp.add_argument("--output")
@@ -549,7 +571,7 @@ def main(argv=None):
     pp = subs.add_parser("plan")
     pp.add_argument("--work", required=True); pp.add_argument("--records", required=True)
     _planning(pp)
-    hp = subs.add_parser("harmonize", help="Experimental whole-playlist BPM/key ordering and DJ.Studio test pack")
+    hp = subs.add_parser("harmonize", help="Experimental whole-playlist BPM/key ordering and project archive test pack")
     hp.add_argument("--records", required=True); hp.add_argument("--work", required=True)
     _harmonic_options(hp)
     _harmonic_search_options(hp)
@@ -569,7 +591,7 @@ def main(argv=None):
     cp.add_argument("--records", required=True); cp.add_argument("--work", required=True)
     cp.add_argument("--our-order", required=True); cp.add_argument("--other-order", required=True)
     cp.add_argument("--dj-settings", help="Private JSON recording actual app version, slider and locks")
-    cp.add_argument("--djs-key-source", choices=("djstudio", "mixedinkey", "original"), default="djstudio",
+    cp.add_argument("--djs-key-source", choices=("native", "mixedinkey", "original"), default="native",
                     help="Explicit exported key source; unavailable alternate indices fall back with provenance")
     _harmonic_options(cp)
     cp.add_argument("--seed", type=int, default=0)
@@ -597,7 +619,7 @@ def main(argv=None):
     runp = subs.add_parser("run")
     runp.add_argument("--work", required=True)
     _audio(runp); _source(runp); _planning(runp, seed=False); _rendering(runp)
-    djp = subs.add_parser("djstudio-audit", help="Read-only DJ.Studio project/CUE/export audit")
+    djp = subs.add_parser("archive-audit", help="Read-only project archive project/CUE/export audit")
     djp.add_argument("--project", required=True, help="Native .djs archive; never modified")
     djp.add_argument("--cue", help="Exported CUE chapters")
     djp.add_argument("--audio", help="Exported audio for duration and optional full-file QA")
@@ -630,8 +652,8 @@ def main(argv=None):
         render(args)
     elif args.command == "run":
         records = analyze(args); planned = plan(args, records); render(args, records, planned)
-    elif args.command == "djstudio-audit":
-        djstudio_audit(args)
+    elif args.command == "archive-audit":
+        archive_audit(args)
     else:
         from .adapters import setup_components
         setup_components(args.components, args.git)

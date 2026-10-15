@@ -20,7 +20,7 @@ from urllib.parse import unquote, urlparse
 
 
 # Interoperability data, independently checked against the installed key
-# formatter and key enumeration in DJ.Studio 4.2.15. These are chromatic note
+# formatter and key enumeration in project archive 4.2.15. These are chromatic note
 # indices (major first, then minor), not Camelot wheel positions. No app routing
 # or analysis implementation is reproduced here.
 DJS_NATIVE_KEY_MAP = (
@@ -28,13 +28,13 @@ DJS_NATIVE_KEY_MAP = (
     "8A", "3A", "10A", "5A", "12A", "7A", "2A", "9A", "4A", "11A", "6A", "1A",
 )
 DJS_KEY_MAPPING_PROVENANCE = {
-    "mapping_id": "djstudio-chromatic-24-v1",
+    "mapping_id": "native-chromatic-24-v1",
     "verified_app_version": "4.2.15",
     "evidence": "Independent agreement of desktop key formatter and KeyEnumCamelot; "
                 "corroborated by exported OpenKey tags 9d and 10m",
     "evidence_bundle_sha256": "e19d8f7c27e0cbea61eb78529c6170b0643b3a57e535d0848e86a75e3cb0dd32",
 }
-DJS_KEY_SOURCES = {"djstudio": "camelotKey", "mixedinkey": "mikKey", "original": "originalCamelotKey"}
+DJS_KEY_SOURCES = {"native": "camelotKey", "mixedinkey": "mikKey", "original": "originalCamelotKey"}
 
 
 class OrderMatchError(ValueError):
@@ -191,20 +191,20 @@ def _json_entries(data: Any) -> list[Any]:
 
 
 def _djs_entries(path: Path) -> list[dict[str, Any]]:
-    from .djstudio import load_djs
+    from .project_archive import load_djs
 
     project = load_djs(path)
     library = {}
     for audio in project.mixdata["audio"]:
         key = audio.get("key")
         if key in library:
-            raise OrderMatchError(f"Duplicate DJ.Studio library key: {key}")
+            raise OrderMatchError(f"Duplicate project archive library key: {key}")
         library[key] = audio
     result = []
     for track in project.mixdata["mix"]:
         key = track.get("libraryKey")
         if key not in library:
-            raise OrderMatchError(f"DJ.Studio mix references missing library key: {key}")
+            raise OrderMatchError(f"project archive mix references missing library key: {key}")
         audio = library[key]
         tag = audio.get("tag", {})
         title = tag.get("title") if isinstance(tag, Mapping) else None
@@ -221,7 +221,7 @@ def _load_entries(path: Path) -> list[Any]:
     if suffix == ".djs":
         return _djs_entries(path)
     if suffix == ".cue":
-        from .djstudio import read_cue
+        from .project_archive import read_cue
 
         cue = read_cue(path)
         result = []
@@ -285,7 +285,7 @@ def _import_djs_key(entry: Mapping[str, Any], source: str) -> dict[str, Any]:
     for field in fields:
         key, numeric = _djs_key(entry.get(field))
         if key is not None:
-            record.update(key_camelot=key, key_source=f"djstudio.{field}",
+            record.update(key_camelot=key, key_source=f"native.{field}",
                           key_source_fallback=field != selected_field,
                           key_mapping_status="verified_numeric_index" if numeric else "explicit_camelot")
             if numeric:
@@ -297,13 +297,13 @@ def _import_djs_key(entry: Mapping[str, Any], source: str) -> dict[str, Any]:
 
 
 def load_analysis(path: str | Path, reference_records: Sequence[Mapping[str, Any]], *,
-                  djs_key_source: str = "djstudio") -> list[dict[str, Any]]:
+                  djs_key_source: str = "native") -> list[dict[str, Any]]:
     """Read available imported analysis without replacing reference estimates.
 
     DJS native indices use the independently verified 24-key map, with raw
     fields and evidence retained. The default reads ``camelotKey``; selecting
     ``mixedinkey`` or ``original`` explicitly tries that field first, then the
-    native DJ.Studio key when unavailable. The active source selector is not
+    native project archive key when unavailable. The active source selector is not
     stored in the archive: ``useMixedInKeyAnalysis`` is never treated as proof
     of its selection. Numeric keys in plain JSON remain uninterpreted.
     CUE/M3U usually carry no BPM/key metadata and therefore return only IDs.
@@ -416,7 +416,7 @@ def compare_orders(reference_records: Sequence[Mapping[str, Any]], our_order: Se
 
     Missing/extra identities are reported explicitly; duplicates are errors.
     Imported orders need not match to have equal or better declared costs.
-    Scores express our published heuristic, not a DJ.Studio internal score or
+    Scores express our published heuristic, not a project archive internal score or
     an assessment of the audible transition. Position numbers are one-based.
     """
     from .harmonize import harmonic_relation, score_pair
@@ -517,7 +517,7 @@ def compare_orders(reference_records: Sequence[Mapping[str, Any]], our_order: Se
     successors = evaluate_successors(list(reference.values()), other_order, **settings) if other_set == reference_set else None
     return {"schema_version": 1, "objective": settings,
             "note": "Different orders alone are not errors. BPM/key estimates, settings and ties matter; "
-                    "costs below use our heuristic on identical reference inputs, not DJ.Studio's score.",
+                    "costs below use our heuristic on identical reference inputs, not project archive's score.",
             "counts": {"reference": len(reference), "our": len(our_order), "other": len(other_order)},
             "orders": {"our": our_order, "other": other_order},
             "membership": {"our": membership(our_set), "other": membership(other_set),

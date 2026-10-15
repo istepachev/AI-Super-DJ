@@ -6,7 +6,7 @@ import zipfile
 
 import pytest
 
-from superdj.djstudio import (DJStudioError, DJStudioProject, audit_djstudio,
+from superdj.project_archive import (ArchiveError, ArchiveProject, audit_archive,
                              cue_timestamp, load_djs, parse_cue_text, read_cue)
 
 
@@ -64,7 +64,7 @@ def test_cue_uses_75_frames_and_unbounded_minutes(timestamp, expected):
 
 @pytest.mark.parametrize("value", ["01:60:00", "01:59:75", "-1:00:00", "1:1:1", "01:02"])
 def test_bad_cue_timestamp_rejected(value):
-    with pytest.raises(DJStudioError):
+    with pytest.raises(ArchiveError):
         cue_timestamp(value)
 
 
@@ -91,10 +91,10 @@ def test_metadata_reader_does_not_read_embedded_audio(tmp_path, monkeypatch):
 
 def test_archive_paths_and_metadata_limit_rejected(tmp_path):
     path = write_djs(tmp_path / "unsafe.djs", extras={"../outside.flac": b"x"})
-    with pytest.raises(DJStudioError, match="Unsafe"):
+    with pytest.raises(ArchiveError, match="Unsafe"):
         load_djs(path)
     path = write_djs(tmp_path / "large.djs")
-    with pytest.raises(DJStudioError, match="oversized"):
+    with pytest.raises(ArchiveError, match="oversized"):
         load_djs(path, max_metadata_bytes=10)
 
 
@@ -103,7 +103,7 @@ def test_duplicate_metadata_cannot_silently_override(tmp_path):
     with pytest.warns(UserWarning):
         with zipfile.ZipFile(path, "a") as archive:
             archive.writestr("mixdata.json", "{}")
-    with pytest.raises(DJStudioError, match="exactly one"):
+    with pytest.raises(ArchiveError, match="exactly one"):
         load_djs(path)
 
 
@@ -115,7 +115,7 @@ def test_unknown_cue_directives_are_inert_and_preserved():
 def test_missing_index_nonmonotone_or_duplicate_tracks_rejected():
     for malformed in (cue_text().replace("INDEX 01 00:00:00", "INDEX 00 00:00:00"),
                       cue_text(at="00:00:00"), cue_text().replace("TRACK 02", "TRACK 01")):
-        with pytest.raises(DJStudioError):
+        with pytest.raises(ArchiveError):
             parse_cue_text(malformed)
 
 
@@ -126,7 +126,7 @@ def test_file_local_positions_can_restart_and_do_not_become_one_timeline():
     data["mix"].append(copy.deepcopy(data["mix"][1]))
     data["mix"][-1]["libraryKey"] = "c"
     data["audio"].append({"key": "c", "name": "Gamma", "bpm": 130})
-    report = audit_djstudio(DJStudioProject(data, {}), cue=cue)
+    report = audit_archive(ArchiveProject(data, {}), cue=cue)
     assert report["cue_order_matches"]
     assert not report["cue_timing_usable"]
     assert all(t["playback_duration_bounds_s"] is None for t in report["tracks"])
@@ -136,7 +136,7 @@ def test_native_curves_cues_jingles_and_unknown_fields_preserved(tmp_path):
     path = write_djs(tmp_path / "example.djs")
     before = path.read_bytes()
     project = load_djs(path)
-    report = audit_djstudio(project, cue=parse_cue_text(cue_text()), include_native_state=True)
+    report = audit_archive(project, cue=parse_cue_text(cue_text()), include_native_state=True)
     assert report["native_state"]["mixdata"] == project.mixdata
     assert report["transitions"][0]["native_effect"] == project.mixdata["autoEffects"][0]
     assert report["jingles"] == project.mixdata["jingles"]
@@ -147,7 +147,7 @@ def test_native_curves_cues_jingles_and_unknown_fields_preserved(tmp_path):
 
 
 def test_source_span_is_not_actual_playback_span_and_cue_intervals_exclude_overlap():
-    report = audit_djstudio(DJStudioProject(project_data(), {}), cue=parse_cue_text(cue_text()),
+    report = audit_archive(ArchiveProject(project_data(), {}), cue=parse_cue_text(cue_text()),
                             export_duration_s=250)
     first = report["tracks"][0]
     assert first["source_selected_span_s"] == 232
@@ -166,7 +166,7 @@ def test_source_span_is_not_actual_playback_span_and_cue_intervals_exclude_overl
 def test_phrase_data_or_bar_number_does_not_establish_reviewed_phrasing():
     data = project_data()
     data["mix"][0]["phraseData"] = [{"beat": 32, "kind": "model_guess"}]
-    report = audit_djstudio(DJStudioProject(data, {}))
+    report = audit_archive(ArchiveProject(data, {}))
     assert report["tracks"][0]["phrase_metadata_present"]
     assert not report["tracks"][0]["phrase_verified"]
     assert not report["transitions"][0]["phrase_verified"]
@@ -175,21 +175,21 @@ def test_phrase_data_or_bar_number_does_not_establish_reviewed_phrasing():
 def test_native_arbitrary_transition_length_is_retained_without_4_beat_assumption():
     data = project_data()
     data["autoEffects"][0]["duration"] = 176
-    report = audit_djstudio(DJStudioProject(data, {}))
+    report = audit_archive(ArchiveProject(data, {}))
     assert report["transitions"][0]["bars"] == 44
     for audio in data["audio"]:
         audio["beatsPerBar"] = 3
-    report = audit_djstudio(DJStudioProject(data, {}))
+    report = audit_archive(ArchiveProject(data, {}))
     assert report["transitions"][0]["bars"] == pytest.approx(176 / 3)
     data["audio"][0].pop("beatsPerBar")
-    report = audit_djstudio(DJStudioProject(data, {}))
+    report = audit_archive(ArchiveProject(data, {}))
     assert report["transitions"][0]["bars"] is None
 
 
 def test_source_end_past_file_is_reported_not_counted_as_real_music():
     data = project_data()
     data["audio"][0]["duration"] = 210
-    report = audit_djstudio(DJStudioProject(data, {}))
+    report = audit_archive(ArchiveProject(data, {}))
     assert report["tracks"][0]["source_end_beyond_file_s"] == 22
     assert not report["tracks"][0]["minimum_duration"]["audibility_verified"]
 
@@ -197,13 +197,13 @@ def test_source_end_past_file_is_reported_not_counted_as_real_music():
 def test_zero_overlap_is_visible_as_a_cut_in_imported_project():
     data = project_data()
     data["autoEffects"][0]["duration"] = 0
-    report = audit_djstudio(DJStudioProject(data, {}), cue=parse_cue_text(cue_text()))
+    report = audit_archive(ArchiveProject(data, {}), cue=parse_cue_text(cue_text()))
     assert report["transitions"][0]["kind"] == "cut"
     assert report["tracks"][0]["playback_duration_bounds_s"] == [100, 100]
 
 
 def test_title_mismatch_never_attaches_export_times_by_track_number():
-    report = audit_djstudio(DJStudioProject(project_data(), {}), cue=parse_cue_text(cue_text("Other")))
+    report = audit_archive(ArchiveProject(project_data(), {}), cue=parse_cue_text(cue_text("Other")))
     assert not report["cue_order_matches"]
     assert not report["cue_timing_usable"]
     assert report["transitions"][0]["export_start_s"] is None
@@ -215,7 +215,7 @@ def test_title_mismatch_never_attaches_export_times_by_track_number():
 def test_unsupported_tempo_or_effect_controls_do_not_claim_playback_bounds(override):
     data = project_data()
     data["autoEffects"][0].update(override)
-    report = audit_djstudio(DJStudioProject(data, {}), cue=parse_cue_text(cue_text()))
+    report = audit_archive(ArchiveProject(data, {}), cue=parse_cue_text(cue_text()))
     assert report["transitions"][0]["overlap_duration_bounds_s"] is None
     assert report["tracks"][0]["playback_duration_bounds_s"] is None
 
@@ -223,20 +223,20 @@ def test_unsupported_tempo_or_effect_controls_do_not_claim_playback_bounds(overr
 def test_missing_tempo_envelope_or_transition_leaves_duration_unknown():
     data = project_data()
     data.pop("minBpm")
-    report = audit_djstudio(DJStudioProject(data, {}), cue=parse_cue_text(cue_text()))
+    report = audit_archive(ArchiveProject(data, {}), cue=parse_cue_text(cue_text()))
     assert report["tracks"][0]["playback_duration_bounds_s"] is None
     data["autoEffects"] = []
-    report = audit_djstudio(DJStudioProject(data, {}))
+    report = audit_archive(ArchiveProject(data, {}))
     assert report["transitions"][0]["kind"] == "unknown"
     assert report["warnings"]
 
 
 def test_final_duration_invalid_or_absent_not_fabricated():
-    project = DJStudioProject(project_data(), {})
+    project = ArchiveProject(project_data(), {})
     cue = parse_cue_text(cue_text())
-    with pytest.raises(DJStudioError, match="later"):
-        audit_djstudio(project, cue=cue, export_duration_s=100)
-    report = audit_djstudio(project, cue=cue)
+    with pytest.raises(ArchiveError, match="later"):
+        audit_archive(project, cue=cue, export_duration_s=100)
+    report = audit_archive(project, cue=cue)
     assert report["tracks"][-1]["playback_duration_bounds_s"] is None
 
 

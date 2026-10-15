@@ -27,7 +27,7 @@ around 43%, initially quieter on the incoming deck. Highs cross throughout
 the overlap. Each pair's gain sum stays at or below one. These narrow bass/mid
 curves belong to the explicit default style. DJ Zhilin instead spreads mids
 across almost the whole overlap and bass across one eighth (four of 32 bars),
-with gentle full-overlap highs. The private reference profile derives effective
+with gentle full-overlap highs. The default packaged reference profile derives effective
 band shares from approved native volume and EQ automation. Incoming
 mids precede the bass handoff and outgoing mids remain afterwards. Complementary
 gains and separate vocal handoff avoid two equally loud foregrounds. Preserve

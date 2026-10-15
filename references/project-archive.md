@@ -1,14 +1,14 @@
-# DJ.Studio adapter
+# project archive adapter
 
 AI Super DJ can inspect a native `.djs` archive, its exported CUE sheet and an
 exported audio file. The audit adapter is read-only. An advanced preserving rewrite API
-patches selected records in a new archive. It does not reproduce DJ.Studio's
+patches selected records in a new archive. It does not reproduce project archive's
 synthesis or render its automation.
 
 ## Run an audit
 
 ```text
-python -m superdj djstudio-audit --project "project.djs" --cue "export.cue" --audio "export.mp3" --work "private/report-folder"
+python -m superdj archive-audit --project "project.djs" --cue "export.cue" --audio "export.mp3" --work "private/report-folder"
 ```
 
 `--project` and `--work` are required. `--cue` and `--audio` are optional.
@@ -23,7 +23,7 @@ provide `--ffprobe "path/to/ffprobe"` and `--ffmpeg "path/to/ffmpeg"`.
   `mixdata.json` and `settings.json` in the private report. This snapshot may
   contain personal file paths and should not be published.
 
-The command writes `djstudio_audit.json`. Full measurement also writes an
+The command writes `archive_audit.json`. Full measurement also writes an
 `export_qa.log`. Neither input audio nor the `.djs` archive is changed.
 
 ## What is preserved and checked
@@ -58,7 +58,7 @@ into a single export timeline. Unknown CUE directives remain inert text.
    chapter interval. Those bounds use the native project's declared minimum and
    maximum tempos; `local_tempo_playback_duration_bounds_s` uses the narrower
    neighboring-track envelope. These are estimates under stated assumptions,
-   not a reconstruction of DJ.Studio's tempo interpolation. The final chapter
+   not a reconstruction of project archive's tempo interpolation. The final chapter
    ends at the independently probed/measured export duration, when available.
 
 The CUE markers are assumed to correspond to incoming native entry points;
@@ -76,9 +76,9 @@ separate checks.
 ## Python API
 
 ```python
-from superdj.djstudio import audit_djstudio, load_djs, read_cue
+from superdj.project_archive import audit_archive, load_djs, read_cue
 
-report = audit_djstudio(
+report = audit_archive(
     "project.djs",
     cue="export.cue",
     export_duration_s=3600.0,  # independently measured exported audio
@@ -87,7 +87,7 @@ report = audit_djstudio(
 )
 ```
 
-`load_djs()` returns a `DJStudioProject`. Its `native_state()` method returns an
+`load_djs()` returns a `ArchiveProject`. Its `native_state()` method returns an
 independent deep copy of all native JSON. `read_cue()` and `parse_cue_text()` parse
 chapters without opening any audio paths named inside them. The audit returns a
 JSON-serializable dictionary and performs no output writes itself.
