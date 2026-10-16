@@ -21,12 +21,26 @@ def retain_mixture_references(path,warp,sample_rate):
     mono=resample_poly(audio.mean(axis=1),8000//divisor,sample_rate//divisor)
     filtered={}
     for role,source in warp.get('source_kick_alignment',{}).items():
-        if source.get('evidence')!='estimated drums' or not source.get('attack_templates_path') or not source.get('events'):continue
+        if source.get('evidence') not in ('estimated drums','original mixture') or not source.get('attack_templates_path') or not source.get('events'):continue
         events=source['events'];centres=[p['source_seconds']-warp['trim_start_seconds'] for p in events]
         contract={'comparison_signal':'the exact prepared native mixture fed to the stretcher',
-            'estimated_drum_discovery_retained':True,'audio_edited':False,
+            'estimated_drum_discovery_retained':source.get('evidence')=='estimated drums','audio_edited':False,
             'scope':'mixture context timing; masked isolated percussion remains uncertain',
             'primary_visible_beats':[],'bass_visible_beats':[],'visibility':{}}
+        if source.get('evidence')=='original mixture':
+            # These references already come from the native mixture. Calibrate
+            # bass observability without labelling a second copy independent.
+            if source.get('bass_attack_templates_path'):
+                with np.load(source['bass_attack_templates_path']) as saved:templates=saved['templates']
+                native=template_attack_rows(audio,sample_rate,centres,templates,
+                    minimum_correlation=.90,attack_band_hz=(35,180))
+                contract['mixture_bass_visible_beats']=[p['beat'] for p,t,row in zip(events,centres,native)
+                    if row['eligible'] and abs(row['time']-t)<=.003]
+                contract['visibility']['mixture_bass']=[{'beat':p['beat'],'recognized_in_native_mixture':bool(row['eligible']),
+                    'template_correlation':row.get('template_correlation'),'alternative_peak_margin':row.get('alternative_peak_margin'),
+                    'native_reference_delay_seconds':row['time']-t} for p,t,row in zip(events,centres,native)]
+            source['native_mixture_reference']=contract
+            continue
         for label,key,band,minimum in [('primary','attack_templates_path',source.get('attack_band_hz',[100,1400]),.65),
                                       ('bass','bass_attack_templates_path',[35,180],.90)]:
             if not source.get(key):continue
@@ -49,6 +63,14 @@ def retain_mixture_references(path,warp,sample_rate):
                 templates.append(signal[center-96:center+360])
             target=Path(path).with_name(Path(path).stem+f'-{role}-native-mixture-{label}.npz')
             np.savez_compressed(target,templates=np.asarray(templates,dtype='float32'))
+            if label=='bass':
+                native=template_attack_rows(audio,sample_rate,centres,np.asarray(templates,dtype='float32'),
+                    minimum_correlation=.90,attack_band_hz=band)
+                contract['mixture_bass_visible_beats']=[p['beat'] for p,t,row in zip(events,centres,native)
+                    if row['eligible'] and abs(row['time']-t)<=.003]
+                contract['visibility']['mixture_bass']=[{'beat':p['beat'],'recognized_in_native_mixture':bool(row['eligible']),
+                    'template_correlation':row.get('template_correlation'),'alternative_peak_margin':row.get('alternative_peak_margin'),
+                    'native_reference_delay_seconds':row['time']-t} for p,t,row in zip(events,centres,native)]
             source['estimated_drum_'+key]=previous
             source[key]=str(target)
         contract['unresolved_estimated_bass_beats']=[p['beat'] for p in events if p['beat'] not in contract['bass_visible_beats']]

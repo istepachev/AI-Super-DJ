@@ -54,6 +54,72 @@ def test_recovery_moves_the_failed_tail_instead_of_an_unrelated_entrance():
     assert new['sections']['0']['end']!=plan['sections']['0']['end']
 
 
+@pytest.mark.parametrize('identity,attempt,boundary',[('0',1,'end'),('1',2,'start')])
+def test_two_failed_roles_still_recover_the_actual_failed_source(identity,attempt,boundary):
+    rows,plan=source_plan(2)
+    failure=TransitionFailure('0','1','both roles unresolved',{'failed_track':identity,'failed_roles':['head','tail']})
+    updated,evidence=alternative(plan,rows,failure,{},attempt,sample_rate=48000,ffmpeg=None)
+    assert evidence['changed_track']==identity and evidence['boundary']==boundary
+    other='1' if identity=='0' else '0'
+    assert updated['sections'][other]['start']==plan['sections'][other]['start']
+    assert updated['sections'][other]['end']==plan['sections'][other]['end']
+
+
+def audio_recovery_inputs(tmp_path):
+    import os
+    from test_speed_pipeline import _long_records
+    ffmpeg,rubberband=os.getenv('SUPERDJ_FFMPEG'),os.getenv('SUPERDJ_RUBBERBAND')
+    if not ffmpeg or not rubberband:pytest.skip('Actual audio backends required')
+    rows=_long_records(tmp_path,[120,124])
+    # Explicit shared SYNC with differing tempos must execute the acoustic
+    # path; an unchanged native pass-through does not exercise this failure.
+    plan=arrange_sync(plan_tracks(rows,mode='fixed'),rows,zhilin=True,sample_rate=16000,ffmpeg=ffmpeg)
+    return rows,plan,{'ffmpeg':ffmpeg,'rubberband':rubberband,'sample_rate':16000}
+
+
+def test_no_recognized_output_preserves_failed_clip_identity_for_recovery(tmp_path,monkeypatch):
+    from superdj import kick_grid,sync
+    from superdj.render import render_plan
+    rows,plan,controls=audio_recovery_inputs(tmp_path)
+    audit={'measured':[],'unverified':[],'maximum_measured_drift_seconds':None,'all_interior_beats_verified':False}
+    calls=[]
+    def unavailable(*args,**kwargs):calls.append(1);return deepcopy(audit)
+    monkeypatch.setattr(kick_grid,'rendered_attack_audit',unavailable)
+    monkeypatch.setattr(sync,'transient_drift',unavailable)
+    with pytest.raises(TransitionFailure) as exc:
+        render_plan(plan,rows,{r['id']:r['path'] for r in rows},tmp_path/'out.wav',tmp_path/'work',
+            **controls)
+    assert exc.value.evidence['failed_track']=='0'
+    assert exc.value.evidence['failed_roles']==['tail']
+    assert exc.value.evidence['final_attack']['maximum_measured_drift_seconds'] is None
+    assert calls
+
+
+def test_backend_execution_failure_cannot_trigger_musical_window_recovery(tmp_path,monkeypatch):
+    from superdj import render
+    rows,plan,controls=audio_recovery_inputs(tmp_path);calls=[]
+    def broken(*args,**kwargs):calls.append(1);raise RenderError('configured backend execution failed')
+    monkeypatch.setattr(render,'_run',broken)
+    with pytest.raises(RenderError,match='configured backend execution failed') as exc:
+        render_with_recovery(plan,rows,{r['id']:r['path'] for r in rows},tmp_path/'out.wav',tmp_path/'work',**controls)
+    assert not isinstance(exc.value,TransitionFailure) and len(calls)==1
+
+
+def test_nonfinite_backend_output_is_not_misclassified_as_an_unknown_source_window(tmp_path,monkeypatch):
+    import soundfile as sf
+    from superdj import kick_grid,sync
+    rows,plan,controls=audio_recovery_inputs(tmp_path);calls=[]
+    def invalid(*args,**kwargs):
+        path=args[0] if len(args)==3 else args[1]
+        with sf.SoundFile(path,mode='r+') as output:output.write(np.full((1,2),np.nan,dtype='float32'))
+        calls.append(1)
+        return {'measured':[],'unverified':[],'maximum_measured_drift_seconds':None,'all_interior_beats_verified':False}
+    monkeypatch.setattr(kick_grid,'rendered_attack_audit',invalid);monkeypatch.setattr(sync,'transient_drift',invalid)
+    with pytest.raises(RenderError,match='nonfinite backend PCM') as exc:
+        render_with_recovery(plan,rows,{r['id']:r['path'] for r in rows},tmp_path/'out.wav',tmp_path/'work',**controls)
+    assert not isinstance(exc.value,TransitionFailure) and len(calls)==1
+
+
 def test_recovery_does_not_renumber_the_same_unverified_required_event():
     rows,plan=source_plan(2);start=plan['sections']['1']['start'];stamp=start+10
     evidence={'failed_track':'1','failed_roles':['head'],

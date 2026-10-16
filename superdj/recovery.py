@@ -10,11 +10,11 @@ def unsupported_attack_events(evidence,role):
     """Retain physical source positions across every required timing view."""
     source=evidence.get('warp',{}).get('source_kick_alignment',{}).get(role,{})
     points=[p for p in evidence.get('final_attack',{}).get('measured',[]) if p['role']==role]
-    required=set((source.get('low_frequency_gap_recovery') or {}).get('recovered_beats',[]))
+    from .source_observability import required_bass_views
+    required=required_bass_views(source)
     observed={p['beat'] for p in points if p.get('view')=='bass_body'}
-    visible=set((source.get('native_mixture_reference') or {}).get('bass_visible_beats',[]))
     independent={p['beat'] for p in points if p.get('view')=='estimated_bass'}
-    failed=(required-observed)|((required&visible)-independent)
+    failed=(required['mixture']-observed)|(required['estimate']-independent)
     failed.update(p['beat'] for p in points if abs(p.get('delay_seconds',0.))>.003)
     return [p['source_seconds'] for p in source.get('events',[]) if p['beat'] in failed]
 
@@ -37,9 +37,9 @@ def alternative(plan, records, failure, excluded, attempt, *, sample_rate, ffmpe
         options.reverse()
     failed_track=failure.evidence.get('failed_track')
     failed_roles=failure.evidence.get('failed_roles',[])
-    if failed_track and len(failed_roles)==1:
-        boundary='start' if failed_roles[0]=='head' else 'end'
-        options=[item for item in options if item[:2]==(failed_track,boundary)]
+    if failed_track and failed_roles:
+        options=[item for item in options if item[0]==failed_track
+                 and ('head' if item[1]=='start' else 'tail') in failed_roles]
     for identity, boundary, lock in options:
         section = sections[identity]
         if section.get(lock, True):

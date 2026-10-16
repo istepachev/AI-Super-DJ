@@ -1242,19 +1242,25 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                     rerender()
                 if best is None:
                     best_file.unlink(missing_ok=True)
-                    raise RenderError(f'{identity}: acoustic attack alignment unresolved; select a supported window or provide percussion evidence')
+                    with sf.SoundFile(clip_output) as rendered:
+                        if any(not np.isfinite(block).all() for block in rendered.blocks(blocksize=262144,dtype='float32',always_2d=True)):
+                            raise RenderError(f'{identity}: nonfinite backend PCM; data failure cannot be repaired by changing a source window')
+                    roles=[role for role in ('head','tail') if warp.get('input_output_beat_mapping',{}).get(role)]
+                    raise SourceWindowError(identity,roles,
+                        'acoustic attack alignment unresolved; select a supported window or provide percussion evidence',
+                        {'final_attack':audits[-1] if audits else {},'warp':warp})
                 warp=best[1];shutil.copy2(best_file,clip_output);best_file.unlink()
                 if use_kicks:
                     from .kick_grid import finalize_attack_timing,preserve_rendered_attacks
+                    from .source_observability import required_bass_views
                     final_attack=finalize_attack_timing(clip_output,warp,sample_rate,
                         allow_pitch_changing_residual=allow_pitch_changing_residual)
                     protection_roles=[role for role,r in warp.get('source_kick_alignment',{}).items()
                         if len(r['events'])>=8 and (sum(e['role']==role for e in final_attack['measured'])<8
                         or max((abs(e['delay_seconds']) for e in final_attack['measured'] if e['role']==role),default=0)>.003
-                        or set((r.get('low_frequency_gap_recovery') or {}).get('recovered_beats',[]))-
+                        or required_bass_views(r)['mixture']-
                            {e['beat'] for e in final_attack['measured'] if e['role']==role and e.get('view')=='bass_body'}
-                        or (set((r.get('low_frequency_gap_recovery') or {}).get('recovered_beats',[]))&
-                            set((r.get('native_mixture_reference') or {}).get('bass_visible_beats',[])))-
+                        or required_bass_views(r)['estimate']-
                            {e['beat'] for e in final_attack['measured'] if e['role']==role and e.get('view')=='estimated_bass'})]
                     if protection_roles:
                         if not allow_native_attack_preservation:
@@ -1266,7 +1272,9 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                         final_attack=rendered_attack_audit(clip_output,warp,sample_rate)
                 else:final_attack=best[2]
                 if final_attack['maximum_measured_drift_seconds'] is None or final_attack['maximum_measured_drift_seconds']>.003:
-                    raise RenderError(f'{identity}: acoustic attack alignment remains unresolved')
+                    roles=[role for role in ('head','tail') if warp.get('input_output_beat_mapping',{}).get(role)]
+                    raise SourceWindowError(identity,roles,'acoustic attack alignment remains unresolved',
+                        {'final_attack':final_attack,'warp':warp})
                 from .timing_safety import audit_warp_rates
                 audit_warp_rates(warp,sample_rate,stage='final map after all acoustic refinements')
                 map_path.write_text("".join(f"{p['source_frame']} {p['output_frame']}\n" for p in warp['anchors']),encoding='ascii')
@@ -1495,6 +1503,7 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                 raise
             from .transition_quality import TransitionFailure
             if isinstance(error,TransitionFailure):raise
+            if not isinstance(error,SourceWindowError):raise
             failed_tail=isinstance(error,SourceWindowError) and error.roles==['tail'] and position<len(transitions)
             edge = transitions[position if failed_tail else max(0,position-1)]
             evidence={'failed_track':identity,'failed_roles':error.roles,**error.evidence} if isinstance(error,SourceWindowError) else {}
