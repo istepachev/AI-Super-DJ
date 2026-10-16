@@ -109,6 +109,9 @@ def arrange_sync(plan, records, *, target_solo_seconds=None, maximum_solo_second
         endpoints = [float(t) for t in row['downbeats']]
         heads = candidates(identity, counts[position - 1], natives[position - 1]) if position else [(t, t, 0, {}) for t in [0.] + endpoints]
         tails = candidates(identity, counts[position], natives[position]) if position < len(counts) else [(t, t, 0, {}) for t in endpoints + [duration]]
+        rejected=(result.get('rejected_attack_window_events') or {}).get(identity,{})
+        heads=[w for w in heads if not any(w[0]<=t<=w[1] for t in rejected.get('head',[]))]
+        tails=[w for w in tails if not any(w[0]<=t<=w[1] for t in rejected.get('tail',[]))]
         if start_lock is not None:
             heads = [w for w in heads if abs(w[0] - start_lock) < 1 / sample_rate]
         elif position:

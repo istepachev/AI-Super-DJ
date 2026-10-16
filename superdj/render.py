@@ -25,6 +25,13 @@ class RenderError(ValueError):
     """A plan cannot be rendered under the declared timing constraints."""
 
 
+class SourceWindowError(RenderError):
+    """Identify the actual failed source boundary for bounded cue recovery."""
+    def __init__(self, identity, roles, reason, evidence=None):
+        super().__init__(f'{identity}: {reason}')
+        self.identity,self.roles,self.evidence=identity,list(roles),evidence or {}
+
+
 def validate_transition_policy(plan: Mapping[str, Any], *, allow_hard_cut: bool = False,
                                allow_unverified: bool = False,
                                tempo_conflict_policy: str = "auto") -> None:
@@ -1152,7 +1159,8 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                 for attempt in range(10):
                     if warp.get('source_attack_controls_unapplied'):
                         if not allow_native_attack_preservation:
-                            raise RenderError(f'{identity}: source rhythm needs another compatible window; local attack replacement is disabled')
+                            raise SourceWindowError(identity,list(warp.get('source_kick_alignment',{})),
+                                'source rhythm needs another compatible window; local attack replacement is disabled')
                         from .kick_grid import preserve_rendered_attacks
                         preserve_rendered_attacks(clip_output,prepared_path,warp,sample_rate,gain=gain)
                         warp['native_attack_preservation']['roles']=['head','tail']
@@ -1217,7 +1225,9 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                            {e['beat'] for e in final_attack['measured'] if e['role']==role and e.get('view')=='bass_body'})]
                     if protection_roles:
                         if not allow_native_attack_preservation:
-                            raise RenderError(f'{identity}: stretched attack recognition needs another compatible window; local attack replacement is disabled')
+                            raise SourceWindowError(identity,protection_roles,
+                                'stretched attack recognition needs another compatible window; local attack replacement is disabled',
+                                {'protection_roles':protection_roles,'final_attack':final_attack,'warp':warp})
                         preserve_rendered_attacks(clip_output,prepared_path,warp,sample_rate,gain=gain,roles=protection_roles)
                         warp['native_attack_preservation']['roles']=protection_roles
                         final_attack=rendered_attack_audit(clip_output,warp,sample_rate)
@@ -1443,12 +1453,15 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
             'next': transition_inputs[position] if position < len(transitions) else None, 'controls': render_controls}
         try:
             return position, identity, cached('clip', dependencies, lambda: prepare_clip(position, identity), directory)
-        except RenderError as error:
+        except ValueError as error:
             if not transitions:
                 raise
             from .transition_quality import TransitionFailure
-            edge = transitions[max(0,position-1)]
-            raise TransitionFailure(edge['from'],edge['to'],str(error)) from error
+            if isinstance(error,TransitionFailure):raise
+            failed_tail=isinstance(error,SourceWindowError) and error.roles==['tail'] and position<len(transitions)
+            edge = transitions[position if failed_tail else max(0,position-1)]
+            evidence={'failed_track':identity,'failed_roles':error.roles,**error.evidence} if isinstance(error,SourceWindowError) else {}
+            raise TransitionFailure(edge['from'],edge['to'],str(error),evidence) from error
 
     from contextlib import closing, nullcontext
     from .execution import current
