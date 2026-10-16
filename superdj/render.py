@@ -535,7 +535,7 @@ def _warp_anchors(record: Mapping[str, Any], *, trim_start: float,
         max(abs(anchor["source_frame"] / sample_rate - reference[0]),
             abs(anchor["output_seconds"] - reference[1]))
         for anchor, reference in zip(anchors, reference_points))
-    return {"anchors": anchors, "output_frames": anchors[-1]["output_frame"],
+    result={"anchors": anchors, "output_frames": anchors[-1]["output_frame"],
             "entry_musical_rate": entry_rate, "exit_musical_rate": exit_rate,
             "max_musical_rate_change": musical_change,
             "max_local_warp_rate_change": max_local, "input_output_beat_mapping": beat_maps,
@@ -547,6 +547,11 @@ def _warp_anchors(record: Mapping[str, Any], *, trim_start: float,
             "tempo_ramps": ramp_reports,
             "tempo_ramps_shortened_for_available_body": bool(ramp_scale < 1 - 1e-12),
             "trim_start_seconds": trim_start, "trim_end_seconds": trim_end}
+    from .timing_safety import initialize_rate_reference,audit_warp_rates
+    initialize_rate_reference(result,sample_rate,native_bpm=native_bpm,
+        windows=[(role,w.clock) for role,w in (('head',head),('tail',tail)) if w],limit=max_local_warp_change)
+    audit_warp_rates(result,sample_rate,stage='initial musical map')
+    return result
 
 
 def _validate_playback_budget(clip, section, sample_rate):
@@ -1190,7 +1195,10 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                         break
                     # The backend can switch a transient's alignment at a
                     # detector threshold. Damped follow-ups prevent oscillation.
-                    compensate_backend_drift(warp, audit, sample_rate, strength=1.0 if attempt < 2 else .5)
+                    try:compensate_backend_drift(warp, audit, sample_rate, strength=1.0 if attempt < 2 else .5)
+                    except ValueError as error:
+                        warp.setdefault('acoustic_correction_rejections',[]).append(str(error))
+                        break
                     rerender()
                 if best is None:
                     best_file.unlink(missing_ok=True)
@@ -1211,6 +1219,8 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                 else:final_attack=best[2]
                 if final_attack['maximum_measured_drift_seconds'] is None or final_attack['maximum_measured_drift_seconds']>.003:
                     raise RenderError(f'{identity}: acoustic attack alignment remains unresolved')
+                from .timing_safety import audit_warp_rates
+                audit_warp_rates(warp,sample_rate,stage='final map after all acoustic refinements')
                 map_path.write_text("".join(f"{p['source_frame']} {p['output_frame']}\n" for p in warp['anchors']),encoding='ascii')
                 warp["post_render_transient_audit"] = {"iterations": audits,
                     "final": final_attack, "tolerance_seconds": .003,
@@ -1343,11 +1353,13 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                 beat_phase = (np.interp(np.arange(incoming), clock['output_frames'], clock['phase']) / clock['beats']) if clock else None
                 if beat_phase is not None:
                     beat_phase[-1] = 1.
-                from .percussion import needs_handoff,final_drum_estimates
+                from .percussion import needs_handoff,final_drum_estimates,ownership_policy,percussion_gains
                 percussion_args={}
                 if mode=='beatmapped_bass_swap' and needs_handoff(clips[position-1].get('warp'),clip.get('warp'),style=plan.get('style','default')):
                     percussion_args,percussion_report=final_drum_estimates(previous_tail,block,sample_rate,directory/f'percussion-{position:02}',ffmpeg=ffmpeg)
                     transition['percussion_estimates']=percussion_report
+                    percussion_args['percussion_policy']=ownership_policy(clips[position-1].get('warp'),clip.get('warp'))
+                    transition['percussion_ownership_policy']=percussion_args['percussion_policy']
                 mixed, evidence = blend(previous_tail, block, sample_rate,
                     bass_hz=bass_hz if mode == "beatmapped_bass_swap" else 0.0,
                     beats=transition.get("beats", 64), tonal_conflict=risk, beat_phase=beat_phase,
@@ -1360,8 +1372,33 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                     from .percussion import verify_blended_fronts,verification_components
                     from .mixing import envelopes
                     gains,_=envelopes(incoming,transition.get('beats',64),beat_phase=beat_phase,style=plan.get('style','default'),mid_handoff_bars=transition.get('mid_handoff_bars'),bass_handoff_beats=transition.get('bass_handoff_beats'))
-                    components=verification_components(previous_tail,block,sample_rate,gains,bass_hz=bass_hz,**percussion_args)
-                    mixed,front_report=verify_blended_fronts(mixed,sample_rate,clips[position-1].get('warp'),clip.get('warp'),gains,directory/f'percussion-fronts-{position:02}',ffmpeg=ffmpeg,components=components)
+                    gains=percussion_gains(gains,beat_phase,transition.get('beats',64),percussion_args.get('percussion_policy','shared'))
+                    components=verification_components(previous_tail,block,sample_rate,gains,bass_hz=bass_hz,**{k:v for k,v in percussion_args.items() if k!='percussion_policy'})
+                    try:
+                        mixed,front_report=verify_blended_fronts(mixed,sample_rate,clips[position-1].get('warp'),clip.get('warp'),gains,directory/f'percussion-fronts-{position:02}',ffmpeg=ffmpeg,components=components)
+                    except ValueError as error:
+                        if percussion_args.get('percussion_policy')=='sequential':raise
+                        # Both timed decks already passed their independent
+                        # clock audit. A conflicting combined figure requires
+                        # another orchestration, never a relaxed timing gate.
+                        if not percussion_args:
+                            percussion_args,percussion_report=final_drum_estimates(previous_tail,block,sample_rate,directory/f'percussion-{position:02}',ffmpeg=ffmpeg)
+                            transition['percussion_estimates']=percussion_report
+                        percussion_args['percussion_policy']='sequential'
+                        transition['percussion_ownership_policy']='sequential'
+                        transition['percussion_routing_review']={'reason':str(error),'independent_deck_clock_checks_retained':True,
+                            'source_windows_clock_overlap_and_harmonic_curves_unchanged':True,'timing_gate_relaxed':False}
+                        mixed,evidence=blend(previous_tail,block,sample_rate,bass_hz=bass_hz,beats=transition.get('beats',64),
+                            tonal_conflict=risk,beat_phase=beat_phase,style=plan.get('style','default'),
+                            mid_handoff_bars=transition.get('mid_handoff_bars'),bass_handoff_beats=transition.get('bass_handoff_beats'),**percussion_args)
+                        transition['frequency_processing']=evidence
+                        gains,_=envelopes(incoming,transition.get('beats',64),beat_phase=beat_phase,style=plan.get('style','default'),
+                            mid_handoff_bars=transition.get('mid_handoff_bars'),bass_handoff_beats=transition.get('bass_handoff_beats'))
+                        gains=percussion_gains(gains,beat_phase,transition.get('beats',64),'sequential')
+                        components=verification_components(previous_tail,block,sample_rate,gains,bass_hz=bass_hz,
+                            **{k:v for k,v in percussion_args.items() if k!='percussion_policy'})
+                        mixed,front_report=verify_blended_fronts(mixed,sample_rate,clips[position-1].get('warp'),clip.get('warp'),gains,
+                            directory/f'percussion-fronts-{position:02}-sequential',ffmpeg=ffmpeg,components=components)
                     transition['blended_front_audit']=front_report
             if transition.get('tempo_technique') == 'shared_phase_sync':
                 from .transition_quality import verify_overlap
@@ -1377,8 +1414,12 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
         from .percussion import needs_handoff
         from .stems import configuration as stem_configuration
         from .execution import current
+        # The combined-front audit can request estimates even when source
+        # evidence did not request an initial percussion handoff. Its model
+        # configuration belongs to the cache key for that fallback as well.
         uses_drums = (transition['mode'] == 'beatmapped_bass_swap' and
-                      needs_handoff(clips[position-1].get('warp'), clip.get('warp'), style=plan.get('style','default')))
+                      (needs_handoff(clips[position-1].get('warp'), clip.get('warp'), style=plan.get('style','default'))
+                       or (plan.get('style') == 'zhilin' and transition.get('tempo_technique') == 'shared_phase_sync')))
         value = cached('overlap', {'outgoing': clips[position-1], 'incoming': clip,
             'transition': transition, 'style': plan.get('style', 'default'), 'bass_hz': bass_hz,
             'sample_rate': sample_rate, 'decoder': render_controls['ffmpeg'],
@@ -1414,6 +1455,11 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
             clip = result['clip']
             clip['id'] = identity
             clip['source_path'] = str(by_id[identity]['path'])
+            if clip.get('warp'):
+                from .timing_safety import initialize_rate_reference,audit_warp_rates
+                initialize_rate_reference(clip['warp'],sample_rate,native_bpm=by_id[identity]['bpm'],
+                    windows=[(role,w.clock) for role,w in (('head',head[identity]),('tail',tail[identity])) if w],limit=max_local_warp_change)
+                audit_warp_rates(clip['warp'],sample_rate,stage='final timed clip before overlap and delivery')
             _validate_playback_budget(clip, sections.get(identity) or {}, sample_rate)
             clips.append(clip)
             if position:

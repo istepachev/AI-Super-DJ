@@ -93,7 +93,7 @@ def envelopes(n, beats, *, tonal_conflict=False, beat_phase=None, style='default
 
 def blend(outgoing, incoming, sample_rate, *, bass_hz=180.0,
           beats=64, tonal_conflict=False, beat_phase=None, style='default', profile=None,
-          mid_handoff_bars=None, bass_handoff_beats=None,drums_out=None,drums_in=None):
+          mid_handoff_bars=None, bass_handoff_beats=None,drums_out=None,drums_in=None,percussion_policy='shared'):
     if outgoing.shape != incoming.shape or outgoing.ndim != 2 or outgoing.shape[1] != 2:
         raise ValueError("Frequency blend needs equally sized stereo blocks")
     if not np.isfinite(outgoing).all() or not np.isfinite(incoming).all():
@@ -114,6 +114,9 @@ def blend(outgoing, incoming, sample_rate, *, bass_hz=180.0,
     low_b, mid_b, high_b = split_bands(incoming, sample_rate, bass_hz)
     gains, curves = envelopes(n, beats, tonal_conflict=tonal_conflict, beat_phase=beat_phase,style=style,profile=profile,
                              mid_handoff_bars=mid_handoff_bars,bass_handoff_beats=bass_handoff_beats)
+    if percussion_policy!='shared' and drums_out is None:raise ValueError('Sequential percussion requires both final drum estimates')
+    from .percussion import percussion_gains
+    gains=percussion_gains(gains,beat_phase,beats,percussion_policy)
     mixed = low_a * gains['bass_out'] + low_b * gains['bass_in']
     mixed += mid_a * gains['mid_out'] + mid_b * gains['mid_in']
     mixed += high_a * gains['high_out'] + high_b * gains['high_in']
@@ -123,11 +126,18 @@ def blend(outgoing, incoming, sample_rate, *, bass_hz=180.0,
         # spectrum together. An old kick's upper attack must not remain at
         # the mid gain after its fundamental has been handed to the next deck.
         for drum_a,drum_b,label in zip(split_bands(drums_out,sample_rate,bass_hz),split_bands(drums_in,sample_rate,bass_hz),('bass','mid','high')):
-            mixed+=drum_a*(gains['bass_out']-gains[label+'_out'])+drum_b*(gains['bass_in']-gains[label+'_in'])
+            mixed+=drum_a*(gains.get('drums_out',gains['bass_out'])-gains[label+'_out'])+drum_b*(gains.get('drums_in',gains['bass_in'])-gains[label+'_in'])
         percussion_phase=np.linspace(0.,1.,n) if beat_phase is None else np.asarray(beat_phase)
         percussion={'executed':True,'method':'Transfer the full estimated percussion spectrum with the bass clock, while accompaniment retains its independent broad frequency curves',
                     'handoff_fraction':curves['bass_handoff_fraction'],'handoff_beats':curves['bass_handoff_beats'],'source':'time-aligned estimates of final rendered decks; not isolated ground truth',
-                    'maximum_outgoing_drum_gain_after_handoff':float(np.max(gains['bass_out'][percussion_phase>=curves['bass_handoff_fraction'][1]])) if np.any(percussion_phase>=curves['bass_handoff_fraction'][1]) else None}
+                    'ownership_policy':percussion_policy,
+                    'maximum_simultaneous_estimated_drum_gain_product':float(np.max(gains.get('drums_out',gains['bass_out'])*gains.get('drums_in',gains['bass_in']))),
+                    'maximum_outgoing_drum_gain_after_handoff':float(np.max(gains.get('drums_out',gains['bass_out'])[percussion_phase>=curves['bass_handoff_fraction'][1]])) if np.any(percussion_phase>=curves['bass_handoff_fraction'][1]) else None}
+        if percussion_policy=='sequential':
+            first=np.flatnonzero(gains['drums_out'][:,0]<1)[0];last=np.flatnonzero(gains['drums_in'][:,0]>=1)[0]
+            percussion.update(method='Sequential estimated percussion ownership for unresolved leading fronts or displaced native figures; harmonic band curves remain unchanged',
+                handoff_fraction=[float(percussion_phase[first]),float(percussion_phase[last])],
+                handoff_beats=float((percussion_phase[last]-percussion_phase[first])*beats))
     report = {"method": "three complementary zero-phase bands with independent bass/mid/high envelopes",
               "bass_hz": bass_hz, "high_hz": 3500., "beats": beats,
               **curves, "incoming_mid_start_multiplier": 0.,

@@ -147,6 +147,8 @@ def augment_source_attacks(audio,sample_rate,centres,accepted,attack_band_hz=(10
 
 def refine_source_controls(path,warp,sample_rate,evidence=None):
     from copy import deepcopy
+    from .timing_safety import initialize_rate_reference,audit_warp_rates,classify_native_phase
+    initialize_rate_reference(warp,sample_rate)
     original_anchors=deepcopy(warp['anchors'])
     reports={}
     for role in ('head','tail'):
@@ -167,6 +169,7 @@ def refine_source_controls(path,warp,sample_rate,evidence=None):
         isolated=len(impulses)>=.9*len(centres)
         band_hz=tuple((stem or {}).get('attack_band_hz',(100,1400)));comparison=None
         rows=attack_events(audio,rate,centres,attack_band_hz=band_hz);accepted=impulses if isolated else repeated_attacks(rows)
+        phase_references=list(accepted)
         if not isolated:
             residual_rows=[{**r,'time':r['time']-r['centre']} for r in rows]
             native_family=repeated_attacks(residual_rows,tolerance_seconds=.0125)
@@ -189,6 +192,7 @@ def refine_source_controls(path,warp,sample_rate,evidence=None):
                     selected=.008<median<.085 and spread<.018
                     comparison={'matched_source_events':len(pairs),'body_minus_upper_median_seconds':median,'body_minus_upper_10_90_spread_seconds':spread,'upper_front_selected':selected}
                     if selected:band_hz=(180,1200);rows=upper_rows;accepted=upper
+            phase_references=list(accepted)
             accepted=augment_source_attacks(audio,rate,centres,accepted,attack_band_hz=band_hz)
         # An upper click family can miss a real kick behind a different fill.
         # Recover only the already-established same-source waveform in bass;
@@ -199,10 +203,17 @@ def refine_source_controls(path,warp,sample_rate,evidence=None):
             recovered=augment_source_attacks(audio,rate,centres,accepted,attack_band_hz=(35,180))
             bass_recovered=[r for r in recovered if r['index'] not in known]
             accepted=recovered
+        displaced=[]
+        if not isolated and not (stem or {}).get('allow_variable_attack_family'):
+            accepted,displaced=classify_native_phase(accepted,centres,phase_references)
+        retained={r['index'] for r in accepted}
+        bass_recovered=[r for r in bass_recovered if r['index'] in retained]
         reports[role]={'method':'repeated band-limited attack onset; 20% novelty rise, not amplitude/body maximum',
                        'evidence':'estimated drums' if stem else 'original mixture',
                        'detected':len(rows),'supported':len(accepted),'unsupported':len(rows)-len(accepted),'events':[]}
         reports[role]['attack_band_hz']=list(band_hz)
+        reports[role]['native_rhythm_observations']=[{**r,'beat':r['index']+1,'source_seconds':base+r['time']} for r in displaced]
+        reports[role]['native_phase_policy']='Waveform identity alone cannot assign a fill/ghost to a primary beat; displaced figures remain at native source timing'
         if comparison:reports[role]['attack_front_comparison']=comparison
         reports[role]['low_frequency_gap_recovery']={'executed':bool(stem and not isolated),
             'recovered_source_events':len(bass_recovered),'attack_band_hz':[35,180],
@@ -258,6 +269,12 @@ def refine_source_controls(path,warp,sample_rate,evidence=None):
             warp['source_attack_controls_unapplied']='Variable attack offsets would make quarter controls nonmonotonic; native attack protection and a fresh rendered audit are required'
         else:raise ValueError('Acoustic source grid would make the map nonmonotonic')
     warp['source_kick_alignment']=reports
+    try:audit_warp_rates(warp,sample_rate,stage='after source attack refinement')
+    except ValueError:
+        rejected=deepcopy(warp['actual_timing_rate_audit']);warp['anchors']=original_anchors
+        audit_warp_rates(warp,sample_rate,stage='restored before source attack refinement')
+        warp.setdefault('rejected_timing_rate_audits',[]).append(rejected)
+        raise
     return reports
 
 def template_attack_rows(audio,sample_rate,centres,templates,minimum_correlation=.65,attack_band_hz=(100,1400)):
