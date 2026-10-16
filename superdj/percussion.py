@@ -8,7 +8,32 @@ def needs_handoff(outgoing_warp,incoming_warp,*,style='default'):
     if style!='zhilin':return False
     return any((warp.get('source_kick_alignment',{}).get(role,{}).get('attack_front_comparison') or {}).get('upper_front_selected',False)
                or (warp.get('source_kick_alignment',{}).get(role,{}).get('low_frequency_gap_recovery') or {}).get('recovered_beats')
+               or warp.get('source_kick_alignment',{}).get(role,{}).get('native_rhythm_observations')
+               or ambiguous_front(warp.get('source_kick_alignment',{}).get(role,{}))
                for warp,role in ((outgoing_warp or {},'tail'),(incoming_warp or {},'head')))
+
+def ambiguous_front(source):
+    view=source.get('attack_front_comparison') or {}
+    return bool(view.get('matched_source_events',0)>=8 and not view.get('upper_front_selected')
+        and view.get('body_minus_upper_median_seconds',0)>.008)
+
+def ownership_policy(outgoing_warp,incoming_warp):
+    sources=[w.get('source_kick_alignment',{}).get(role,{}) for w,role in ((outgoing_warp or {},'tail'),(incoming_warp or {},'head'))]
+    uncertain=any(ambiguous_front(s) or s.get('native_rhythm_observations') for s in sources)
+    return 'sequential' if uncertain else 'shared'
+
+def percussion_gains(gains,beat_phase,beats,policy='shared'):
+    if policy not in ('shared','sequential'):raise ValueError('Unknown percussion ownership policy')
+    if policy=='shared':return gains
+    from .mixing import smooth
+    phase=np.asarray(beat_phase) if beat_phase is not None else np.linspace(0,1,len(gains['bass_in']))
+    both=(gains['bass_in'][:,0]>=.49)&(gains['bass_in'][:,0]<=.51)
+    center=float(np.median(phase[both])) if both.any() else .55
+    beat=min(beats-1,max(1,int(np.ceil(center*beats))));clock=phase*beats
+    old=(1-smooth((clock-(beat-1))/.9))[:,None]
+    new=smooth((clock-(beat-.1))/.1)[:,None]
+    assert np.max(old*new)==0
+    return {**gains,'drums_out':old,'drums_in':new}
 
 def final_drum_estimates(outgoing,incoming,sample_rate,directory,*,ffmpeg='ffmpeg'):
     from .stems import configuration,separate
@@ -47,7 +72,7 @@ def verification_components(outgoing,incoming,sample_rate,gains,*,bass_hz=180.,d
         side='out' if role=='tail' else 'in'
         value=sum(band*gains[name+'_'+side] for name,band in zip(('bass','mid','high'),split_bands(pcm,sample_rate,bass_hz)))
         if drums is not None:
-            value+=sum(band*(gains['bass_'+side]-gains[name+'_'+side]) for name,band in zip(('bass','mid','high'),split_bands(drums,sample_rate,bass_hz)))
+            value+=sum(band*(gains.get('drums_'+side,gains['bass_'+side])-gains[name+'_'+side]) for name,band in zip(('bass','mid','high'),split_bands(drums,sample_rate,bass_hz)))
         result[role]=value.astype('float32')
     return result
 
@@ -61,7 +86,8 @@ def verify_blended_fronts(audio,sample_rate,outgoing_warp,incoming_warp,gains,di
         if not source.get('attack_templates_path') or not source.get('events'):continue
         mapping=warp['input_output_beat_mapping'][role];start=mapping[0]['output_seconds'];events=source['events'];centres=[e['output_seconds']-start for e in events]
         with np.load(source['attack_templates_path']) as f:templates=f['templates']
-        audible=[i for i,t in enumerate(centres) if 0<=round(t*sample_rate)<n and gains[gain_key][round(t*sample_rate),0]>=.5]
+        side='out' if role=='tail' else 'in';audibility=gains.get('drums_'+side,gains[gain_key])
+        audible=[i for i,t in enumerate(centres) if 0<=round(t*sample_rate)<n and audibility[round(t*sample_rate),0]>=.05]
         if not audible:continue
         references.append((role,[centres[i] for i in audible],templates[audible],source['attack_band_hz'],set()))
         if source.get('bass_attack_templates_path'):

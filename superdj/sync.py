@@ -102,6 +102,12 @@ def transient_drift(source_path, output_path, warp: dict, sample_rate: int) -> d
 
 
 def compensate_backend_drift(warp: dict, drift: dict, sample_rate: int, *, strength: float = 1.0) -> None:
+    from .timing_safety import guarded_anchor_edit
+    guarded_anchor_edit(warp,sample_rate,
+        lambda:_compensate_backend_drift(warp,drift,sample_rate,strength=strength),stage='after backend compensation')
+
+
+def _compensate_backend_drift(warp: dict, drift: dict, sample_rate: int, *, strength: float = 1.0) -> None:
     """Precompensate measured backend latency, retaining the intended beat map.
 
     Render again from the original float clip, never stretch an already warped
