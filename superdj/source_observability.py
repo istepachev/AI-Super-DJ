@@ -16,13 +16,15 @@ def bass_candidate_support(path,warp,candidates,drum_audio,drum_rate,source_base
     from .kick_grid import template_attack_rows
     from .timing_safety import SourceWindowFailure
     if not candidates:return [],[],{'executed':False,'reason':'no new estimated bass candidates'}
+    if drum_audio.ndim!=2 or not len(drum_audio) or not np.isfinite(drum_audio).all():
+        raise ValueError('Invalid/nonfinite estimated percussion input for native source evidence')
     stamps=[source_base+r['time']-warp['trim_start_seconds'] for r in candidates]
     with sf.SoundFile(path) as f:
         first=max(0,math.floor((min(stamps)-.2)*f.samplerate))
         last=min(f.frames,math.ceil((max(stamps)+.2)*f.samplerate))
         f.seek(first);native=f.read(last-first,dtype='float32',always_2d=True);rate=f.samplerate
     if not len(native) or not np.isfinite(native).all():
-        raise SourceWindowFailure('Invalid native mixture for bass candidate evidence',role=role)
+        raise ValueError('Invalid/nonfinite native mixture for bass candidate evidence')
     centres=[t-first/rate for t in stamps]
     def bass(audio,sr):
         divisor=math.gcd(sr,8000)

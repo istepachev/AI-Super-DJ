@@ -63,6 +63,18 @@ def test_native_uncertainty_uses_sequential_drums_and_preserves_harmonic_overlap
     assert warp==saved
 
 
+@pytest.mark.parametrize('signal',['native','estimate'])
+def test_corrupt_audio_is_a_data_failure_never_an_uncertain_candidate(tmp_path,signal):
+    sr,source,warp=fixture(tmp_path,bed=0.)
+    drums,_=sf.read(source,dtype='float32',always_2d=True)
+    if signal=='native':
+        native=drums.copy();native[5*sr,0]=np.nan;sf.write(source,native,sr,subtype='FLOAT')
+    else:drums[5*sr,0]=np.nan
+    with pytest.raises(ValueError,match='nonfinite') as exc:
+        bass_candidate_support(source,warp,[{'index':9,'time':5.}],drums,sr,0.,role='head')
+    assert not isinstance(exc.value,SourceWindowFailure)
+
+
 def test_unobservable_candidate_never_enters_primary_source_controls(tmp_path,monkeypatch):
     from test_kick_grid import fixture as kick_fixture
     from superdj import kick_grid
