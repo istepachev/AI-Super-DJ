@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from itertools import product
 import numpy as np
 
 from .render import RenderError, _Window, _grid, _beat_window, _local_window_evidence, _local_validation_possible
@@ -222,8 +223,33 @@ def arrange_sync(plan, records, *, target_solo_seconds=None, maximum_solo_second
                     trials.append((improvement, edge_index, counts[edge_index]))
                     counts[edge_index] = old
         if not trials or max(trials)[0] <= 0:
+            # Two adjacent overlaps can need a coordinated reduction before
+            # either one admits a source section. A zero-improvement single
+            # step is not evidence that the whole compact problem is infeasible.
+            joint_trials = []
+            for position in failures:
+                adjacent = [j for j in (position-1, position)
+                            if 0 <= j < len(counts) and not explicit[j] and counts[j] > 8]
+                if len(adjacent) != 2:
+                    continue
+                levels = [[n for n in (32,16,8) if n <= counts[j]] for j in adjacent]
+                before = [counts[j] for j in adjacent]
+                affected = sorted({i for j in adjacent for i in (j,j+1)})
+                for proposed in product(*levels):
+                    if list(proposed) == before:
+                        continue
+                    for j,n in zip(adjacent,proposed):counts[j]=n
+                    improvement = sum(deficiency(i,selections[i])-deficiency(i,choose_section(i))
+                                      for i in affected)
+                    joint_trials.append((improvement, sum(proposed), tuple(adjacent), proposed))
+                for j,n in zip(adjacent,before):counts[j]=n
+            if joint_trials and max(joint_trials)[0] > 0:
+                _,_,indices,proposed = max(joint_trials)
+                for j,n in zip(indices,proposed):counts[j]=n
+                continue
             if any(s is None for s in selections):
-                raise RenderError(f"{order[failures[0]]}: locks/source/grid leave no compact section within the {maximum_play_seconds:g}s full playback maximum; review cues/grid instead of extending the track")
+                missing = [order[i] for i,s in enumerate(selections) if s is None]
+                raise RenderError(f"{', '.join(missing)}: locks/source/grid leave no compact section within the {maximum_play_seconds:g}s full playback maximum; review cues/grid instead of extending the track")
             break  # Keep the best evidence-supported short-source exception.
         _, edge_index, count = max(trials)
         counts[edge_index] = count
