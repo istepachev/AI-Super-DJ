@@ -15,7 +15,12 @@ def alternative(plan, records, failure, excluded, attempt, *, sample_rate, ffmpe
     if edge is None or not sections:
         raise RenderError('No automatic source windows are available for recovery')
     options = [(failure.incoming, 'start', 'locked_start'), (failure.outgoing, 'end', 'locked_end')]
-    if attempt%2 == 0:
+    source_role=failure.evidence.get('failed_role') if failure.evidence.get('stage')=='source-only timing preflight' else None
+    if source_role=='head':
+        options=options[:1]
+    elif source_role=='tail':
+        options=options[1:]
+    elif attempt%2 == 0:
         options.reverse()
     failed_track=failure.evidence.get('failed_track')
     failed_roles=failure.evidence.get('failed_roles',[])

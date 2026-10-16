@@ -147,7 +147,7 @@ def augment_source_attacks(audio,sample_rate,centres,accepted,attack_band_hz=(10
 
 def refine_source_controls(path,warp,sample_rate,evidence=None):
     from copy import deepcopy
-    from .timing_safety import initialize_rate_reference,audit_warp_rates,classify_native_phase
+    from .timing_safety import initialize_rate_reference,audit_warp_rates,classify_native_phase,SourceWindowFailure
     initialize_rate_reference(warp,sample_rate)
     original_anchors=deepcopy(warp['anchors'])
     reports={}
@@ -205,7 +205,10 @@ def refine_source_controls(path,warp,sample_rate,evidence=None):
             accepted=recovered
         displaced=[]
         if not isolated and not (stem or {}).get('allow_variable_attack_family'):
-            accepted,displaced=classify_native_phase(accepted,centres,phase_references)
+            try:accepted,displaced=classify_native_phase(accepted,centres,phase_references)
+            except SourceWindowFailure as error:
+                error.role=role
+                raise
         retained={r['index'] for r in accepted}
         bass_recovered=[r for r in bass_recovered if r['index'] in retained]
         reports[role]={'method':'repeated band-limited attack onset; 20% novelty rise, not amplitude/body maximum',
@@ -243,7 +246,7 @@ def refine_source_controls(path,warp,sample_rate,evidence=None):
             templates=[]
             for row in accepted:
                 centre=round(row['time']*8000);first=centre-96;last=centre+360
-                if first<0 or last>len(band):raise ValueError('Source attack template lacks context')
+                if first<0 or last>len(band):raise SourceWindowFailure('Source attack template lacks context',role=role)
                 templates.append(band[first:last])
             template_path=Path(path).with_name(Path(path).stem+f'-{role}-attack-templates.npz')
             np.savez_compressed(template_path,templates=np.asarray(templates,dtype='float32'))
@@ -267,13 +270,16 @@ def refine_source_controls(path,warp,sample_rate,evidence=None):
         if any((r or {}).get('allow_variable_attack_family') for r in (evidence or {}).values()):
             warp['anchors']=original_anchors
             warp['source_attack_controls_unapplied']='Variable attack offsets would make quarter controls nonmonotonic; native attack protection and a fresh rendered audit are required'
-        else:raise ValueError('Acoustic source grid would make the map nonmonotonic')
+        else:raise SourceWindowFailure('Acoustic source grid would make the map nonmonotonic')
     warp['source_kick_alignment']=reports
     try:audit_warp_rates(warp,sample_rate,stage='after source attack refinement')
-    except ValueError:
+    except ValueError as error:
         rejected=deepcopy(warp['actual_timing_rate_audit']);warp['anchors']=original_anchors
         audit_warp_rates(warp,sample_rate,stage='restored before source attack refinement')
         warp.setdefault('rejected_timing_rate_audits',[]).append(rejected)
+        if not rejected.get('passed',True):
+            roles=[role for role,report in reports.items() if report.get('events')]
+            raise SourceWindowFailure(str(error),role=roles[0] if len(roles)==1 else None,evidence=rejected) from error
         raise
     return reports
 

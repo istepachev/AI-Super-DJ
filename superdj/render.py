@@ -1119,7 +1119,25 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                     drum_path=prepared.get('drum_path') if isinstance(prepared,Mapping) else None
                     if drum_path or not (preparation or {}).get('processors'):
                         kick_evidence={role:{'path':drum_path or stem['drums_path'],'source_start_seconds':stem.get('drum_source_start_seconds',0.)} for role in ('head','tail')}
-                refine_source_controls(clip_input,warp,sample_rate,kick_evidence)
+                from .timing_safety import SourceWindowFailure
+                try:refine_source_controls(clip_input,warp,sample_rate,kick_evidence)
+                except SourceWindowFailure as error:
+                    # Reject measured source impossibility before the first
+                    # expensive stretch. Only this explicit failure type may
+                    # request another unlocked window; I/O/config errors escape.
+                    role=error.role or ('head' if head[identity] else 'tail')
+                    if role=='head' and position:
+                        pair=(order[position-1],identity)
+                    elif role=='tail' and position<len(order)-1:
+                        pair=(identity,order[position+1])
+                    else:raise
+                    from .execution import current
+                    from .transition_quality import TransitionFailure
+                    if current():current().count('acoustic_source_windows_rejected')
+                    raise TransitionFailure(*pair,str(error),evidence={
+                        'stage':'source-only timing preflight','failed_role':role,
+                        'failed_track':identity,'source_timing_evidence':error.evidence,
+                        'stretch_not_started':True,'timing_gate_relaxed':False}) from error
                 from .attack_references import retain_mixture_references
                 retain_mixture_references(clip_input,warp,sample_rate)
             map_path.write_text("".join(f"{item['source_frame']} {item['output_frame']}\n" for item in warp["anchors"]), encoding="ascii")
@@ -1145,19 +1163,27 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
             if (head[identity] and head[identity].clock) or (tail[identity] and tail[identity].clock):
                 from .sync import transient_drift, compensate_backend_drift
                 from .kick_grid import rendered_attack_audit
+                from .correction_screen import CorrectionScreen
                 from copy import deepcopy
                 import shutil
                 audits = []
                 use_kicks=any(r['events'] for r in warp.get('source_kick_alignment',{}).values())
                 best=None;best_file=directory/f'track-{position+1:02d}-acoustic-best.wav'
+                correction_screen=CorrectionScreen()
+                correction_screen.rendered(warp,clip_output)
                 def rerender():
                     map_path.write_text(''.join(f"{p['source_frame']} {p['output_frame']}\n"
                                                for p in warp['anchors']), encoding='ascii')
+                    if correction_screen.reuse(warp,clip_output):
+                        if current():current().count('acoustic_duplicate_maps_skipped')
+                        return
                     _run([rubberband, *engine_args, '--centre-focus', '--ignore-clipping', '--quiet',
                           '--time', f'{ratio:.12f}', '--timemap', map_path.name,
                           clip_input.name, clip_output.name], cwd=directory)
                     if sf.info(clip_output).frames != warp['output_frames']:
                         raise RenderError('Compensated SYNC render did not retain its exact declared duration')
+                    correction_screen.rendered(warp,clip_output)
+                    if current():current().count('acoustic_rerender_attempts')
                 for attempt in range(10):
                     if warp.get('source_attack_controls_unapplied'):
                         if not allow_native_attack_preservation:
@@ -1169,11 +1195,10 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                     audit = rendered_attack_audit(clip_output,warp,sample_rate) if use_kicks else transient_drift(clip_input, clip_output, warp, sample_rate)
                     audits.append(audit)
                     from .execution import current
-                    if current() and attempt:
-                        current().count("acoustic_rerender_attempts")
                     maximum = audit["maximum_measured_drift_seconds"]
                     if maximum is not None and (best is None or maximum<best[0]):
                         best=(maximum,deepcopy(warp),deepcopy(audit));shutil.copy2(clip_output,best_file)
+                        correction_screen.saved_best(warp,best_file)
                     if attempt == 1 and current() and maximum is not None and maximum > .003:
                         from .acoustic_preview import screen_correction
                         auditor = (lambda source, output, mapping, rate: rendered_attack_audit(output, mapping, rate)) if use_kicks else transient_drift
@@ -1190,7 +1215,6 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                             shutil.copy2(clip_output,screen_file)
                             warp = candidate
                             rerender()
-                            current().count('acoustic_rerender_attempts')
                             full_audit = auditor(clip_input, clip_output, warp, sample_rate)
                             full_maximum = full_audit['maximum_measured_drift_seconds']
                             covered = lambda evidence: {(p['role'], p['beat'], p.get('view')) for p in evidence['measured']}
@@ -1199,11 +1223,13 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                                 audits.append(full_audit)
                                 best=(full_maximum,deepcopy(warp),deepcopy(full_audit))
                                 shutil.copy2(clip_output,best_file)
+                                correction_screen.saved_best(warp,best_file)
                                 current().count('acoustic_preview_confirmed')
                                 screen_file.unlink()
                                 break
                             current().count('acoustic_preview_fallbacks')
                             warp=screen_start;screen_file.replace(clip_output)
+                            correction_screen.rendered(warp,clip_output)
                     if maximum is None or maximum <= .003 or attempt == 9:
                         break
                     # The backend can switch a transient's alignment at a
@@ -1243,6 +1269,7 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                 audit_warp_rates(warp,sample_rate,stage='final map after all acoustic refinements')
                 map_path.write_text("".join(f"{p['source_frame']} {p['output_frame']}\n" for p in warp['anchors']),encoding='ascii')
                 warp["post_render_transient_audit"] = {"iterations": audits,
+                    "duplicate_map_screen":correction_screen.report(),
                     "final": final_attack, "tolerance_seconds": .003,
                     "all_interior_attacks_within_tolerance": bool(final_attack["all_interior_beats_verified"] and
                         final_attack["maximum_measured_drift_seconds"] <= .003),
@@ -1458,7 +1485,7 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
             'next': transition_inputs[position] if position < len(transitions) else None, 'controls': render_controls}
         try:
             return position, identity, cached('clip', dependencies, lambda: prepare_clip(position, identity), directory)
-        except ValueError as error:
+        except RenderError as error:
             if not transitions:
                 raise
             from .transition_quality import TransitionFailure
