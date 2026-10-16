@@ -93,7 +93,7 @@ def envelopes(n, beats, *, tonal_conflict=False, beat_phase=None, style='default
 
 def blend(outgoing, incoming, sample_rate, *, bass_hz=180.0,
           beats=64, tonal_conflict=False, beat_phase=None, style='default', profile=None,
-          mid_handoff_bars=None, bass_handoff_beats=None,drums_out=None,drums_in=None,percussion_policy='shared'):
+          mid_handoff_bars=None, bass_handoff_beats=None,drums_out=None,drums_in=None,percussion_policy='shared',accompaniment_policy='shared'):
     if outgoing.shape != incoming.shape or outgoing.ndim != 2 or outgoing.shape[1] != 2:
         raise ValueError("Frequency blend needs equally sized stereo blocks")
     if not np.isfinite(outgoing).all() or not np.isfinite(incoming).all():
@@ -117,6 +117,8 @@ def blend(outgoing, incoming, sample_rate, *, bass_hz=180.0,
     if percussion_policy!='shared' and drums_out is None:raise ValueError('Sequential percussion requires both final drum estimates')
     from .percussion import percussion_gains
     gains=percussion_gains(gains,beat_phase,beats,percussion_policy)
+    from .accompaniment import accompaniment_gains
+    gains=accompaniment_gains(gains,accompaniment_policy)
     mixed = low_a * gains['bass_out'] + low_b * gains['bass_in']
     mixed += mid_a * gains['mid_out'] + mid_b * gains['mid_in']
     mixed += high_a * gains['high_out'] + high_b * gains['high_in']
@@ -145,4 +147,8 @@ def blend(outgoing, incoming, sample_rate, *, bass_hz=180.0,
               "entry_gain_compensated": False,
               "endpoint_max_error": float(max(np.max(np.abs(mixed[0] - outgoing[0])), np.max(np.abs(mixed[-1] - incoming[-1]))))}
     if percussion:report['percussion_processing']=percussion
+    report['accompaniment_ownership_policy']=accompaniment_policy
+    if accompaniment_policy!='shared':
+        report['residual_bass_mid_gain_product_max']={band:float(np.max(gains[band+'_out']*gains[band+'_in'])) for band in ('bass','mid')}
+        report['accompaniment_handoff_note']='Bass and middle residual figures follow the single percussion handoff; the approved overlap, high-band curves and deck timing remain intact'
     return mixed.astype(np.float32), report

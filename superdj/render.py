@@ -1360,6 +1360,15 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                     transition['percussion_estimates']=percussion_report
                     percussion_args['percussion_policy']=ownership_policy(clips[position-1].get('warp'),clip.get('warp'))
                     transition['percussion_ownership_policy']=percussion_args['percussion_policy']
+                if percussion_args.get('percussion_policy')=='sequential':
+                    from .accompaniment import residual_rhythm_audit
+                    from .mixing import envelopes
+                    residual_gains,_=envelopes(incoming,transition.get('beats',64),beat_phase=beat_phase,style=plan.get('style','default'),mid_handoff_bars=transition.get('mid_handoff_bars'),bass_handoff_beats=transition.get('bass_handoff_beats'))
+                    residual_gains=percussion_gains(residual_gains,beat_phase,transition.get('beats',64),'sequential')
+                    residual_audit=residual_rhythm_audit(previous_tail,block,sample_rate,residual_gains,drums_out=percussion_args['drums_out'],drums_in=percussion_args['drums_in'])
+                    transition['residual_rhythm_audit']=residual_audit
+                    if residual_audit['competing_rhythmic_accompaniment']:
+                        percussion_args['accompaniment_policy']='sequential_low_mid'
                 mixed, evidence = blend(previous_tail, block, sample_rate,
                     bass_hz=bass_hz if mode == "beatmapped_bass_swap" else 0.0,
                     beats=transition.get("beats", 64), tonal_conflict=risk, beat_phase=beat_phase,
@@ -1373,7 +1382,12 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                     from .mixing import envelopes
                     gains,_=envelopes(incoming,transition.get('beats',64),beat_phase=beat_phase,style=plan.get('style','default'),mid_handoff_bars=transition.get('mid_handoff_bars'),bass_handoff_beats=transition.get('bass_handoff_beats'))
                     gains=percussion_gains(gains,beat_phase,transition.get('beats',64),percussion_args.get('percussion_policy','shared'))
-                    components=verification_components(previous_tail,block,sample_rate,gains,bass_hz=bass_hz,**{k:v for k,v in percussion_args.items() if k!='percussion_policy'})
+                    from .accompaniment import accompaniment_gains
+                    gains=accompaniment_gains(gains,percussion_args.get('accompaniment_policy','shared'))
+                    if percussion_args.get('accompaniment_policy')=='sequential_low_mid':
+                        transition['residual_rhythm_after_routing']=residual_rhythm_audit(previous_tail,block,sample_rate,gains,drums_out=percussion_args['drums_out'],drums_in=percussion_args['drums_in'])
+                        if transition['residual_rhythm_after_routing']['competing_rhythmic_accompaniment']:raise ValueError('Residual accompaniment ownership remains unresolved')
+                    components=verification_components(previous_tail,block,sample_rate,gains,bass_hz=bass_hz,**{k:v for k,v in percussion_args.items() if k not in ('percussion_policy','accompaniment_policy')})
                     try:
                         mixed,front_report=verify_blended_fronts(mixed,sample_rate,clips[position-1].get('warp'),clip.get('warp'),gains,directory/f'percussion-fronts-{position:02}',ffmpeg=ffmpeg,components=components)
                     except ValueError as error:
@@ -1385,6 +1399,12 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                             percussion_args,percussion_report=final_drum_estimates(previous_tail,block,sample_rate,directory/f'percussion-{position:02}',ffmpeg=ffmpeg)
                             transition['percussion_estimates']=percussion_report
                         percussion_args['percussion_policy']='sequential'
+                        from .accompaniment import residual_rhythm_audit
+                        residual_gains=percussion_gains(gains,beat_phase,transition.get('beats',64),'sequential')
+                        residual_audit=residual_rhythm_audit(previous_tail,block,sample_rate,residual_gains,drums_out=percussion_args['drums_out'],drums_in=percussion_args['drums_in'])
+                        transition['residual_rhythm_audit']=residual_audit
+                        if residual_audit['competing_rhythmic_accompaniment']:
+                            percussion_args['accompaniment_policy']='sequential_low_mid'
                         transition['percussion_ownership_policy']='sequential'
                         transition['percussion_routing_review']={'reason':str(error),'independent_deck_clock_checks_retained':True,
                             'source_windows_clock_overlap_and_harmonic_curves_unchanged':True,'timing_gate_relaxed':False}
@@ -1395,8 +1415,12 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                         gains,_=envelopes(incoming,transition.get('beats',64),beat_phase=beat_phase,style=plan.get('style','default'),
                             mid_handoff_bars=transition.get('mid_handoff_bars'),bass_handoff_beats=transition.get('bass_handoff_beats'))
                         gains=percussion_gains(gains,beat_phase,transition.get('beats',64),'sequential')
+                        gains=accompaniment_gains(gains,percussion_args.get('accompaniment_policy','shared'))
+                        if percussion_args.get('accompaniment_policy')=='sequential_low_mid':
+                            transition['residual_rhythm_after_routing']=residual_rhythm_audit(previous_tail,block,sample_rate,gains,drums_out=percussion_args['drums_out'],drums_in=percussion_args['drums_in'])
+                            if transition['residual_rhythm_after_routing']['competing_rhythmic_accompaniment']:raise ValueError('Residual accompaniment ownership remains unresolved')
                         components=verification_components(previous_tail,block,sample_rate,gains,bass_hz=bass_hz,
-                            **{k:v for k,v in percussion_args.items() if k!='percussion_policy'})
+                            **{k:v for k,v in percussion_args.items() if k not in ('percussion_policy','accompaniment_policy')})
                         mixed,front_report=verify_blended_fronts(mixed,sample_rate,clips[position-1].get('warp'),clip.get('warp'),gains,
                             directory/f'percussion-fronts-{position:02}-sequential',ffmpeg=ffmpeg,components=components)
                     transition['blended_front_audit']=front_report
