@@ -9,6 +9,7 @@ def needs_handoff(outgoing_warp,incoming_warp,*,style='default'):
     return any((warp.get('source_kick_alignment',{}).get(role,{}).get('attack_front_comparison') or {}).get('upper_front_selected',False)
                or (warp.get('source_kick_alignment',{}).get(role,{}).get('low_frequency_gap_recovery') or {}).get('recovered_beats')
                or warp.get('source_kick_alignment',{}).get(role,{}).get('native_rhythm_observations')
+               or warp.get('source_kick_alignment',{}).get(role,{}).get('unverified_native_bass_candidates')
                or ambiguous_front(warp.get('source_kick_alignment',{}).get(role,{}))
                for warp,role in ((outgoing_warp or {},'tail'),(incoming_warp or {},'head')))
 
@@ -19,7 +20,7 @@ def ambiguous_front(source):
 
 def ownership_policy(outgoing_warp,incoming_warp):
     sources=[w.get('source_kick_alignment',{}).get(role,{}) for w,role in ((outgoing_warp or {},'tail'),(incoming_warp or {},'head'))]
-    uncertain=any(ambiguous_front(s) or s.get('native_rhythm_observations') for s in sources)
+    uncertain=any(ambiguous_front(s) or s.get('native_rhythm_observations') or s.get('unverified_native_bass_candidates') for s in sources)
     return 'sequential' if uncertain else 'shared'
 
 def percussion_gains(gains,beat_phase,beats,policy='shared'):

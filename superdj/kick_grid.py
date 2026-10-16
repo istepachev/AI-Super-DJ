@@ -197,12 +197,16 @@ def refine_source_controls(path,warp,sample_rate,evidence=None):
         # An upper click family can miss a real kick behind a different fill.
         # Recover only the already-established same-source waveform in bass;
         # do not refit a straight line that would discard these events again.
-        bass_recovered=[]
+        bass_recovered=[];unverified_bass=[];native_bass_proof={'executed':False,'reason':'no new estimated bass candidates'}
         if stem and not isolated and len(accepted)>=8:
             known={r['index'] for r in accepted}
             recovered=augment_source_attacks(audio,rate,centres,accepted,attack_band_hz=(35,180))
             bass_recovered=[r for r in recovered if r['index'] not in known]
-            accepted=recovered
+            from .source_observability import bass_candidate_support
+            bass_recovered,unverified_bass,native_bass_proof=bass_candidate_support(
+                path,warp,bass_recovered,audio,rate,base,role=role)
+            supported={r['index'] for r in bass_recovered}
+            accepted=[r for r in recovered if r['index'] in known or r['index'] in supported]
         displaced=[]
         if not isolated and not (stem or {}).get('allow_variable_attack_family'):
             try:accepted,displaced=classify_native_phase(accepted,centres,phase_references)
@@ -217,10 +221,12 @@ def refine_source_controls(path,warp,sample_rate,evidence=None):
         reports[role]['attack_band_hz']=list(band_hz)
         reports[role]['native_rhythm_observations']=[{**r,'beat':r['index']+1,'source_seconds':base+r['time']} for r in displaced]
         reports[role]['native_phase_policy']='Waveform identity alone cannot assign a fill/ghost to a primary beat; displaced figures remain at native source timing'
+        reports[role]['unverified_native_bass_candidates']=unverified_bass
         if comparison:reports[role]['attack_front_comparison']=comparison
         reports[role]['low_frequency_gap_recovery']={'executed':bool(stem and not isolated),
             'recovered_source_events':len(bass_recovered),'attack_band_hz':[35,180],
             'recovered_beats':[r['index']+1 for r in bass_recovered],
+            'native_source_observability':native_bass_proof,
             'method':'same-source waveform recognition; correlation >=0.90, alternative margin >=0.05; no grid-only events'}
         if stem and stem.get('allow_variable_attack_family'):
             reports[role]['variable_native_meter_evidence_authorized']=True
