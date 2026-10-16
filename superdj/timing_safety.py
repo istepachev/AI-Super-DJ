@@ -3,6 +3,14 @@ from copy import deepcopy
 import numpy as np
 
 
+class SourceWindowFailure(ValueError):
+    """A measured source window cannot satisfy the existing timing bounds."""
+    def __init__(self, reason, *, role=None, evidence=None):
+        super().__init__(reason)
+        self.role = role
+        self.evidence = evidence or {}
+
+
 def _fine_rate_views(warp, output, rates, expected, active, sample_rate):
     """Exact extrema of the cubic residual map composed with frame slopes."""
     from scipy.interpolate import PchipInterpolator
@@ -46,7 +54,7 @@ def classify_native_phase(rows, centres, references):
     spread=float(np.percentile(abs(offsets-baseline),90))
     tolerance=max(.035,min(.060,.10*period))
     if spread>tolerance:
-        raise ValueError('Native primary attack phase is ambiguous; review another source window')
+        raise SourceWindowFailure('Native primary attack phase is ambiguous; review another source window')
     accepted=[];displaced=[]
     for row in rows:
         residual=float(row['time']-centres[row['index']]-baseline)
