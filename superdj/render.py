@@ -689,6 +689,7 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                 track_peak_ceiling: float = 0.50,
                 max_gain_db: float = 4.0, bass_hz: float = 180.0,
                 allow_native_attack_preservation: bool = False,
+                allow_pitch_changing_residual: bool = False,
                 progress: Callable[[str], None] | None = None) -> dict[str, Any]:
     """Render a fixed or automatic order to stereo FLOAT WAV, without mastering.
 
@@ -1244,8 +1245,9 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                     raise RenderError(f'{identity}: acoustic attack alignment unresolved; select a supported window or provide percussion evidence')
                 warp=best[1];shutil.copy2(best_file,clip_output);best_file.unlink()
                 if use_kicks:
-                    from .kick_grid import fine_align_rendered,preserve_rendered_attacks
-                    final_attack=fine_align_rendered(clip_output,warp,sample_rate)
+                    from .kick_grid import finalize_attack_timing,preserve_rendered_attacks
+                    final_attack=finalize_attack_timing(clip_output,warp,sample_rate,
+                        allow_pitch_changing_residual=allow_pitch_changing_residual)
                     protection_roles=[role for role,r in warp.get('source_kick_alignment',{}).items()
                         if len(r['events'])>=8 and (sum(e['role']==role for e in final_attack['measured'])<8
                         or max((abs(e['delay_seconds']) for e in final_attack['measured'] if e['role']==role),default=0)>.003
@@ -1422,7 +1424,8 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                     gains=percussion_gains(gains,beat_phase,transition.get('beats',64),percussion_args.get('percussion_policy','shared'))
                     components=verification_components(previous_tail,block,sample_rate,gains,bass_hz=bass_hz,**{k:v for k,v in percussion_args.items() if k!='percussion_policy'})
                     try:
-                        mixed,front_report=verify_blended_fronts(mixed,sample_rate,clips[position-1].get('warp'),clip.get('warp'),gains,directory/f'percussion-fronts-{position:02}',ffmpeg=ffmpeg,components=components)
+                        mixed,front_report=verify_blended_fronts(mixed,sample_rate,clips[position-1].get('warp'),clip.get('warp'),gains,directory/f'percussion-fronts-{position:02}',ffmpeg=ffmpeg,components=components,
+                            allow_pitch_changing_residual=allow_pitch_changing_residual)
                     except ValueError as error:
                         if percussion_args.get('percussion_policy')=='sequential':raise
                         # Both timed decks already passed their independent
@@ -1445,7 +1448,8 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                         components=verification_components(previous_tail,block,sample_rate,gains,bass_hz=bass_hz,
                             **{k:v for k,v in percussion_args.items() if k!='percussion_policy'})
                         mixed,front_report=verify_blended_fronts(mixed,sample_rate,clips[position-1].get('warp'),clip.get('warp'),gains,
-                            directory/f'percussion-fronts-{position:02}-sequential',ffmpeg=ffmpeg,components=components)
+                            directory/f'percussion-fronts-{position:02}-sequential',ffmpeg=ffmpeg,components=components,
+                            allow_pitch_changing_residual=allow_pitch_changing_residual)
                     transition['blended_front_audit']=front_report
             if transition.get('tempo_technique') == 'shared_phase_sync':
                 from .transition_quality import verify_overlap
@@ -1470,6 +1474,7 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
         value = cached('overlap', {'outgoing': clips[position-1], 'incoming': clip,
             'transition': transition, 'style': plan.get('style', 'default'), 'bass_hz': bass_hz,
             'sample_rate': sample_rate, 'decoder': render_controls['ffmpeg'],
+            'allow_pitch_changing_residual':allow_pitch_changing_residual,
             'zhilin_profile': reference_profile() if plan.get('style') == 'zhilin' else None,
             'stem_configuration': stem_configuration() if uses_drums else None,
             'gpu_devices': list(current().devices) if current() and uses_drums else []}, produce, directory)
@@ -1627,6 +1632,7 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                            "native_exit_seconds": native_exit_seconds,
                            "sync_max_temporary_rate_change": sync_max_change,
                            "sync_transition_bars": sync_transition_bars,
+                           "allow_pitch_changing_residual":allow_pitch_changing_residual,
                            "native_exit_max_slowdown": 0.35,
                            "max_local_timing_warp_change": max_local_warp_change,
                            "minimum_grid_confidence": minimum_grid_confidence,
@@ -1638,6 +1644,9 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                 "processing": {"time_stretch": (f"external Rubber Band {rubberband_engine.upper()}, pitch preserved, explicit source→target frame map"
                                                 if warped else "none; outgoing playback-speed effects are reported separately" if creative_speed else "none; native sample timing preserved"),
                                "time_stretch_executed": warped,
+                               "pitch_changing_residual_allowed":allow_pitch_changing_residual,
+                               "pitch_changing_residual_executed":any((c.get('warp') or {}).get('fine_attack_timing') for c in clips)
+                                   or any(t.get('blended_front_audit',{}).get('local_combined_waveform_refinements') for t in transitions),
                                "playback_speed_effect_executed": creative_speed,
                                "playback_speed_effect": "outgoing-only windowed-sinc vinyl slowdown" if creative_speed else None,
                                "rubberband_engine": rubberband_engine if warped else None,

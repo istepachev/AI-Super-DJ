@@ -77,7 +77,7 @@ def verification_components(outgoing,incoming,sample_rate,gains,*,bass_hz=180.,d
     return result
 
 
-def verify_blended_fronts(audio,sample_rate,outgoing_warp,incoming_warp,gains,directory,*,ffmpeg='ffmpeg',components=None):
+def verify_blended_fronts(audio,sample_rate,outgoing_warp,incoming_warp,gains,directory,*,ffmpeg='ffmpeg',components=None,allow_pitch_changing_residual=False):
     """Check identified source fronts in the actual blend; bound local repair."""
     from .kick_grid import template_attack_rows
     references=[];n=len(audio);pad=round(.2*sample_rate)
@@ -140,7 +140,7 @@ def verify_blended_fronts(audio,sample_rate,outgoing_warp,incoming_warp,gains,di
             if not measured or len(measured)<min(8,len(centres)):raise ValueError('Combined percussion fronts remain unverified; review the source window')
             for row in measured:
                 if abs(row['delay_seconds'])>.003:
-                    if attempt or row['correlation']<.9 or abs(row['delay_seconds'])>.006:raise ValueError('Combined percussion attack misses the shared clock; review the rendered overlap')
+                    if not allow_pitch_changing_residual or attempt or row['correlation']<.9 or abs(row['delay_seconds'])>.006:raise ValueError('Combined percussion attack misses the shared clock; review the rendered overlap')
                     residuals.append(row)
             checks.append({'role':role,'audible_source_events':len(centres),'recognized':measured,'unverified_source_seconds':[t for t,r in zip(centres,rows) if not r['eligible']],'attack_band_hz':band,'fresh_percussion_view_used':fresh is not None,'known_other_deck_subtraction_seconds':component_used,'raw_mixture_unverified_seconds':[t for t,r in zip(centres,raw_rows) if not r['eligible']],'maximum_error_seconds':max(abs(r['delay_seconds']) for r in measured)})
         if not residuals:break
