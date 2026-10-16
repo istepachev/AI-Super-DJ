@@ -130,3 +130,20 @@ def test_crossover_masking_needs_source_identity_without_hiding_a_late_hit(tmp_p
     parts={'head':shifted*.5,'tail':other*.5}
     with pytest.raises(ValueError,match='misses the shared clock'):
         percussion.verify_blended_fronts(parts['head']+parts['tail'],sr,{},warp,gains,tmp_path,components=parts)
+
+
+def test_fresh_separation_cannot_erase_a_strong_late_hit_in_actual_pcm(tmp_path,monkeypatch):
+    from superdj import percussion,kick_grid
+    path=tmp_path/'templates.npz';np.savez(path,templates=np.ones((9,456),dtype='float32'))
+    events=[{'beat':i+1,'output_seconds':.5+i*.5} for i in range(9)]
+    warp={'source_kick_alignment':{'head':{'events':events,'attack_templates_path':str(path),'attack_band_hz':[180,1200]}},
+        'input_output_beat_mapping':{'head':[{'output_seconds':0.}]}}
+    calls=[]
+    def recognize(audio,sr,centres,templates,**kwargs):
+        calls.append(1);raw=len(calls)==1
+        return [{'time':t+(.008 if raw else 0.),'eligible':True,'template_correlation':.91 if raw else .999} for t in centres]
+    monkeypatch.setattr(kick_grid,'template_attack_rows',recognize)
+    monkeypatch.setattr(percussion,'final_drum_estimates',lambda a,b,*args,**kw:({'drums_out':a,'drums_in':b},[]))
+    audio=np.zeros((8000*6,2),dtype='float32');gains={'bass_in':np.ones((len(audio),1)),'bass_out':np.zeros((len(audio),1))}
+    with pytest.raises(ValueError,match='misses the shared clock'):
+        percussion.verify_blended_fronts(audio,8000,{},warp,gains,tmp_path)

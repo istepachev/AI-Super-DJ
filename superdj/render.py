@@ -1120,6 +1120,8 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                     if drum_path or not (preparation or {}).get('processors'):
                         kick_evidence={role:{'path':drum_path or stem['drums_path'],'source_start_seconds':stem.get('drum_source_start_seconds',0.)} for role in ('head','tail')}
                 refine_source_controls(clip_input,warp,sample_rate,kick_evidence)
+                from .attack_references import retain_mixture_references
+                retain_mixture_references(clip_input,warp,sample_rate)
             map_path.write_text("".join(f"{item['source_frame']} {item['output_frame']}\n" for item in warp["anchors"]), encoding="ascii")
             ratio = warp["output_frames"] / source_frames
             engine_args = ["--fast", "--detector-perc"] if rubberband_engine == "r2" else ["--fine"]
@@ -1222,7 +1224,10 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                         if len(r['events'])>=8 and (sum(e['role']==role for e in final_attack['measured'])<8
                         or max((abs(e['delay_seconds']) for e in final_attack['measured'] if e['role']==role),default=0)>.003
                         or set((r.get('low_frequency_gap_recovery') or {}).get('recovered_beats',[]))-
-                           {e['beat'] for e in final_attack['measured'] if e['role']==role and e.get('view')=='bass_body'})]
+                           {e['beat'] for e in final_attack['measured'] if e['role']==role and e.get('view')=='bass_body'}
+                        or (set((r.get('low_frequency_gap_recovery') or {}).get('recovered_beats',[]))&
+                            set((r.get('native_mixture_reference') or {}).get('bass_visible_beats',[])))-
+                           {e['beat'] for e in final_attack['measured'] if e['role']==role and e.get('view')=='estimated_bass'})]
                     if protection_roles:
                         if not allow_native_attack_preservation:
                             raise SourceWindowError(identity,protection_roles,

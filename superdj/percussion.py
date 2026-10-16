@@ -96,6 +96,16 @@ def verify_blended_fronts(audio,sample_rate,outgoing_warp,incoming_warp,gains,di
             recovered=set((source.get('low_frequency_gap_recovery') or {}).get('recovered_beats',[]))
             required={centres[i] for i in audible if events[i]['beat'] in recovered}
             references.append((role+':bass_body',[centres[i] for i in audible],low[audible],[35,180],required))
+        contract=source.get('native_mixture_reference',{})
+        for label,key,band in [('primary','attack_templates_path',source.get('attack_band_hz',[100,1400])),
+                               ('bass','bass_attack_templates_path',[35,180])]:
+            original=source.get('estimated_drum_'+key)
+            visible=set(contract.get(label+'_visible_beats',[]))
+            selected=[i for i in audible if events[i]['beat'] in visible]
+            if not original or not selected:continue
+            with np.load(original) as archive:independent=archive['templates']
+            required={centres[i] for i in selected if label=='bass' and events[i]['beat'] in recovered}
+            references.append((role+':estimated_'+label,[centres[i] for i in selected],independent[selected],band,required))
     if not references:return audio,{'executed':False,'reason':'no audible recognized source attack family'}
     if components is not None:
         if set(components)!={'head','tail'} or any(p.shape!=audio.shape or not np.isfinite(p).all() for p in components.values()):raise ValueError('Invalid final-deck verification components')
@@ -123,6 +133,7 @@ def verify_blended_fronts(audio,sample_rate,outgoing_warp,incoming_warp,gains,di
             if count<min(8,len(centres)) or maximum is None or maximum>.003:
                 estimates,_=final_drum_estimates(corrected,corrected,sample_rate,Path(directory)/f'view-{attempt}',ffmpeg=ffmpeg);fresh=template_attack_rows(np.pad(estimates['drums_out'],((pad,pad),(0,0))),sample_rate,[t+.2 for t in centres],templates,attack_band_hz=band,minimum_correlation=minimum)
                 for i,(old,new) in enumerate(zip(rows,fresh)):
+                    if old['eligible'] and old.get('template_correlation',0)>=.90 and abs(old['time']-.2-centres[i])>.003:continue
                     if new['eligible'] and (not old['eligible'] or (abs(old['time']-.2-centres[i])>.003 and new['template_correlation']>old.get('template_correlation',0)+.08)):rows[i]=new
             measured=[{'seconds':t,'delay_seconds':round(r['time']-.2-t,9),'correlation':r['template_correlation']} for t,r in zip(centres,rows) if r['eligible']]
             if required-{r['seconds'] for r in measured}:raise ValueError('Recovered bass attacks remain unverified in the actual blend; review the source window')
