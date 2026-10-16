@@ -10,11 +10,11 @@ def unsupported_attack_events(evidence,role):
     """Retain physical source positions across every required timing view."""
     source=evidence.get('warp',{}).get('source_kick_alignment',{}).get(role,{})
     points=[p for p in evidence.get('final_attack',{}).get('measured',[]) if p['role']==role]
-    required=set((source.get('low_frequency_gap_recovery') or {}).get('recovered_beats',[]))
+    from .source_observability import required_bass_views
+    required=required_bass_views(source)
     observed={p['beat'] for p in points if p.get('view')=='bass_body'}
-    visible=set((source.get('native_mixture_reference') or {}).get('bass_visible_beats',[]))
     independent={p['beat'] for p in points if p.get('view')=='estimated_bass'}
-    failed=(required-observed)|((required&visible)-independent)
+    failed=(required['mixture']-observed)|(required['estimate']-independent)
     failed.update(p['beat'] for p in points if abs(p.get('delay_seconds',0.))>.003)
     return [p['source_seconds'] for p in source.get('events',[]) if p['beat'] in failed]
 

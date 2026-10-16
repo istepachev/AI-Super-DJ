@@ -1246,15 +1246,15 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                 warp=best[1];shutil.copy2(best_file,clip_output);best_file.unlink()
                 if use_kicks:
                     from .kick_grid import finalize_attack_timing,preserve_rendered_attacks
+                    from .source_observability import required_bass_views
                     final_attack=finalize_attack_timing(clip_output,warp,sample_rate,
                         allow_pitch_changing_residual=allow_pitch_changing_residual)
                     protection_roles=[role for role,r in warp.get('source_kick_alignment',{}).items()
                         if len(r['events'])>=8 and (sum(e['role']==role for e in final_attack['measured'])<8
                         or max((abs(e['delay_seconds']) for e in final_attack['measured'] if e['role']==role),default=0)>.003
-                        or set((r.get('low_frequency_gap_recovery') or {}).get('recovered_beats',[]))-
+                        or required_bass_views(r)['mixture']-
                            {e['beat'] for e in final_attack['measured'] if e['role']==role and e.get('view')=='bass_body'}
-                        or (set((r.get('low_frequency_gap_recovery') or {}).get('recovered_beats',[]))&
-                            set((r.get('native_mixture_reference') or {}).get('bass_visible_beats',[])))-
+                        or required_bass_views(r)['estimate']-
                            {e['beat'] for e in final_attack['measured'] if e['role']==role and e.get('view')=='estimated_bass'})]
                     if protection_roles:
                         if not allow_native_attack_preservation:

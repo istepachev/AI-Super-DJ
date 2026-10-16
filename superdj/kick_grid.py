@@ -398,6 +398,14 @@ def rendered_attack_audit(path,warp,sample_rate):
             views.append(('estimated_'+label,independent))
         for view,view_rows in views:
           for row,event in zip(view_rows,source['events']):
+            if (view=='bass_body' and 'mixture_bass_visible_beats' in contract
+                    and event['beat'] not in contract['mixture_bass_visible_beats']):
+                pending.append({'role':role,'beat':event['beat'],'view':view,
+                    'reason':'bass reference not uniquely timed in the native source; no output correction authorized',
+                    'output_candidate_delay_seconds':first/sample_rate+row['time']-event['output_seconds'] if row['eligible'] else None,
+                    'output_candidate_correlation':row.get('template_correlation'),
+                    'native_source_timing_unverified':True})
+                continue
             if not row['eligible']:
                 pending.append({'role':role,'beat':event['beat'],'view':view,'reason':'output attack ambiguous'});continue
             actual=first/sample_rate+row['time'];target=event['output_seconds']
@@ -417,14 +425,14 @@ def validate_overlap_attacks(clips,transitions,tolerance_seconds=.003):
         sides=[];observations=[]
         for clip,role in ((clips[index],'tail'),(clips[index+1],'head')):
             audit=(clip.get('warp') or {}).get('post_render_transient_audit',{}).get('final',{})
-            recovered=((clip.get('warp') or {}).get('source_kick_alignment',{}).get(role,{}).get('low_frequency_gap_recovery') or {}).get('recovered_beats',[])
-            observed_bass={p['beat'] for p in audit.get('measured',[]) if p['role']==role and p.get('view')=='bass_body'}
-            if set(recovered)-observed_bass:
-                raise ValueError(f"{clip['id']}: recovered source bass attacks remain unverified in rendered PCM; review the source window")
+            from .source_observability import required_bass_views
             source=(clip.get('warp') or {}).get('source_kick_alignment',{}).get(role,{})
-            required=set(recovered)&set((source.get('native_mixture_reference') or {}).get('bass_visible_beats',[]))
+            required=required_bass_views(source)
+            observed_bass={p['beat'] for p in audit.get('measured',[]) if p['role']==role and p.get('view')=='bass_body'}
+            if required['mixture']-observed_bass:
+                raise ValueError(f"{clip['id']}: recovered source bass attacks remain unverified in rendered PCM; review the source window")
             observed_estimate={p['beat'] for p in audit.get('measured',[]) if p['role']==role and p.get('view')=='estimated_bass'}
-            if required-observed_estimate:
+            if required['estimate']-observed_estimate:
                 raise ValueError(f"{clip['id']}: independently visible recovered bass signatures remain unverified")
             # Legacy latency checks retained source offsets. Subtract the
             # actual shared grid here, so two individually accurate warps

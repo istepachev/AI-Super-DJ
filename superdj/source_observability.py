@@ -19,13 +19,13 @@ def bass_candidate_support(path,warp,candidates,drum_audio,drum_rate,source_base
     if drum_audio.ndim!=2 or not len(drum_audio) or not np.isfinite(drum_audio).all():
         raise ValueError('Invalid/nonfinite estimated percussion input for native source evidence')
     stamps=[source_base+r['time']-warp['trim_start_seconds'] for r in candidates]
+    # Use the same complete input and resampling origin as the retained native
+    # references, so certification and later mandatory-view checks agree.
     with sf.SoundFile(path) as f:
-        first=max(0,math.floor((min(stamps)-.2)*f.samplerate))
-        last=min(f.frames,math.ceil((max(stamps)+.2)*f.samplerate))
-        f.seek(first);native=f.read(last-first,dtype='float32',always_2d=True);rate=f.samplerate
+        native=f.read(dtype='float32',always_2d=True);rate=f.samplerate
     if not len(native) or not np.isfinite(native).all():
         raise ValueError('Invalid/nonfinite native mixture for bass candidate evidence')
-    centres=[t-first/rate for t in stamps]
+    centres=stamps
     def bass(audio,sr):
         divisor=math.gcd(sr,8000)
         mono=resample_poly(np.mean(audio,axis=1),8000//divisor,sr//divisor)
@@ -62,3 +62,14 @@ def bass_candidate_support(path,warp,candidates,drum_audio,drum_rate,source_base
         'comparison_signal':'exact prepared mixture fed to the pitch-preserving backend',
         'minimum_correlation':.90,'minimum_alternative_peak_margin':.02,'timing_tolerance_seconds':.003,
         'checks':checks,'unverified_is_not_percussion_absence':True,'audio_edited':False}
+
+
+def required_bass_views(source):
+    """Require every certified recovered hit in each observable native view."""
+    recovered=set((source.get('low_frequency_gap_recovery') or {}).get('recovered_beats',[]))
+    contract=source.get('native_mixture_reference') or {}
+    body=recovered & set(contract['mixture_bass_visible_beats']) if 'mixture_bass_visible_beats' in contract else recovered
+    estimate=recovered & set(contract.get('bass_visible_beats',[]))
+    if 'mixture_bass_visible_beats' in contract and recovered-(body|estimate):
+        raise ValueError('Certified recovered bass hit lacks an observable native reference')
+    return {'mixture':body,'estimate':estimate}

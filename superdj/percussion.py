@@ -81,7 +81,8 @@ def verification_components(outgoing,incoming,sample_rate,gains,*,bass_hz=180.,d
 def verify_blended_fronts(audio,sample_rate,outgoing_warp,incoming_warp,gains,directory,*,ffmpeg='ffmpeg',components=None,allow_pitch_changing_residual=False):
     """Check identified source fronts in the actual blend; bound local repair."""
     from .kick_grid import template_attack_rows
-    references=[];n=len(audio);pad=round(.2*sample_rate)
+    from .source_observability import required_bass_views
+    references=[];source_coverage={};n=len(audio);pad=round(.2*sample_rate)
     for warp,role,gain_key in ((outgoing_warp or {},'tail','bass_out'),(incoming_warp or {},'head','bass_in')):
         source=warp.get('source_kick_alignment',{}).get(role,{})
         if not source.get('attack_templates_path') or not source.get('events'):continue
@@ -91,13 +92,16 @@ def verify_blended_fronts(audio,sample_rate,outgoing_warp,incoming_warp,gains,di
         audible=[i for i,t in enumerate(centres) if 0<=round(t*sample_rate)<n and audibility[round(t*sample_rate),0]>=.05]
         if not audible:continue
         references.append((role,[centres[i] for i in audible],templates[audible],source.get('attack_band_hz',[100,1400]),set()))
+        contract=source.get('native_mixture_reference',{})
+        required_views=required_bass_views(source)
         if source.get('bass_attack_templates_path'):
             protected=warp.get('native_attack_preservation',{}).get('bass_mixture_attack_templates',{}).get(role)
             with np.load(protected or source['bass_attack_templates_path']) as f:low=f['templates']
-            recovered=set((source.get('low_frequency_gap_recovery') or {}).get('recovered_beats',[]))
-            required={centres[i] for i in audible if events[i]['beat'] in recovered}
+            required={centres[i] for i in audible if events[i]['beat'] in required_views['mixture']}
             references.append((role+':bass_body',[centres[i] for i in audible],low[audible],[35,180],required))
-        contract=source.get('native_mixture_reference',{})
+            if 'mixture_bass_visible_beats' in contract:
+                visible=set(contract['mixture_bass_visible_beats'])
+                source_coverage[role+':bass_body']={centres[i] for i in audible if events[i]['beat'] in visible}
         for label,key,band in [('primary','attack_templates_path',source.get('attack_band_hz',[100,1400])),
                                ('bass','bass_attack_templates_path',[35,180])]:
             original=source.get('estimated_drum_'+key)
@@ -105,7 +109,7 @@ def verify_blended_fronts(audio,sample_rate,outgoing_warp,incoming_warp,gains,di
             selected=[i for i in audible if events[i]['beat'] in visible]
             if not original or not selected:continue
             with np.load(original) as archive:independent=archive['templates']
-            required={centres[i] for i in selected if label=='bass' and events[i]['beat'] in recovered}
+            required={centres[i] for i in selected if label=='bass' and events[i]['beat'] in required_views['estimate']}
             references.append((role+':estimated_'+label,[centres[i] for i in selected],independent[selected],band,required))
     if not references:return audio,{'executed':False,'reason':'no audible recognized source attack family'}
     if components is not None:
@@ -117,6 +121,17 @@ def verify_blended_fronts(audio,sample_rate,outgoing_warp,incoming_warp,gains,di
     for attempt in range(2):
         checks=[];residuals=[]
         for role,centres,templates,band,required in references:
+            observable=source_coverage.get(role,set(centres));minimum_count=min(8,len(observable))
+            unknown_candidates=[]
+            def qualify_native(rows,view):
+                # This support is fixed before the first stretch. A newly
+                # unique output correlation cannot establish a native clock
+                # for an originally ambiguous periodic bass waveform.
+                for t,row in zip(centres,rows):
+                    if t in observable:continue
+                    if row['eligible']:unknown_candidates.append({'seconds':t,'candidate_delay_seconds':row['time']-.2-t,
+                        'correlation':row.get('template_correlation'),'view':view,'status':'native source timing unverified'})
+                    row['eligible']=False
             minimum=.90 if band==[35,180] else .65
             rows=template_attack_rows(np.pad(corrected,((pad,pad),(0,0))),sample_rate,[t+.2 for t in centres],templates,attack_band_hz=band,minimum_correlation=minimum)
             raw_rows=[dict(r) for r in rows];component_used=[]
@@ -130,20 +145,29 @@ def verify_blended_fronts(audio,sample_rate,outgoing_warp,incoming_warp,gains,di
                     if old['eligible'] and old.get('template_correlation',0)>=.90 and abs(old['time']-.2-centres[i])>.003:continue
                     if new['eligible'] and (not old['eligible'] or new['template_correlation']>old.get('template_correlation',0)+.08):
                         rows[i]=new;component_used.append(centres[i])
-            count=sum(r['eligible'] for r in rows);maximum=max((abs(r['time']-.2-t) for t,r in zip(centres,rows) if r['eligible']),default=None);fresh=None
-            if count<min(8,len(centres)) or maximum is None or maximum>.003:
+            qualify_native(rows,'raw/known-component')
+            count=sum(r['eligible'] for r in rows);covered=sum(r['eligible'] and t in observable for t,r in zip(centres,rows))
+            maximum=max((abs(r['time']-.2-t) for t,r in zip(centres,rows) if r['eligible']),default=None);fresh=None
+            if covered<minimum_count or (maximum is None and minimum_count) or (maximum is not None and maximum>.003):
                 estimates,_=final_drum_estimates(corrected,corrected,sample_rate,Path(directory)/f'view-{attempt}',ffmpeg=ffmpeg);fresh=template_attack_rows(np.pad(estimates['drums_out'],((pad,pad),(0,0))),sample_rate,[t+.2 for t in centres],templates,attack_band_hz=band,minimum_correlation=minimum)
                 for i,(old,new) in enumerate(zip(rows,fresh)):
                     if old['eligible'] and old.get('template_correlation',0)>=.90 and abs(old['time']-.2-centres[i])>.003:continue
                     if new['eligible'] and (not old['eligible'] or (abs(old['time']-.2-centres[i])>.003 and new['template_correlation']>old.get('template_correlation',0)+.08)):rows[i]=new
+                qualify_native(rows,'fresh estimated percussion')
             measured=[{'seconds':t,'delay_seconds':round(r['time']-.2-t,9),'correlation':r['template_correlation']} for t,r in zip(centres,rows) if r['eligible']]
             if required-{r['seconds'] for r in measured}:raise ValueError('Recovered bass attacks remain unverified in the actual blend; review the source window')
-            if not measured or len(measured)<min(8,len(centres)):raise ValueError('Combined percussion fronts remain unverified; review the source window')
+            verified_native={r['seconds'] for r in measured}&observable
+            if len(verified_native)<minimum_count:raise ValueError('Combined percussion fronts remain unverified; review the source window')
             for row in measured:
                 if abs(row['delay_seconds'])>.003:
                     if not allow_pitch_changing_residual or attempt or row['correlation']<.9 or abs(row['delay_seconds'])>.006:raise ValueError('Combined percussion attack misses the shared clock; review the rendered overlap')
                     residuals.append(row)
-            checks.append({'role':role,'audible_source_events':len(centres),'recognized':measured,'unverified_source_seconds':[t for t,r in zip(centres,rows) if not r['eligible']],'attack_band_hz':band,'fresh_percussion_view_used':fresh is not None,'known_other_deck_subtraction_seconds':component_used,'raw_mixture_unverified_seconds':[t for t,r in zip(centres,raw_rows) if not r['eligible']],'maximum_error_seconds':max(abs(r['delay_seconds']) for r in measured)})
+            checks.append({'role':role,'audible_source_events':len(centres),'recognized':measured,'unverified_source_seconds':[t for t,r in zip(centres,rows) if not r['eligible']],'attack_band_hz':band,'fresh_percussion_view_used':fresh is not None,'known_other_deck_subtraction_seconds':component_used,'raw_mixture_unverified_seconds':[t for t,r in zip(centres,raw_rows) if not r['eligible'] or t not in observable],
+                'native_observable_source_events':len(observable),'coverage_minimum_matches':minimum_count,'observed_native_unique_events':len(verified_native),
+                'native_ambiguous_source_seconds':[t for t in centres if t not in observable],'required_source_seconds':sorted(required),
+                'native_ambiguous_output_candidates':unknown_candidates,
+                'coverage_status':'additional native bass view unverified; primary checks remain mandatory' if not minimum_count else 'native-observable coverage checked',
+                'maximum_error_seconds':max((abs(r['delay_seconds']) for r in measured),default=None)})
         if not residuals:break
         intervals=[]
         reference_times=sorted(set(t for _,centres,_,_,_ in references for t in centres))
