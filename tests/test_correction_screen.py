@@ -95,7 +95,11 @@ def test_repeated_failed_corrections_keep_all_attempts_and_identical_actual_pcm(
         with monkeypatch.context() as patch:
             if label=='baseline':patch.setattr(CorrectionScreen,'reuse',lambda *args:None)
             results.append(render.render_plan(plan,records,{},tmp_path/f'{label}.wav',tmp_path/label,
-                ffmpeg=ffmpeg_executable(),rubberband=rubber,sample_rate=16000,tempo_conflict_policy='sync'))
+                ffmpeg=ffmpeg_executable(),rubberband=rubber,sample_rate=16000,tempo_conflict_policy='sync',
+                # This adversarial performance fixture deliberately prevents
+                # backend correction. Compare its explicit advanced residual
+                # path; ordinary rendering must reject that fallback instead.
+                allow_pitch_changing_residual=True))
     np.testing.assert_array_equal(sf.read(tmp_path/'baseline.wav',dtype='float32')[0],sf.read(tmp_path/'candidate.wav',dtype='float32')[0])
     assert calls.count('baseline')==20
     assert calls.count('candidate')<calls.count('baseline')

@@ -67,6 +67,32 @@ def test_recovery_does_not_renumber_the_same_unverified_required_event():
     assert [e['overlap_bars'] for e in new['edges']]==[e['overlap_bars'] for e in plan['edges']]
 
 
+def test_recovery_does_not_renumber_a_missing_visible_independent_bass_signature():
+    rows,plan=source_plan(2);stamp=plan['sections']['1']['start']+10
+    evidence={'failed_track':'1','failed_roles':['head'],
+        'warp':{'source_kick_alignment':{'head':{'events':[{'beat':21,'source_seconds':stamp}],
+            'low_frequency_gap_recovery':{'recovered_beats':[21]},
+            'native_mixture_reference':{'bass_visible_beats':[21]}}}},
+        'final_attack':{'measured':[{'role':'head','beat':21,'view':'bass_body','delay_seconds':0.}]}}
+    new,_=alternative(plan,rows,TransitionFailure('0','1','independent recovered bass identity missing',evidence),{},1,sample_rate=48000,ffmpeg=None)
+    assert new['rejected_attack_window_events']['1']['head']==[stamp]
+    head=new['sections']['1']['start'];end=head+plan['edges'][0]['overlap_bars']*4*60/rows[1]['bpm']
+    assert not head<=stamp<=end
+
+
+def test_recovery_does_not_keep_a_late_primary_event_in_the_next_window():
+    rows,plan=source_plan(2);stamp=plan['sections']['1']['start']+10
+    evidence={'failed_track':'1','failed_roles':['head'],
+        'warp':{'source_kick_alignment':{'head':{'events':[{'beat':21,'source_seconds':stamp}]}}},
+        'final_attack':{'measured':[{'role':'head','beat':21,'view':'primary','delay_seconds':.009}]}}
+    new,_=alternative(plan,rows,TransitionFailure('0','1','late source attack',evidence),{},1,sample_rate=48000,ffmpeg=None)
+    assert new['rejected_attack_window_events']['1']['head']==[stamp]
+    head=new['sections']['1']['start'];end=head+plan['edges'][0]['overlap_bars']*4*60/rows[1]['bpm']
+    assert not head<=stamp<=end
+    assert new['order']==plan['order']
+    assert [e['overlap_bars'] for e in new['edges']]==[e['overlap_bars'] for e in plan['edges']]
+
+
 def test_recovery_rechecks_the_changed_window_and_is_bounded(tmp_path):
     rows,plan=source_plan(2);calls=[]
     def render(candidate,*args,**kwargs):

@@ -75,7 +75,12 @@ def test_final_blend_corrects_one_supported_front_without_changing_other_pcm(tmp
     source={'attack_front_comparison':{'upper_front_selected':selected},'attack_templates_path':str(path),'attack_band_hz':[180,1200],'events':[{'output_seconds':float(t),'beat':i} for i,t in enumerate(centres)]};warp={'source_kick_alignment':{'head':source},'input_output_beat_mapping':{'head':[{'output_seconds':0.}]}}
     broken=audio.copy();stamp=centres[26];first=round(stamp*sr);last=first+len(wave);broken[first:last]=0;broken[first+36:last+36]=audio[first:last]
     monkeypatch.setattr(percussion,'final_drum_estimates',lambda a,b,*args,**kw:({'drums_out':a,'drums_in':b},[]))
-    gains={'bass_in':np.ones((n,1)),'bass_out':np.zeros((n,1))};repaired,report=verify_blended_fronts(broken,sr,{},warp,gains,tmp_path)
+    gains={'bass_in':np.ones((n,1)),'bass_out':np.zeros((n,1))}
+    unchanged=broken.copy()
+    with pytest.raises(ValueError,match='misses the shared clock'):
+        verify_blended_fronts(broken,sr,{},warp,gains,tmp_path)
+    assert np.array_equal(broken,unchanged)
+    repaired,report=verify_blended_fronts(broken,sr,{},warp,gains,tmp_path,allow_pitch_changing_residual=True)
     assert len(report['local_combined_waveform_refinements'])==1
     assert report['checks'][0]['maximum_error_seconds']<=.0005
     fix=report['local_combined_waveform_refinements'][0];lo=fix['start_frame'];hi=fix['end_frame'];assert fix['maximum_local_rate_change']<.02;assert np.array_equal(repaired[:lo],broken[:lo]);assert np.array_equal(repaired[hi:],broken[hi:])

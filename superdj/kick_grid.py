@@ -482,6 +482,20 @@ def apply_fine_timing(source_path,output_path,warp,sample_rate):
     sf.write(output_path,result,sample_rate,subtype='FLOAT')
 
 
+def finalize_attack_timing(path,warp,sample_rate,*,allow_pitch_changing_residual=False):
+    """Do not turn residual attack delay into unintended pitch modulation.
+
+    Fractional-delay interpolation changes playback speed and pitch. A 15%
+    timing-map bound is not a pitch guarantee. Keep the pitch-preserving
+    backend PCM; failed attacks require recovery of a compatible window.
+    """
+    if allow_pitch_changing_residual:
+        return fine_align_rendered(path,warp,sample_rate)
+    if warp.get('fine_attack_timing'):
+        raise ValueError('Pitch-changing residual timing requires explicit selection')
+    return rendered_attack_audit(path,warp,sample_rate)
+
+
 def fine_align_rendered(path,warp,sample_rate,attempts=4,tolerance_seconds=.0015,audit_function=None):
     """Refine measured residual attack delay using one immutable backend PCM."""
     import shutil
