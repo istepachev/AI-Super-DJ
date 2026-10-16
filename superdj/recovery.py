@@ -37,9 +37,9 @@ def alternative(plan, records, failure, excluded, attempt, *, sample_rate, ffmpe
         options.reverse()
     failed_track=failure.evidence.get('failed_track')
     failed_roles=failure.evidence.get('failed_roles',[])
-    if failed_track and len(failed_roles)==1:
-        boundary='start' if failed_roles[0]=='head' else 'end'
-        options=[item for item in options if item[:2]==(failed_track,boundary)]
+    if failed_track and failed_roles:
+        options=[item for item in options if item[0]==failed_track
+                 and ('head' if item[1]=='start' else 'tail') in failed_roles]
     for identity, boundary, lock in options:
         section = sections[identity]
         if section.get(lock, True):

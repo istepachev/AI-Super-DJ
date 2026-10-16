@@ -1242,7 +1242,10 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                     rerender()
                 if best is None:
                     best_file.unlink(missing_ok=True)
-                    raise RenderError(f'{identity}: acoustic attack alignment unresolved; select a supported window or provide percussion evidence')
+                    roles=[role for role in ('head','tail') if warp.get('input_output_beat_mapping',{}).get(role)]
+                    raise SourceWindowError(identity,roles,
+                        'acoustic attack alignment unresolved; select a supported window or provide percussion evidence',
+                        {'final_attack':audits[-1] if audits else {},'warp':warp})
                 warp=best[1];shutil.copy2(best_file,clip_output);best_file.unlink()
                 if use_kicks:
                     from .kick_grid import finalize_attack_timing,preserve_rendered_attacks
@@ -1266,7 +1269,9 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                         final_attack=rendered_attack_audit(clip_output,warp,sample_rate)
                 else:final_attack=best[2]
                 if final_attack['maximum_measured_drift_seconds'] is None or final_attack['maximum_measured_drift_seconds']>.003:
-                    raise RenderError(f'{identity}: acoustic attack alignment remains unresolved')
+                    roles=[role for role in ('head','tail') if warp.get('input_output_beat_mapping',{}).get(role)]
+                    raise SourceWindowError(identity,roles,'acoustic attack alignment remains unresolved',
+                        {'final_attack':final_attack,'warp':warp})
                 from .timing_safety import audit_warp_rates
                 audit_warp_rates(warp,sample_rate,stage='final map after all acoustic refinements')
                 map_path.write_text("".join(f"{p['source_frame']} {p['output_frame']}\n" for p in warp['anchors']),encoding='ascii')
