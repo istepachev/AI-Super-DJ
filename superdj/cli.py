@@ -22,7 +22,7 @@ def _playlist(args):
     return playlist
 
 
-def analyze(args):
+def analyze(args, on_analyzed=None):
     from .analysis import analyze_track
     playlist = _playlist(args)
     overrides = read_json(args.grid_json) if args.grid_json else {}
@@ -41,6 +41,8 @@ def analyze(args):
                 not 0 <= r[0] < r[1] <= result["duration"] for r in ranges):
                 raise ValueError("Protected ranges must be valid [start,end] source seconds")
             result["protected_ranges"] = ranges
+        if on_analyzed:
+            on_analyzed(result)
         return result
     values = list(enumerate(playlist['tracks'], 1))
     records = current().map(one, values) if current() else list(map(one, values))
@@ -124,9 +126,10 @@ def plan(args, records=None):
     return result
 
 
-def render(args, records=None, planned=None):
+def render(args, records=None, planned=None, prepared_data=None):
     from .adapters import master_set, prepare_tracks
     from .quality import export_audio, measure_audio
+    from .execution import phase
     from .render import render_plan, validate_transition_policy
     work = private_path(args.work)
     directory = private_path(args.output)
@@ -145,23 +148,17 @@ def render(args, records=None, planned=None):
     if (work / "premix.wav").exists():
         work = work / ("run_" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S_%f"))
         work.mkdir(parents=True, exist_ok=False)
-    if args.prepared:
+    if prepared_data is not None:
+        prepared = prepared_data
+    elif args.prepared:
         prepared = read_json(args.prepared)
     else:
         profiles = read_json(args.noise_profiles) if args.noise_profiles else None
         prepared = prepare_tracks(records, work, audamcp=args.audamcp, ffmpeg=args.ffmpeg,
                                   git=args.git, noise_profiles=profiles, progress=lambda s: print(s, flush=True),
                                   sample_rate=args.sample_rate)
-    for record in records:
-        item = prepared[record["id"]]
-        if item.get("loudness_lufs") is None:
-            from .execution import cached
-            measured = cached("prepared_measurements", {"audio": item["path"], "ffmpeg": args.ffmpeg, "ffprobe": args.ffprobe},
-                lambda: measure_audio(item["path"], ffmpeg=args.ffmpeg, ffprobe=args.ffprobe,
-                                     log=work / f"{record['id']}_prepared_qa.log"), work / "measurement_artifacts")
-            item["source_measurements"] = measured
-            item["loudness_lufs"] = measured["integrated_lufs"]
-        record["loudness_lufs"] = item["loudness_lufs"]
+    from .adapters import measure_prepared
+    measure_prepared(records, prepared, work, ffmpeg=args.ffmpeg, ffprobe=args.ffprobe)
     from .minimum import preserve_minimum
     planned, records, prepared = preserve_minimum(planned, records, prepared, work / 'minimum_playback')
     write_json(work / 'effective_plan.json', planned)
@@ -169,31 +166,37 @@ def render(args, records=None, planned=None):
     write_json(work / "prepared.json", prepared)
     premix = work / "premix.wav"
     print("Rendering tempo maps and transitions", flush=True)
-    rendered = render_plan(planned, records, prepared, premix, work / "render",
-                           ffmpeg=args.ffmpeg, rubberband=args.rubberband,
-                           sample_rate=args.sample_rate,
-                           max_tempo_change=planned.get("constraints", {}).get("max_tempo_change_per_deck", 0.06),
-                           max_intro_trim_seconds=args.max_intro_trim_seconds,
-                           transition_bars=args.transition_bars, allow_unverified=args.allow_unverified,
-                           allow_hard_cut=args.allow_hard_cut,
-                           tempo_conflict_policy=args.tempo_conflict_policy,
-                           tempo_ramp_max_change=args.tempo_ramp_max_change if args.tempo_ramp_max_change is not None else 0.25,
-                           tempo_ramp_seconds=args.tempo_ramp_seconds,
-                           native_exit_seconds=args.native_exit_seconds,
-                           sync_max_change=args.sync_max_change,
-                           sync_transition_bars=args.sync_transition_bars,
-                           bridge_overlap_beats=args.bridge_overlap_beats,
-                           progress=lambda s: print(s, flush=True))
+    with phase('render_wall'):
+        rendered = render_plan(planned, records, prepared, premix, work / "render",
+                               ffmpeg=args.ffmpeg, rubberband=args.rubberband,
+                               sample_rate=args.sample_rate,
+                               max_tempo_change=planned.get("constraints", {}).get("max_tempo_change_per_deck", 0.06),
+                               max_intro_trim_seconds=args.max_intro_trim_seconds,
+                               transition_bars=args.transition_bars, allow_unverified=args.allow_unverified,
+                               allow_hard_cut=args.allow_hard_cut,
+                               tempo_conflict_policy=args.tempo_conflict_policy,
+                               tempo_ramp_max_change=args.tempo_ramp_max_change if args.tempo_ramp_max_change is not None else 0.25,
+                               tempo_ramp_seconds=args.tempo_ramp_seconds,
+                               native_exit_seconds=args.native_exit_seconds,
+                               sync_max_change=args.sync_max_change,
+                               sync_transition_bars=args.sync_transition_bars,
+                               bridge_overlap_beats=args.bridge_overlap_beats,
+                               progress=lambda s: print(s, flush=True))
     write_json(work / "render.json", rendered)
     if len(rendered["tracks"]) != len(records) or len({t["id"] for t in rendered["tracks"]}) != len(records):
         raise RuntimeError("Render did not preserve every track exactly once")
     master_path = work / "master.wav"
     print("Mastering the complete set", flush=True)
-    mastered = master_set(premix, master_path, work, bitwize=args.bitwize, git=args.git,
-                          target_lufs=args.target_lufs, ceiling_db=-1.5)
+    with phase('mastering_wall'):
+        mastered = master_set(premix, master_path, work, bitwize=args.bitwize, git=args.git,
+                              target_lufs=args.target_lufs, ceiling_db=-1.5)
+    from .integrity import verify_master_rhythm
+    with phase('master_rhythm_check_wall'):
+        mastered['rhythm_preservation'] = verify_master_rhythm(premix, master_path, rendered)
     print("Exporting and independently checking full FLAC/MP3 files", flush=True)
-    exported = export_audio(master_path, directory, args.name, ffmpeg=args.ffmpeg, ffprobe=args.ffprobe,
-                            mp3=not args.no_mp3, overwrite=args.overwrite)
+    with phase('export_and_checks_wall'):
+        exported = export_audio(master_path, directory, args.name, ffmpeg=args.ffmpeg, ffprobe=args.ffprobe,
+                                mp3=not args.no_mp3, overwrite=args.overwrite)
     manifest = {"schema_version": 1, "created_utc": datetime.now(timezone.utc).isoformat(),
                 "selection_and_analysis": records, "plan": planned, "preparation": prepared,
                 "render": rendered, "mastering": mastered, "exports": exported,
@@ -674,9 +677,21 @@ def main(argv=None):
         from .cues import runtime_config
         runtime = runtime_config()
         with execution(args.cache, jobs=runtime.get('jobs', 1), devices=runtime.get('gpu_devices', ()),
-                       report=Path(args.output) / 'performance.json') as session:
+                       report=Path(args.output) / 'performance.json', scratch_root=runtime.get('scratch_root')) as session:
             args.cache = str(session.root)
-            records = analyze(args); planned = plan(args, records); render(args, records, planned)
+            from .pipeline import PreparationPipeline
+            pipeline = PreparationPipeline(args, session) if not args.prepared else None
+            try:
+                with session.phase('analysis_wall'):
+                    records = analyze(args, on_analyzed=pipeline.submit if pipeline else None)
+                with session.phase('planning_wall'):
+                    planned = plan(args, records)
+                with session.phase('preparation_wait_wall'):
+                    prepared = pipeline.results(records) if pipeline else None
+                render(args, records, planned, prepared_data=prepared)
+            finally:
+                if pipeline:
+                    pipeline.close()
     elif args.command == "archive-audit":
         archive_audit(args)
     else:

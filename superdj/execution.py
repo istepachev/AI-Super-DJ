@@ -18,7 +18,7 @@ import ast
 
 
 _STAGE_ROOTS = {
-    'decode': ('audio',), 'analysis': ('analysis', 'model_worker'), 'preparation': ('adapters',),
+    'decode': ('audio',), 'analysis': ('analysis', 'model_worker'), 'preparation': ('adapters', 'model_worker'),
     'stem': ('stems', 'model_worker'),
     'prepared_measurements': ('quality',), 'bass_profile': ('rhythm',),
     'clip': ('render', 'model_worker'), 'overlap': ('render', 'mixing', 'percussion', 'stems', 'model_worker'),
@@ -56,6 +56,16 @@ _current = ContextVar('superdj_execution', default=None)
 
 def current():
     return _current.get()
+
+
+@contextmanager
+def phase(name):
+    session = current()
+    if session is None:
+        yield
+    else:
+        with session.phase(name):
+            yield
 
 
 def sha256(path):
@@ -222,15 +232,16 @@ class Objects:
 
 
 class Worker:
-    def __init__(self, python, device, session):
+    def __init__(self, python, device, session, family='model'):
         self.lock = threading.Lock()
         self.session = session
+        self.family = family
         self.log = tempfile.TemporaryFile()
         env = dict(os.environ, PYTHONPATH=str(Path(__file__).resolve().parents[1]), PYTHONUTF8='1')
         self.process = subprocess.Popen([python, '-u', '-m', 'superdj.model_worker'], stdin=subprocess.PIPE,
             stdout=subprocess.PIPE, stderr=self.log, text=True, encoding='utf8', env=env)
         self.device = device
-        session.count('model_process_starts')
+        session.count(family + '_process_starts')
 
     def run(self, kind, job):
         with self.lock:
@@ -242,9 +253,9 @@ class Worker:
             reply = json.loads(line)
             if 'error' in reply:
                 raise RuntimeError(reply['error'])
-            self.session.count('model_tasks')
+            self.session.count(self.family + '_tasks')
             with self.session.lock:
-                self.session.metrics.setdefault('worker_models', {})[str(self.process.pid)] = {
+                self.session.metrics.setdefault('worker_models' if self.family == 'model' else 'worker_audio', {})[str(self.process.pid)] = {
                     'device': self.device, 'loaded': reply.get('loaded_models', {})}
             return reply['result']
 
@@ -267,7 +278,7 @@ class Worker:
 
 
 class Session:
-    def __init__(self, root, *, jobs=1, devices=()):
+    def __init__(self, root, *, jobs=1, devices=(), scratch_root=None):
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
         self.jobs = max(1, min(int(jobs), 4))
@@ -282,8 +293,10 @@ class Session:
         self.memo = {}
         self.decode_locks = {}
         self.lock = threading.Lock()
-        scratch_root = self.root / "scratch"
-        scratch_root.mkdir(exist_ok=True)
+        self.audio_next = 0
+        from .storage import private_path
+        scratch_root = private_path(scratch_root or Path(tempfile.gettempdir())/'superdj-scratch')
+        scratch_root.mkdir(parents=True, exist_ok=True)
         self.scratch = tempfile.TemporaryDirectory(prefix="run-", dir=scratch_root)
         self.work = Path(self.scratch.name)
         self.metrics = {'counts': {}, 'seconds': {}}
@@ -307,6 +320,26 @@ class Session:
         with self.lock:
             times = self.metrics['seconds']
             times[name] = times.get(name, 0.) + seconds
+
+    @contextmanager
+    def phase(self, name):
+        started = time.perf_counter()
+        try:
+            yield
+        finally:
+            self.timed(name, time.perf_counter()-started)
+
+    def audio(self, job):
+        # Never mix different upstream checkouts in one interpreter.
+        checkout = job['checkout']
+        with self.lock:
+            slot = self.audio_next % self.jobs
+            self.audio_next += 1
+            key = ('audio', str(Path(checkout['path']).resolve()), checkout['revision'], slot)
+            worker = self.workers.get(key)
+            if worker is None:
+                self.workers[key] = worker = Worker(sys.executable, 'cpu', self, family='audio')
+        return worker.run('audio', job)
 
     def model(self, python, kind, job):
         if kind in {'cue', 'stem'}:
@@ -373,14 +406,14 @@ class Session:
 
 
 @contextmanager
-def execution(cache=None, *, jobs=1, devices=(), report=None):
+def execution(cache=None, *, jobs=1, devices=(), report=None, scratch_root=None):
     if current() is not None:
         yield current()
         return
     from .storage import private_path, write_json
     temporary = tempfile.TemporaryDirectory(prefix='superdj-') if cache is None else None
     root = private_path(cache if cache is not None else temporary.name)
-    session = Session(root, jobs=jobs, devices=devices)
+    session = Session(root, jobs=jobs, devices=devices, scratch_root=scratch_root)
     session.persistent = cache is not None
     session.metrics['cache_policy'] = 'persistent' if session.persistent else 'temporary'
     # Worker creation counts under this lock as well.

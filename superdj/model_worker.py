@@ -24,6 +24,9 @@ def main():
                     from .analysis import _beat_this
                     beats, downbeats, evidence = _beat_this(np.load(job['signal'], mmap_mode='r'), Path(job['checkpoint']), job['device'])
                     result = [beats.tolist(), downbeats.tolist(), evidence]
+                elif kind == 'audio':
+                    from .adapters import _worker
+                    result = _worker(job)
                 else:
                     raise ValueError('Unknown neural task')
             loaded = {}

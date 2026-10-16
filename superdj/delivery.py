@@ -1,7 +1,40 @@
 """Ready-folder delivery contains only music and its relative CUE."""
 from pathlib import Path
 import shutil
+import hashlib
+import os
+import uuid
 from .history import content_hash
+
+
+def copy_verified(source, destination, expected=None):
+    """Hash source bytes during copying; independently reread the written copy."""
+    source, destination = Path(source), Path(destination)
+    if source.resolve() == destination.resolve() or (destination.exists() and source.samefile(destination)):
+        raise ValueError('Verified copy must not overwrite its source')
+    digest = hashlib.sha256()
+    created = False
+    try:
+        with source.open('rb') as original, destination.open('xb') as output:
+            created = True
+            before = os.fstat(original.fileno())
+            for block in iter(lambda: original.read(1024*1024), b''):
+                digest.update(block)
+                output.write(block)
+            output.flush()
+            os.fsync(output.fileno())
+            after = os.fstat(original.fileno())
+        value = digest.hexdigest()
+        if (before.st_size, before.st_mtime_ns, before.st_ctime_ns) != (after.st_size, after.st_mtime_ns, after.st_ctime_ns):
+            raise RuntimeError('Source changed during verified copying')
+        if (expected is not None and value != expected) or content_hash(destination) != value:
+            raise RuntimeError('Delivery copy does not match the verified FLAC')
+        shutil.copystat(source, destination)
+        return value
+    except BaseException:
+        if created:
+            destination.unlink(missing_ok=True)
+        raise
 
 def make_cue(manifest,path=None):
     audio=Path(manifest['exports']['flac']['path'])
@@ -20,24 +53,30 @@ def make_cue(manifest,path=None):
 def publish_pair(audio,cue,folder,*,replace=False,backup=None):
     audio,cue,folder=Path(audio),Path(cue),Path(folder).resolve()
     folder.mkdir(parents=True,exist_ok=True)
-    digest=content_hash(audio);destination=folder/audio.name
+    digest=None;destination=folder/audio.name
+    known={}
+    def destination_matches(path):
+        nonlocal digest
+        if digest is None:
+            digest=content_hash(audio)
+        if path not in known:
+            known[path]=content_hash(path)
+        return known[path]==digest
     suffix=2
-    while destination.exists() and content_hash(destination)!=digest and not replace:
+    while destination.exists() and not destination_matches(destination) and not replace:
         destination=folder/f'{audio.stem}_v{suffix}{audio.suffix}';suffix+=1
     target_cue=destination.with_suffix('.cue')
-    if destination.exists() and content_hash(destination)!=digest and replace:
+    if destination.exists() and not destination_matches(destination) and replace:
         if backup is None:raise ValueError('Replacing a previous set requires a private backup directory')
         saved=Path(backup).resolve();saved.mkdir(parents=True,exist_ok=True)
         for original in (destination,target_cue):
             if original.exists():
                 archived=saved/original.name
                 if archived.exists():raise FileExistsError('Private backup already exists')
-                shutil.copy2(original,archived)
-                if content_hash(archived)!=content_hash(original):raise RuntimeError('Backup verification failed')
-    if not destination.exists() or content_hash(destination)!=digest:
-        pending=destination.with_suffix(destination.suffix+'.partial')
-        shutil.copy2(audio,pending)
-        if content_hash(pending)!=digest:raise RuntimeError('Delivery copy does not match the verified FLAC')
+                copy_verified(original,archived)
+    if not destination.exists() or not destination_matches(destination):
+        pending=destination.with_name(destination.name+'.partial-'+uuid.uuid4().hex)
+        digest=copy_verified(audio,pending,expected=digest)
         pending.replace(destination)
     text=cue.read_text(encoding='utf-8-sig').replace(f'FILE "{audio.name}" WAVE',f'FILE "{destination.name}" WAVE')
     target_cue.write_text(text,encoding='utf-8-sig',newline='\r\n')

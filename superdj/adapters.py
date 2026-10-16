@@ -40,11 +40,13 @@ def setup_components(directory: str | Path, git="git") -> dict:
 
 
 def _worker(job: dict) -> dict:
-    # This function executes in a fresh process to isolate upstream `tools` imports.
+    # Preparation workers are scoped to one audited checkout. Mastering retains
+    # a fresh interpreter to isolate upstream `tools` imports and stochastic dither.
     import numpy as np
     import soundfile as sf
 
-    sys.path.insert(0, job["checkout"]["path"])
+    if job['checkout']['path'] not in sys.path:
+        sys.path.insert(0, job["checkout"]["path"])
     if job["action"] == "prepare":
         from audamcp.audio_io import load, save
         samples, rate = load(job["decoded"])
@@ -124,6 +126,11 @@ def run_worker(job: dict, directory: str | Path, tag: str) -> dict:
     work.mkdir(parents=True, exist_ok=True)
     job_file, result_file = work / f"{tag}_job.json", work / f"{tag}_result.json"
     write_json(job_file, job)
+    from .execution import current
+    if job.get('action') == 'prepare' and current():
+        result = current().audio(job)
+        write_json(result_file, result)
+        return result
     env = dict(os.environ)
     env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1])
     result = subprocess.run([sys.executable, "-m", "superdj.adapters", str(job_file), str(result_file)], env=env, capture_output=True)
@@ -198,6 +205,30 @@ def master_set(input_path, output_path, work_dir, *, bitwize, git="git", target_
     return run_worker({"action": "master", "checkout": checkout_info(bitwize, "bitwize", git),
                        "input": str(input_path), "output": str(output_path), "target_lufs": target_lufs,
                        "ceiling_db": ceiling_db, "limiter_lookahead_ms": limiter_lookahead_ms}, work_dir, "master")
+
+
+def measure_prepared(records, prepared, work_dir, *, ffmpeg='ffmpeg', ffprobe='ffprobe'):
+    """Identical full-recording checks, bounded across independent tracks."""
+    from .execution import current, cached
+    from .quality import measure_audio
+    from .audio import ffmpeg_executable
+    import shutil
+    session = current()
+    def one(record):
+        item = dict(prepared[record['id']])
+        if item.get('loudness_lufs') is None:
+            measured = cached('prepared_measurements', {'audio': item['path'],
+                'ffmpeg': ffmpeg_executable(ffmpeg), 'ffprobe': shutil.which(str(ffprobe)) or str(ffprobe)},
+                lambda: measure_audio(item['path'], ffmpeg=ffmpeg, ffprobe=ffprobe,
+                    log=Path(work_dir)/f"{record['id']}_prepared_qa.log"), Path(work_dir)/'measurement_artifacts')
+            item.update(source_measurements=measured, loudness_lufs=measured['integrated_lufs'])
+        return record['id'], item
+    values = session.map(one, records) if session else list(map(one, records))
+    for identity, item in values:
+        prepared[identity] = item
+    for record in records:
+        record['loudness_lufs'] = prepared[record['id']]['loudness_lufs']
+    return prepared
 
 
 if __name__ == "__main__":

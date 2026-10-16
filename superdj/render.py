@@ -560,10 +560,15 @@ def _validate_playback_budget(clip, section, sample_rate):
         raise RenderError(f"{clip['id']}: full rendered playback exceeds {maximum:g}s including both overlaps; replan this source")
 
 
-def _measure(path: Path, block: int = 262144) -> dict[str, float]:
+def _measure(path: Path, block: int = 262144, *, witness=None, regions=()) -> dict[str, Any]:
     square_sum = 0.0
     count = 0
     peak = 0.0
+    import hashlib
+    digest = hashlib.sha256() if witness else None
+    spans = [(edge['set_start_frame'],edge['set_end_frame'],value['pcm_sha256'],hashlib.sha256())
+             for edge,value in regions if value]
+    offset = 0
     with sf.SoundFile(path) as source:
         for audio in source.blocks(blocksize=block, dtype="float32", always_2d=True):
             if not np.all(np.isfinite(audio)):
@@ -571,8 +576,19 @@ def _measure(path: Path, block: int = 262144) -> dict[str, float]:
             square_sum += float(np.sum(audio.astype(np.float64) ** 2))
             count += audio.size
             peak = max(peak, float(np.max(np.abs(audio))))
+            if digest:
+                digest.update(np.asarray(audio,dtype='<f4').tobytes())
+            for first,last,expected,observed in spans:
+                begin,end=max(0,first-offset),min(len(audio),last-offset)
+                if end>begin:
+                    observed.update(np.asarray(audio[begin:end],dtype='<f4').tobytes())
+            offset += len(audio)
     if not count:
         raise RenderError("Decoded track is empty")
+    if witness and (digest.hexdigest()!=witness.digest.hexdigest() or offset!=witness.frames):
+        raise RenderError('Assembled PCM differs from the verified write sequence')
+    if any(expected!=observed.hexdigest() for first,last,expected,observed in spans):
+        raise RenderError('An assembled overlap differs from its verified PCM')
     return {"rms_dbfs": 10 * math.log10(max(square_sum / count, 1e-24)), "sample_peak": peak}
 
 
@@ -1349,7 +1365,9 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                     transition['blended_front_audit']=front_report
             path = directory / f'verified-overlap-{position:02d}.wav'
             sf.write(path, mixed, sample_rate, subtype='FLOAT')
-            return {'path': str(path), 'transition': transitions[position-1]}
+            import hashlib
+            return {'path': str(path), 'transition': transitions[position-1],
+                    'pcm_sha256':hashlib.sha256(np.asarray(mixed,dtype='<f4').tobytes()).hexdigest()}
         from .zhilin import reference_profile
         from .percussion import needs_handoff
         from .stems import configuration as stem_configuration
@@ -1363,7 +1381,7 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
             'stem_configuration': stem_configuration() if uses_drums else None,
             'gpu_devices': list(current().devices) if current() and uses_drums else []}, produce, directory)
         transitions[position-1] = value['transition']
-        return value['path']
+        return value
 
     def render_one(item):
         position, identity = item
@@ -1415,7 +1433,9 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
     try:
         predicted_frames = sum(c['output_frames'] for c in clips) - sum(t['overlap_frames'] for t in transitions)
         container = "RF64" if predicted_frames * 8 + 4096 >= 2**32 else "WAV"
-        with sf.SoundFile(temporary, "w", samplerate=sample_rate, channels=2, subtype="FLOAT", format=container) as dest:
+        from .integrity import WitnessWriter
+        with sf.SoundFile(temporary, "w", samplerate=sample_rate, channels=2, subtype="FLOAT", format=container) as written:
+            dest=WitnessWriter(written)
             for position, clip in enumerate(clips):
                 incoming = transitions[position - 1]["overlap_frames"] if position else 0
                 outgoing = transitions[position]["overlap_frames"] if position < len(transitions) else 0
@@ -1429,7 +1449,7 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                         block = original.read(incoming, dtype="float32", always_2d=True)
                         if previous_tail is None or len(block) != incoming:
                             raise RenderError("Missing overlap audio")
-                        with sf.SoundFile(overlap_files[position-1]) as verified:
+                        with sf.SoundFile(overlap_files[position-1]['path']) as verified:
                             mixed = verified.read(dtype='float32', always_2d=True)
                         if len(mixed) != incoming:
                             raise RenderError('Verified overlap length changed')
@@ -1465,7 +1485,7 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                         if len(previous_tail) != outgoing:
                             raise RenderError("Missing outgoing transition audio")
                 cursor += clip["output_frames"] - incoming
-        measurements = _measure(temporary)
+        measurements = _measure(temporary, witness=dest, regions=zip(transitions,overlap_files))
         if sf.info(temporary).frames != cursor:
             raise RenderError("Rendered length differs from the segment accounting")
         temporary.replace(output)
@@ -1487,6 +1507,8 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                 "subtype": "FLOAT", "duration_seconds": cursor / sample_rate, "total_frames": cursor,
                 "track_count": len(order), "all_tracks_once": True, "order": order,
                 "tracks": clips, "transitions": transitions, "measurements": measurements,
+                "assembly_verification":{'verified':True,'pcm_sha256':dest.digest.hexdigest(),
+                    'overlaps_verified':sum(bool(v) for v in overlap_files),'frames':dest.frames},
                 "limits": {"max_musical_tempo_change": max_tempo_change,
                            "tempo_ramp_max_change": tempo_ramp_max_change,
                            "tempo_ramp_requested_output_seconds": tempo_ramp_seconds,

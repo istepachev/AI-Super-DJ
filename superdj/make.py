@@ -120,7 +120,8 @@ def make(args):
     jobs = getattr(args, 'jobs', None) or runtime.get('jobs', 1)
     session = None
     try:
-        with execution(cache, jobs=jobs, devices=runtime.get('gpu_devices', ())) as session:
+        with execution(cache, jobs=jobs, devices=runtime.get('gpu_devices', ()),
+                       scratch_root=runtime.get('scratch_root')) as session:
             return _make(args)
     finally:
         report_root = getattr(args, '_performance_output', None) or args.output or runtime.get('private_output_root') or runtime.get('output_root')

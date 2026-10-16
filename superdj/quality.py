@@ -78,6 +78,9 @@ def export_audio(master: str | Path, output_dir: str | Path, name: str, *, ffmpe
             raise RuntimeError("Encoded output still exceeds the true-peak ceiling")
         if extension == "flac" and measured["bits_per_raw_sample"] != 24:
             raise RuntimeError("FLAC did not retain the requested 24-bit depth")
+        if extension == 'flac':
+            from .integrity import verify_exported_pcm
+            measured['master_pcm_verification'] = verify_exported_pcm(master, staged, gain_db=gain)
         staged.replace(target)
         measured["path"] = str(target.resolve())
         measured["export_gain_db"] = gain
