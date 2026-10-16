@@ -1242,6 +1242,9 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                     rerender()
                 if best is None:
                     best_file.unlink(missing_ok=True)
+                    with sf.SoundFile(clip_output) as rendered:
+                        if any(not np.isfinite(block).all() for block in rendered.blocks(blocksize=262144,dtype='float32',always_2d=True)):
+                            raise RenderError(f'{identity}: nonfinite backend PCM; data failure cannot be repaired by changing a source window')
                     roles=[role for role in ('head','tail') if warp.get('input_output_beat_mapping',{}).get(role)]
                     raise SourceWindowError(identity,roles,
                         'acoustic attack alignment unresolved; select a supported window or provide percussion evidence',
@@ -1500,6 +1503,7 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                 raise
             from .transition_quality import TransitionFailure
             if isinstance(error,TransitionFailure):raise
+            if not isinstance(error,SourceWindowError):raise
             failed_tail=isinstance(error,SourceWindowError) and error.roles==['tail'] and position<len(transitions)
             edge = transitions[position if failed_tail else max(0,position-1)]
             evidence={'failed_track':identity,'failed_roles':error.roles,**error.evidence} if isinstance(error,SourceWindowError) else {}
