@@ -681,6 +681,7 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                 target_rms_dbfs: float = -20.0, target_lufs: float = -18.0,
                 track_peak_ceiling: float = 0.50,
                 max_gain_db: float = 4.0, bass_hz: float = 180.0,
+                allow_native_attack_preservation: bool = False,
                 progress: Callable[[str], None] | None = None) -> dict[str, Any]:
     """Render a fixed or automatic order to stereo FLOAT WAV, without mastering.
 
@@ -1004,7 +1005,7 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                                 "human_reviewed": bool((by_id[outgoing].get("grid") or {}).get("human_reviewed") and
                                                        (by_id[incoming].get("grid") or {}).get("human_reviewed"))})
     for transition,edge in zip(transitions,edges):
-        for key in ('mid_handoff_bars','bass_handoff_beats'):
+        for key in ('mid_handoff_bars','bass_handoff_beats','handoff_windows'):
             if edge.get(key) is not None:transition[key]=edge[key]
     clips: list[dict[str, Any]] = []
     prepared_files = prepared_files or {}
@@ -1150,6 +1151,8 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                         raise RenderError('Compensated SYNC render did not retain its exact declared duration')
                 for attempt in range(10):
                     if warp.get('source_attack_controls_unapplied'):
+                        if not allow_native_attack_preservation:
+                            raise RenderError(f'{identity}: source rhythm needs another compatible window; local attack replacement is disabled')
                         from .kick_grid import preserve_rendered_attacks
                         preserve_rendered_attacks(clip_output,prepared_path,warp,sample_rate,gain=gain)
                         warp['native_attack_preservation']['roles']=['head','tail']
@@ -1213,6 +1216,8 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                         or set((r.get('low_frequency_gap_recovery') or {}).get('recovered_beats',[]))-
                            {e['beat'] for e in final_attack['measured'] if e['role']==role and e.get('view')=='bass_body'})]
                     if protection_roles:
+                        if not allow_native_attack_preservation:
+                            raise RenderError(f'{identity}: stretched attack recognition needs another compatible window; local attack replacement is disabled')
                         preserve_rendered_attacks(clip_output,prepared_path,warp,sample_rate,gain=gain,roles=protection_roles)
                         warp['native_attack_preservation']['roles']=protection_roles
                         final_attack=rendered_attack_audit(clip_output,warp,sample_rate)
@@ -1365,13 +1370,13 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                     beats=transition.get("beats", 64), tonal_conflict=risk, beat_phase=beat_phase,
                     style=plan.get('style','default'),
                     mid_handoff_bars=transition.get('mid_handoff_bars'),
-                    bass_handoff_beats=transition.get('bass_handoff_beats'),**percussion_args)
+                    bass_handoff_beats=transition.get('bass_handoff_beats'),handoff_windows=transition.get('handoff_windows'),**percussion_args)
                 transition["frequency_processing"] = evidence
                 if (mode == 'beatmapped_bass_swap' and transition.get('tempo_technique') == 'shared_phase_sync'
                         and plan.get('style') == 'zhilin'):
                     from .percussion import verify_blended_fronts,verification_components
                     from .mixing import envelopes
-                    gains,_=envelopes(incoming,transition.get('beats',64),beat_phase=beat_phase,style=plan.get('style','default'),mid_handoff_bars=transition.get('mid_handoff_bars'),bass_handoff_beats=transition.get('bass_handoff_beats'))
+                    gains,_=envelopes(incoming,transition.get('beats',64),beat_phase=beat_phase,style=plan.get('style','default'),mid_handoff_bars=transition.get('mid_handoff_bars'),bass_handoff_beats=transition.get('bass_handoff_beats'),handoff_windows=transition.get('handoff_windows'))
                     gains=percussion_gains(gains,beat_phase,transition.get('beats',64),percussion_args.get('percussion_policy','shared'))
                     components=verification_components(previous_tail,block,sample_rate,gains,bass_hz=bass_hz,**{k:v for k,v in percussion_args.items() if k!='percussion_policy'})
                     try:
@@ -1390,10 +1395,10 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                             'source_windows_clock_overlap_and_harmonic_curves_unchanged':True,'timing_gate_relaxed':False}
                         mixed,evidence=blend(previous_tail,block,sample_rate,bass_hz=bass_hz,beats=transition.get('beats',64),
                             tonal_conflict=risk,beat_phase=beat_phase,style=plan.get('style','default'),
-                            mid_handoff_bars=transition.get('mid_handoff_bars'),bass_handoff_beats=transition.get('bass_handoff_beats'),**percussion_args)
+                            mid_handoff_bars=transition.get('mid_handoff_bars'),bass_handoff_beats=transition.get('bass_handoff_beats'),handoff_windows=transition.get('handoff_windows'),**percussion_args)
                         transition['frequency_processing']=evidence
                         gains,_=envelopes(incoming,transition.get('beats',64),beat_phase=beat_phase,style=plan.get('style','default'),
-                            mid_handoff_bars=transition.get('mid_handoff_bars'),bass_handoff_beats=transition.get('bass_handoff_beats'))
+                            mid_handoff_bars=transition.get('mid_handoff_bars'),bass_handoff_beats=transition.get('bass_handoff_beats'),handoff_windows=transition.get('handoff_windows'))
                         gains=percussion_gains(gains,beat_phase,transition.get('beats',64),'sequential')
                         components=verification_components(previous_tail,block,sample_rate,gains,bass_hz=bass_hz,
                             **{k:v for k,v in percussion_args.items() if k!='percussion_policy'})

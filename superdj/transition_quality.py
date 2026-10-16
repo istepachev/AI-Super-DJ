@@ -65,7 +65,8 @@ def audit_vocals(outgoing, incoming, mixed, sample_rate, vocal_out, vocal_in, tr
     divisor = max(1, sample_rate//4000)
     a, b = [resample_poly(x, 1, divisor, axis=0) for x in (vocal_out, vocal_in)]
     gain, _ = envelopes(len(mixed), transition.get('beats', 64), style=style, beat_phase=beat_phase,
-        mid_handoff_bars=transition.get('mid_handoff_bars'), bass_handoff_beats=transition.get('bass_handoff_beats'))
+        mid_handoff_bars=transition.get('mid_handoff_bars'), bass_handoff_beats=transition.get('bass_handoff_beats'),
+        handoff_windows=transition.get('handoff_windows'))
     p = np.linspace(0, 1, len(mixed))
     keep_a = 1-smooth((p-.20)/.25) if transition.get('vocal_processing', {}).get('executed') else np.ones(len(p))
     keep_b = smooth((p-.55)/.25) if transition.get('vocal_processing', {}).get('executed') else np.ones(len(p))

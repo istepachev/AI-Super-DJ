@@ -89,7 +89,7 @@ def verify_blended_fronts(audio,sample_rate,outgoing_warp,incoming_warp,gains,di
         side='out' if role=='tail' else 'in';audibility=gains.get('drums_'+side,gains[gain_key])
         audible=[i for i,t in enumerate(centres) if 0<=round(t*sample_rate)<n and audibility[round(t*sample_rate),0]>=.05]
         if not audible:continue
-        references.append((role,[centres[i] for i in audible],templates[audible],source['attack_band_hz'],set()))
+        references.append((role,[centres[i] for i in audible],templates[audible],source.get('attack_band_hz',[100,1400]),set()))
         if source.get('bass_attack_templates_path'):
             protected=warp.get('native_attack_preservation',{}).get('bass_mixture_attack_templates',{}).get(role)
             with np.load(protected or source['bass_attack_templates_path']) as f:low=f['templates']

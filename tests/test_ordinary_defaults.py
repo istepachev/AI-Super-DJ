@@ -227,6 +227,10 @@ def test_single_file_still_uses_mastering_branch_not_set_ordering(tmp_path,monke
     calls=[]
     monkeypatch.setattr(make_module,'runtime_config',lambda:{'audamcp':'processor','bitwize':'master'})
     monkeypatch.setattr(superdj.quality,'measure_audio',lambda *a,**kw:{'sample_rate':8000,'decoded_samples':800})
+    # Dispatch is independent of executable discovery; resource probing has its
+    # own real-backend coverage. Keep the fixture portable on Windows too.
+    monkeypatch.setattr('superdj.resources.preflight',lambda *a,**kw:{
+        'jobs':1,'devices':[],'source_probes':[{'duration_seconds':.1,'sample_rate':8000}]})
     def prepare(records,*args,**kwargs):
         calls.append('prepare')
         return {records[0]['id']:{'path':str(source)}}
