@@ -18,7 +18,7 @@ def split_bands(audio, sample_rate, bass_hz=180.0, high_hz=3500.0):
 
 
 def envelopes(n, beats, *, tonal_conflict=False, beat_phase=None, style='default', profile=None,
-              mid_handoff_bars=None, bass_handoff_beats=None):
+              mid_handoff_bars=None, bass_handoff_beats=None,handoff_windows=None):
     """Complementary per-band transfer, with a brief soft mid handoff.
 
     Both bass lines and dense mid parties are never held at full level at once.
@@ -36,7 +36,7 @@ def envelopes(n, beats, *, tonal_conflict=False, beat_phase=None, style='default
     for label,value,limit in (('mid_handoff_bars',mid_handoff_bars,beats/4),('bass_handoff_beats',bass_handoff_beats,beats)):
         if value is not None and (isinstance(value,bool) or not np.isfinite(value) or not 0<value<=limit):
             raise ValueError(f'{label} must be positive and within the overlap')
-    if style!='zhilin' and (mid_handoff_bars is not None or bass_handoff_beats is not None):
+    if style!='zhilin' and (mid_handoff_bars is not None or bass_handoff_beats is not None or handoff_windows is not None):
         raise ValueError('Per-transition handoff overrides require DJ Zhilin')
     if style=='zhilin':
         from .zhilin import reference_profile
@@ -54,6 +54,17 @@ def envelopes(n, beats, *, tonal_conflict=False, beat_phase=None, style='default
             width=mid_handoff_bars*4/beats
             start_mid=max(0.,min(.55-width/2,1-width));end_mid=start_mid+width
             mid=smooth((p-start_mid)/width);mid_fraction=[start_mid,end_mid]
+        if handoff_windows is not None:
+            if not isinstance(handoff_windows,dict) or set(handoff_windows)-{'bass','mid'}:raise ValueError('Handoff windows support bass and middle only')
+            for band,span in handoff_windows.items():
+                if not isinstance(span,(list,tuple)) or len(span)!=2 or not all(np.isfinite(x) for x in span) or not 0<=span[0]<span[1]<=beats:
+                    raise ValueError('Handoff windows need two increasing shared-beat positions within the overlap')
+                if band=='mid':
+                    if mid_handoff_bars is not None:raise ValueError('Choose one middle handoff override')
+                    mid_fraction=[span[0]/beats,span[1]/beats];mid=smooth((p-mid_fraction[0])/(mid_fraction[1]-mid_fraction[0]))
+                else:
+                    if bass_handoff_beats is not None:raise ValueError('Choose one bass handoff override')
+                    start,end=span[0]/beats,span[1]/beats;bass=smooth((p-start)/(end-start))
         gains={'bass_out':1-bass,'bass_in':bass,'mid_out':1-mid,'mid_in':mid,'high_out':1-high,'high_in':high}
         values=np.asarray(reference['mid_in'])
         span=[float(grid[np.searchsorted(values,.1)]),float(grid[np.searchsorted(values,.9)])]
@@ -67,6 +78,7 @@ def envelopes(n, beats, *, tonal_conflict=False, beat_phase=None, style='default
             'high_handoff_fraction':[0.,1.],
             'band_pair_gain_sum_maximum':{band:float(np.max(gains[band+'_out']+gains[band+'_in'])) for band in ('bass','mid','high')},
             'phase_source':'shared integrated clock' if beat_phase is not None else 'linear phase',
+            'handoff_windows_shared_beats':handoff_windows,
             'foreground_conflict_policy':'Complementary accompaniment; separate aligned vocal handoff; dense instrumental conflicts need cue review'}
     mid_beats = min(beats * .4, 8 if tonal_conflict else 16)
     mid_width = mid_beats / beats
@@ -93,7 +105,7 @@ def envelopes(n, beats, *, tonal_conflict=False, beat_phase=None, style='default
 
 def blend(outgoing, incoming, sample_rate, *, bass_hz=180.0,
           beats=64, tonal_conflict=False, beat_phase=None, style='default', profile=None,
-          mid_handoff_bars=None, bass_handoff_beats=None,drums_out=None,drums_in=None,percussion_policy='shared'):
+          mid_handoff_bars=None, bass_handoff_beats=None,drums_out=None,drums_in=None,percussion_policy='shared',handoff_windows=None):
     if outgoing.shape != incoming.shape or outgoing.ndim != 2 or outgoing.shape[1] != 2:
         raise ValueError("Frequency blend needs equally sized stereo blocks")
     if not np.isfinite(outgoing).all() or not np.isfinite(incoming).all():
@@ -113,10 +125,11 @@ def blend(outgoing, incoming, sample_rate, *, bass_hz=180.0,
     low_a, mid_a, high_a = split_bands(outgoing, sample_rate, bass_hz)
     low_b, mid_b, high_b = split_bands(incoming, sample_rate, bass_hz)
     gains, curves = envelopes(n, beats, tonal_conflict=tonal_conflict, beat_phase=beat_phase,style=style,profile=profile,
-                             mid_handoff_bars=mid_handoff_bars,bass_handoff_beats=bass_handoff_beats)
+                             mid_handoff_bars=mid_handoff_bars,bass_handoff_beats=bass_handoff_beats,handoff_windows=handoff_windows)
     if percussion_policy!='shared' and drums_out is None:raise ValueError('Sequential percussion requires both final drum estimates')
     from .percussion import percussion_gains
     gains=percussion_gains(gains,beat_phase,beats,percussion_policy)
+    continuity=validate_handoff_continuity(gains,beat_phase,beats) if style=='zhilin' else None
     mixed = low_a * gains['bass_out'] + low_b * gains['bass_in']
     mixed += mid_a * gains['mid_out'] + mid_b * gains['mid_in']
     mixed += high_a * gains['high_out'] + high_b * gains['high_in']
@@ -145,4 +158,27 @@ def blend(outgoing, incoming, sample_rate, *, bass_hz=180.0,
               "entry_gain_compensated": False,
               "endpoint_max_error": float(max(np.max(np.abs(mixed[0] - outgoing[0])), np.max(np.abs(mixed[-1] - incoming[-1]))))}
     if percussion:report['percussion_processing']=percussion
+    if continuity:report['musical_handoff_continuity']=continuity
     return mixed.astype(np.float32), report
+
+
+def validate_handoff_continuity(gains,beat_phase,beats):
+    """A sample-smooth envelope can still switch the musical core too quickly.
+
+    Check effective accompaniment gains after routing. A short drum transfer
+    must not silently become a short transfer of the entire low/mid party.
+    """
+    phase=np.asarray(beat_phase) if beat_phase is not None else np.linspace(0,1,len(gains['mid_in']))
+    spans={}
+    for band in ('bass','mid'):
+        transfer=np.asarray(gains[band+'_in'])[:,0]
+        if transfer.shape!=phase.shape or not np.isfinite(transfer).all() or np.any(np.diff(transfer)<-1e-9):raise ValueError('Accompaniment handoff must be finite and monotonic')
+        first=np.flatnonzero(transfer>=.1);last=np.flatnonzero(transfer>=.9)
+        if not len(first) or not len(last):raise ValueError('Incomplete accompaniment handoff')
+        spans[band]=float((phase[last[0]]-phase[first[0]])*beats)
+    required={'bass':min(2.,beats/4),'mid':min(4.,beats/4)}
+    if any(spans[k]+1e-5<required[k] for k in spans):
+        raise ValueError('Accompaniment energy handoff is too short; select compatible phrases and a gradual band transfer instead of a core cut')
+    return {'executed':True,'effective_10_90_shared_beats':spans,'minimum_10_90_shared_beats':required,
+        'passed':True,'method':'actual accompaniment gain progression after routing; separate from primary-attack timing and sample continuity',
+        'limitations':'A minimum envelope span does not certify source phrasing, every residual figure or subjective quality'}

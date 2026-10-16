@@ -379,6 +379,17 @@ def rendered_attack_audit(path,warp,sample_rate):
             protected_bass=warp.get('native_attack_preservation',{}).get('bass_mixture_attack_templates',{}).get(role)
             with np.load(protected_bass or source['bass_attack_templates_path']) as saved:low_templates=saved['templates']
             views.append(('bass_body',template_attack_rows(audio,sample_rate,centres,low_templates,minimum_correlation=.90,attack_band_hz=(35,180))))
+        contract=source.get('native_mixture_reference',{})
+        for label,key,band,minimum in [('primary','attack_templates_path',source.get('attack_band_hz',(100,1400)),.65),
+                                      ('bass','bass_attack_templates_path',(35,180),.90)]:
+            original=source.get('estimated_drum_'+key)
+            if not original:continue
+            with np.load(original) as archive:drum_templates=archive['templates']
+            independent=template_attack_rows(audio,sample_rate,centres,drum_templates,minimum_correlation=minimum,attack_band_hz=band)
+            visible=set(contract.get(label+'_visible_beats',[]))
+            for row,event in zip(independent,source['events']):
+                row['eligible']=row['eligible'] and event['beat'] in visible
+            views.append(('estimated_'+label,independent))
         for view,view_rows in views:
           for row,event in zip(view_rows,source['events']):
             if not row['eligible']:
@@ -404,6 +415,11 @@ def validate_overlap_attacks(clips,transitions,tolerance_seconds=.003):
             observed_bass={p['beat'] for p in audit.get('measured',[]) if p['role']==role and p.get('view')=='bass_body'}
             if set(recovered)-observed_bass:
                 raise ValueError(f"{clip['id']}: recovered source bass attacks remain unverified in rendered PCM; review the source window")
+            source=(clip.get('warp') or {}).get('source_kick_alignment',{}).get(role,{})
+            required=set(recovered)&set((source.get('native_mixture_reference') or {}).get('bass_visible_beats',[]))
+            observed_estimate={p['beat'] for p in audit.get('measured',[]) if p['role']==role and p.get('view')=='estimated_bass'}
+            if required-observed_estimate:
+                raise ValueError(f"{clip['id']}: independently visible recovered bass signatures remain unverified")
             # Legacy latency checks retained source offsets. Subtract the
             # actual shared grid here, so two individually accurate warps
             # cannot hide different original attack offsets.

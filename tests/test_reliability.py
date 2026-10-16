@@ -45,6 +45,28 @@ def test_no_window_retry_can_move_user_locks_or_relax_source_budget():
         alternative(plan,rows,TransitionFailure('0','1','failed'),{},1,sample_rate=48000,ffmpeg=None)
 
 
+def test_recovery_moves_the_failed_tail_instead_of_an_unrelated_entrance():
+    rows,plan=source_plan(2)
+    failure=TransitionFailure('0','1','tail attack identity lost',{'failed_track':'0','failed_roles':['tail']})
+    new,evidence=alternative(plan,rows,failure,{},1,sample_rate=48000,ffmpeg=None)
+    assert evidence['changed_track']=='0' and evidence['boundary']=='end'
+    assert new['sections']['1']['start']==plan['sections']['1']['start']
+    assert new['sections']['0']['end']!=plan['sections']['0']['end']
+
+
+def test_recovery_does_not_renumber_the_same_unverified_required_event():
+    rows,plan=source_plan(2);start=plan['sections']['1']['start'];stamp=start+10
+    evidence={'failed_track':'1','failed_roles':['head'],
+        'warp':{'source_kick_alignment':{'head':{'events':[{'beat':21,'source_seconds':stamp}],
+            'low_frequency_gap_recovery':{'recovered_beats':[21]}}}},'final_attack':{'measured':[]}}
+    new,selection=alternative(plan,rows,TransitionFailure('0','1','mandatory bass identity lost',evidence),{},1,sample_rate=48000,ffmpeg=None)
+    new_start=new['sections']['1']['start'];window_end=new_start+plan['edges'][0]['overlap_bars']*4*60/rows[1]['bpm']
+    assert not new_start<=stamp<=window_end
+    assert new['rejected_attack_window_events']['1']['head']==[stamp]
+    assert new['order']==plan['order']
+    assert [e['overlap_bars'] for e in new['edges']]==[e['overlap_bars'] for e in plan['edges']]
+
+
 def test_recovery_rechecks_the_changed_window_and_is_bounded(tmp_path):
     rows,plan=source_plan(2);calls=[]
     def render(candidate,*args,**kwargs):

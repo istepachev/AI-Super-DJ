@@ -22,6 +22,11 @@ def alternative(plan, records, failure, excluded, attempt, *, sample_rate, ffmpe
         options=options[1:]
     elif attempt%2 == 0:
         options.reverse()
+    failed_track=failure.evidence.get('failed_track')
+    failed_roles=failure.evidence.get('failed_roles',[])
+    if failed_track and len(failed_roles)==1:
+        boundary='start' if failed_roles[0]=='head' else 'end'
+        options=[item for item in options if item[:2]==(failed_track,boundary)]
     for identity, boundary, lock in options:
         section = sections[identity]
         if section.get(lock, True):
@@ -29,6 +34,20 @@ def alternative(plan, records, failure, excluded, attempt, *, sample_rate, ffmpe
         proposal = deepcopy(plan)
         proposal.pop('sections', None)
         proposal.pop('rhythm_profiles', None)
+        # A retry must not select the same unverified mandatory source event
+        # under a different relative beat number in a nearly identical window.
+        evidence=failure.evidence
+        warp=evidence.get('warp',{})
+        role='head' if boundary=='start' else 'tail'
+        if identity==failed_track and role in failed_roles:
+            source=warp.get('source_kick_alignment',{}).get(role,{})
+            required=set((source.get('low_frequency_gap_recovery') or {}).get('recovered_beats',[]))
+            observed={p['beat'] for p in evidence.get('final_attack',{}).get('measured',[])
+                      if p['role']==role and p.get('view')=='bass_body'}
+            rejected=[p['source_seconds'] for p in source.get('events',[]) if p['beat'] in required-observed]
+            if rejected:
+                prior=proposal.setdefault('rejected_attack_window_events',{}).setdefault(identity,{}).setdefault(role,[])
+                prior.extend(t for t in rejected if t not in prior)
         for item in proposal['edges']:
             if boundary=='start' and item['to']==identity:
                 item.setdefault('cue_locks', {}).pop('incoming_start_seconds', None)
