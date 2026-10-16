@@ -22,7 +22,11 @@ def main():
                     import numpy as np
                     from pathlib import Path
                     from .analysis import _beat_this
-                    beats, downbeats, evidence = _beat_this(np.load(job['signal'], mmap_mode='r'), Path(job['checkpoint']), job['device'])
+                    # Model/tensor views may outlive inference in this persistent
+                    # process. Own the array so the caller can remove its input
+                    # immediately after the reply, including on Windows.
+                    signal = np.load(job['signal'], allow_pickle=False)
+                    beats, downbeats, evidence = _beat_this(signal, Path(job['checkpoint']), job['device'])
                     result = [beats.tolist(), downbeats.tolist(), evidence]
                 elif kind == 'audio':
                     from .adapters import _worker
