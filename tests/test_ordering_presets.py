@@ -96,7 +96,9 @@ def test_make_style_dispatch_and_explicit_twenty_track_selection(tmp_path, monke
     if configured is not None:
         runtime['default_style'] = configured
     monkeypatch.setattr(module, 'runtime_config', lambda: runtime)
-    monkeypatch.setattr(module.subprocess, 'run', lambda *a, **kw: SimpleNamespace(stdout=b'{"streams":[{"sample_rate":"48000"}]}'))
+    monkeypatch.setattr(module.subprocess, 'run', lambda *a, **kw: SimpleNamespace(stdout=b'{"streams":[{"sample_rate":"48000","duration":"480"}]}'))
+    monkeypatch.setattr('superdj.resources.hardware', lambda: {'cpu_threads':8,'available_memory_bytes':64*1024**3,'cuda_probe':'unknown','gpus':[]})
+    monkeypatch.setattr('superdj.resources._disk', lambda path:(tmp_path,'dispatch-fixture',1024**4))
     calls = []
     monkeypatch.setattr(superdj.cli, 'main', lambda args: calls.append(args))
     module.make(Namespace(inputs=sources[:20], style=explicit, output=str(tmp_path / 'out'),

@@ -91,7 +91,8 @@ def _worker(job: dict) -> dict:
             raise RuntimeError("Upstream bridge did not retain FLOAT PCM")
         return {"path": job["output"], "provenance": {**job["checkout"], "executed": True, "bridge": "audamcp.audio_io.load/save", **report}}
     if job["action"] == "master":
-        from tools.mastering.master_tracks import master_track
+        from tools.mastering import master_tracks as mastering_module
+        master_track = mastering_module.master_track
         preset = {"target_lufs": job["target_lufs"], "compress_ratio": 1.0, "output_bits": 24,
                   "dither_bits": 24, "processing_oversample": 1, "limiter_lookahead_ms": job.get("limiter_lookahead_ms", 5),
                   "limiter_release_ms": 100, "track_gap": 0}
@@ -109,7 +110,10 @@ def _worker(job: dict) -> dict:
             return original_write(file, data, samplerate, *args, **kwargs)
         sf.write = write_large_wav
         try:
-            result = master_track(job["input"], job["output"], ceiling_db=job["ceiling_db"], preset=preset)
+            from .mastering import accelerated_limiter
+            with accelerated_limiter(mastering_module, job.get('accelerate', True)
+                    and job.get('limiter_lookahead_ms',5)>0) as acceleration:
+                result = master_track(job["input"], job["output"], ceiling_db=job["ceiling_db"], preset=preset)
         finally:
             sf.write = original_write
         if result.get("skipped") or not Path(job["output"]).is_file():
@@ -117,6 +121,7 @@ def _worker(job: dict) -> dict:
         return {"path": job["output"], "provenance": {**job["checkout"], "executed": True,
                 "function": "tools.mastering.master_tracks.master_track", "preset": preset,
                 "ceiling_db": job["ceiling_db"], "large_file_container": output_container or None,
+                "limiter_acceleration": acceleration,
                 "upstream_measurements_before_encoded_QA": result}}
     raise ValueError("Unknown adapter action")
 

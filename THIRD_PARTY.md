@@ -21,6 +21,7 @@ The audamcp and Bitwize licenses were checked in the actual pinned local checkou
 - If upstream source is later copied, preserve its applicable license and notices. In particular, copies or substantial portions of audamcp require its MIT notice. Recheck the actual revision before extending the integration.
 - If a release later bundles or links FFmpeg/Rubber Band, review that release's build and distribution obligations and include the required source/license materials. The initial separate-executable design must not be represented as permission to relicense those programs.
 - Python dependency licenses are available from the installed distributions. Record the environment used; do not imply that this file replaces their notices.
+- The pinned Bitwize adapter can replace only its look-ahead limiter's Python envelope loop with a locally compiled float64 recurrence after validating the exact loop structure. Other upstream operations are retained; fast-math and persistent JIT caching are disabled. This is an identified runtime adaptation, with exact seeded full-master comparisons and an upstream fallback. Numba is an optional installed dependency; no compiler binary is bundled here.
 
 The sequence optimizer is an original, transparent implementation based on stated musical costs. DeckWave's harmonic-transition workflow and music-hearing's acoustic descriptors informed the design review; their code is not copied into this repository.
 

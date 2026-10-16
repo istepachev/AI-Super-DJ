@@ -125,7 +125,9 @@ def test_make_dispatch_carries_resolved_defaults_and_keep_order(tmp_path,monkeyp
         path.write_bytes(b'dispatch fixture, never decoded')
         files.append(str(path))
     monkeypatch.setattr(make_module,'runtime_config',lambda:{'audamcp':'processor','bitwize':'master'})
-    monkeypatch.setattr(make_module.subprocess,'run',lambda *a,**kw:SimpleNamespace(stdout=b'{"streams":[{"sample_rate":"48000"}]}'))
+    monkeypatch.setattr(make_module.subprocess,'run',lambda *a,**kw:SimpleNamespace(stdout=b'{"streams":[{"sample_rate":"48000","duration":"480"}]}'))
+    monkeypatch.setattr('superdj.resources.hardware',lambda:{'cpu_threads':8,'available_memory_bytes':64*1024**3,'cuda_probe':'unknown','gpus':[]})
+    monkeypatch.setattr('superdj.resources._disk',lambda path:(tmp_path,'dispatch-fixture',1024**4))
     calls=[]
     monkeypatch.setattr(superdj.cli,'main',lambda argv:calls.append(argv))
     make_module.make(Namespace(inputs=files,style=None,keep_order=True,name='default-flow',

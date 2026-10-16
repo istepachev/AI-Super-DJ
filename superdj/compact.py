@@ -12,7 +12,7 @@ from .rhythm import bass_profile, support, weak_gap
 def arrange_sync(plan, records, *, target_solo_seconds=None, maximum_solo_seconds=None,
                  target_play_seconds=210., maximum_play_seconds=300.,
                  minimum_play_seconds=120., sample_rate=48000, zhilin=False, ffmpeg=None,
-                 allow_long_play=False):
+                 allow_long_play=False, excluded_sections=None, section_ranges=None):
     """Choose energetic cores and stable overlap windows without project timings.
 
     Full playback includes both adjacent overlaps. Solo excludes them. Short sources
@@ -147,6 +147,17 @@ def arrange_sync(plan, records, *, target_solo_seconds=None, maximum_solo_second
         for head in heads:
             for tail in tails:
                 start, core_start, core_end, end = head[0], head[1], tail[0], tail[1]
+                if any(abs(start-a)<1/sample_rate and abs(end-b)<1/sample_rate
+                       for a,b in (excluded_sections or {}).get(identity, [])):
+                    continue
+                limits = (section_ranges or {}).get(identity, {})
+                if any(not low <= value <= high for value, (low,high) in
+                       ((start, limits.get('start', (-float('inf'),float('inf')))),
+                        (end, limits.get('end', (-float('inf'),float('inf')))))):
+                    continue
+                if any(all(abs(value-choice)>1/sample_rate for choice in limits.get(boundary+'_choices',[value]))
+                       for boundary,value in (('start',start),('end',end))):
+                    continue
                 solo = core_end - core_start
                 if solo < 8 or solo > maximum_solo_seconds + 1e-6:
                     continue

@@ -144,6 +144,16 @@ def render(args, records=None, planned=None, prepared_data=None):
     validate_transition_policy(planned, allow_hard_cut=args.allow_hard_cut,
                                allow_unverified=args.allow_unverified,
                                tempo_conflict_policy=args.tempo_conflict_policy)
+    if planned.get('sections'):
+        from .resources import admit_master
+        from .sync import shared_clock
+        by_id = {row['id']:row for row in records}
+        expected = sum(s.get('predicted_play_seconds',0) for s in planned['sections'].values())
+        for edge in planned['edges']:
+            beats = edge.get('overlap_beats') or edge.get('overlap_bars',32)*4
+            expected -= shared_clock(by_id[edge['from']]['bpm'],by_id[edge['to']]['bpm'],beats,args.sample_rate)['duration_seconds']
+        if expected>0:
+            admit_master(round(expected*args.sample_rate),args.sample_rate)
     # Preserve previous intermediates when a user deliberately repeats a run.
     if (work / "premix.wav").exists():
         work = work / ("run_" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S_%f"))
@@ -167,7 +177,8 @@ def render(args, records=None, planned=None, prepared_data=None):
     premix = work / "premix.wav"
     print("Rendering tempo maps and transitions", flush=True)
     with phase('render_wall'):
-        rendered = render_plan(planned, records, prepared, premix, work / "render",
+        from .recovery import render_with_recovery
+        rendered, planned = render_with_recovery(planned, records, prepared, premix, work / "render",
                                ffmpeg=args.ffmpeg, rubberband=args.rubberband,
                                sample_rate=args.sample_rate,
                                max_tempo_change=planned.get("constraints", {}).get("max_tempo_change_per_deck", 0.06),
@@ -182,10 +193,16 @@ def render(args, records=None, planned=None, prepared_data=None):
                                sync_transition_bars=args.sync_transition_bars,
                                bridge_overlap_beats=args.bridge_overlap_beats,
                                progress=lambda s: print(s, flush=True))
+    write_json(work / 'effective_plan.json', planned)
     write_json(work / "render.json", rendered)
     if len(rendered["tracks"]) != len(records) or len({t["id"] for t in rendered["tracks"]}) != len(records):
         raise RuntimeError("Render did not preserve every track exactly once")
     master_path = work / "master.wav"
+    from .resources import admit_master
+    from .execution import current
+    admission = admit_master(rendered['total_frames'],rendered['sample_rate'])
+    if current():
+        current().metrics['master_admission'] = admission
     print("Mastering the complete set", flush=True)
     with phase('mastering_wall'):
         mastered = master_set(premix, master_path, work, bitwize=args.bitwize, git=args.git,
@@ -587,6 +604,16 @@ def main(argv=None):
     mp.add_argument("--cache", help="Opt in to a persistent content cache outside the repository")
     mp.add_argument("--no-cache", action="store_true", help="Use temporary scratch only; remove it after the run")
     mp.add_argument("--jobs", type=int, choices=range(1,5), help="Bound independent track tasks (1-4)")
+    revision = subs.add_parser('revise', help='Repair a transition or remove tracks and replan the remaining suffix')
+    revision.add_argument('--manifest', required=True)
+    change = revision.add_mutually_exclusive_group(required=True)
+    change.add_argument('--drop', nargs='+', help='Track ids to remove; replan from the first removed position')
+    change.add_argument('--transition', nargs=2, metavar=('FROM','TO'), help='Choose another window for this adjacent pair')
+    revision.add_argument('--output', required=True)
+    revision.add_argument('--name', required=True, help='New output name; previous audio remains untouched')
+    revision.add_argument('--cache')
+    revision.add_argument('--no-cache', action='store_true')
+    revision.add_argument('--jobs', type=int, choices=range(1,5))
     ap = subs.add_parser("analyze")
     ap.add_argument("--work", required=True)
     _audio(ap); _source(ap)
@@ -658,6 +685,9 @@ def main(argv=None):
     if args.command == "make":
         from .make import make
         make(args)
+    elif args.command == 'revise':
+        from .revision import revise
+        revise(args)
     elif args.command == "analyze":
         analyze(args)
     elif args.command == "plan":
@@ -671,13 +701,37 @@ def main(argv=None):
     elif args.command == "harmonize-rank":
         harmonize_rank(args)
     elif args.command == "render":
-        render(args)
+        from .execution import current, execution
+        if current() is not None:
+            render(args)
+        else:
+            from .cues import runtime_config
+            from .resources import preflight
+            runtime = runtime_config()
+            records = _records(args.records)
+            resources = preflight([row['path'] for row in records],output=args.output,scratch=args.work,
+                jobs=runtime.get('jobs'),devices=runtime.get('gpu_devices',()),ffprobe=args.ffprobe,sample_rate=args.sample_rate)
+            with execution(jobs=resources['jobs'],devices=resources['devices'],scratch_root=runtime.get('scratch_root'),
+                           report=Path(args.output)/'performance.json') as session:
+                session.metrics['resources'] = resources
+                render(args,records=records)
     elif args.command == "run":
-        from .execution import execution
+        from .execution import execution, current
         from .cues import runtime_config
         runtime = runtime_config()
-        with execution(args.cache, jobs=runtime.get('jobs', 1), devices=runtime.get('gpu_devices', ()),
+        resources = None
+        if current() is None:
+            from .resources import preflight
+            from .defaults import playback_defaults
+            resources = preflight([row['path'] for row in _playlist(args)['tracks']], output=args.output,
+                scratch=args.work, cache=args.cache, jobs=runtime.get('jobs'),
+                devices=runtime.get('gpu_devices',()), ffprobe=args.ffprobe, sample_rate=args.sample_rate,
+                target_play_seconds=playback_defaults(long_play=args.long_play,target_play_seconds=args.track_play_seconds)['target_play_range_seconds'][1])
+        with execution(args.cache, jobs=resources['jobs'] if resources else 1,
+                       devices=resources['devices'] if resources else (),
                        report=Path(args.output) / 'performance.json', scratch_root=runtime.get('scratch_root')) as session:
+            if resources:
+                session.metrics['resources'] = resources
             args.cache = str(session.root)
             from .pipeline import PreparationPipeline
             pipeline = PreparationPipeline(args, session) if not args.prepared else None

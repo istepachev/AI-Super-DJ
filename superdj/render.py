@@ -1363,6 +1363,11 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                     components=verification_components(previous_tail,block,sample_rate,gains,bass_hz=bass_hz,**percussion_args)
                     mixed,front_report=verify_blended_fronts(mixed,sample_rate,clips[position-1].get('warp'),clip.get('warp'),gains,directory/f'percussion-fronts-{position:02}',ffmpeg=ffmpeg,components=components)
                     transition['blended_front_audit']=front_report
+            if transition.get('tempo_technique') == 'shared_phase_sync':
+                from .transition_quality import verify_overlap
+                transition['quality_gate'] = verify_overlap(previous_tail, block, mixed, sample_rate,
+                    clips[position-1:position+1], transition, vocal_out=previous_vocal,
+                    vocal_in=incoming_vocal, style=plan.get('style','default'), beat_phase=beat_phase)
             path = directory / f'verified-overlap-{position:02d}.wav'
             sf.write(path, mixed, sample_rate, subtype='FLOAT')
             import hashlib
@@ -1390,7 +1395,14 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
              'section': sections.get(identity),
             'previous': transition_inputs[position-1] if position else None,
             'next': transition_inputs[position] if position < len(transitions) else None, 'controls': render_controls}
-        return position, identity, cached('clip', dependencies, lambda: prepare_clip(position, identity), directory)
+        try:
+            return position, identity, cached('clip', dependencies, lambda: prepare_clip(position, identity), directory)
+        except RenderError as error:
+            if not transitions:
+                raise
+            from .transition_quality import TransitionFailure
+            edge = transitions[max(0,position-1)]
+            raise TransitionFailure(edge['from'],edge['to'],str(error)) from error
 
     from contextlib import closing, nullcontext
     from .execution import current
@@ -1412,9 +1424,13 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                 from .kick_grid import validate_overlap_attacks
                 try:
                     validate_overlap_attacks(clips[-2:], [transitions[position-1]])
-                except ValueError as error:
-                    raise RenderError(str(error)) from error
-                overlap_files.append(prepare_overlap(position))
+                    overlap_files.append(prepare_overlap(position))
+                except (ValueError, RenderError) as error:
+                    from .transition_quality import TransitionFailure
+                    if isinstance(error,TransitionFailure):
+                        raise
+                    edge = transitions[position-1]
+                    raise TransitionFailure(edge['from'],edge['to'],str(error)) from error
     from .kick_grid import validate_overlap_attacks
     try:
         validate_overlap_attacks(clips,transitions)

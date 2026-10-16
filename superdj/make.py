@@ -59,14 +59,28 @@ def _make(args):
         if not runtime.get(key):
             raise ValueError("Run setup and configure private runtime.local.json with audited processor paths")
     ffmpeg, ffprobe = runtime.get("ffmpeg", "ffmpeg"), runtime.get("ffprobe", "ffprobe")
+    from .resources import preflight
+    resources = preflight(files, output=output, scratch=work,
+        cache=current().root if current().persistent else None,
+        jobs=getattr(args,'jobs',None) or runtime.get('jobs'),devices=runtime.get('gpu_devices',()),ffprobe=ffprobe,sample_rate=1,
+        target_play_seconds=playback_defaults(long_play=getattr(args,'long_play',False),
+            target_play_seconds=getattr(args,'track_play_seconds',None))['target_play_range_seconds'][1])
+    current().jobs = resources['jobs']
+    current().devices = tuple(resources['devices'])
+    current().metrics['resources'] = resources
     git = runtime.get("git", "git")
     records = [{"id": f"track_{i:02}", "path": str(p)} for i, p in enumerate(files, 1)]
     write_json(work / "playlist.json", {"tracks": records, "selection": "automatic folder history filtering" if folder_input else "all explicit supplied files retained",
         'excluded_previous_sources':exclusions, 'workflow_preferences':preferences})
     if len(files) == 1:
+        from .resources import admit_master
+        probe = resources['source_probes'][0]
+        admit_master(round(probe['duration_seconds']*probe['sample_rate']),probe['sample_rate'])
         before = measure_audio(files[0], ffmpeg=ffmpeg, ffprobe=ffprobe, log=work / "source_qa.log")
         prepared = prepare_tracks(records, work, audamcp=runtime["audamcp"], ffmpeg=ffmpeg, git=git,
                                   sample_rate=before["sample_rate"])
+        from .resources import admit_master
+        current().metrics['master_admission'] = admit_master(before['decoded_samples'],before['sample_rate'])
         mastered = master_set(prepared[records[0]["id"]]["path"], work / "master.wav", work,
             bitwize=runtime["bitwize"], git=git, target_lufs=-14, ceiling_db=-1.5, limiter_lookahead_ms=0)
         import soundfile as sf
@@ -84,11 +98,7 @@ def _make(args):
     # Use the same supported stages, including their source, timing and export
     # checks; the simple surface doesn't carry a second renderer implementation.
     from .cli import main
-    rates = []
-    for source in files:
-        probe = subprocess.run([ffprobe, "-v", "error", "-select_streams", "a:0", "-show_entries",
-                                "stream=sample_rate", "-of", "json", str(source)], check=True, capture_output=True)
-        rates.append(int(json.loads(probe.stdout)["streams"][0]["sample_rate"]))
+    rates = [row['sample_rate'] for row in resources['source_probes']]
     # One common processing clock: preserve the highest supplied rate, never
     # present resampling of other sources as recovered fidelity.
     sample_rate = max(rates)
@@ -117,10 +127,10 @@ def make(args):
     explicit_cache = getattr(args, 'cache', None)
     cache = None if getattr(args, 'no_cache', False) else (explicit_cache or
         (runtime.get('cache_root') if runtime.get('cache_mode') == 'persistent' else None))
-    jobs = getattr(args, 'jobs', None) or runtime.get('jobs', 1)
+    jobs = getattr(args,'jobs',None) or runtime.get('jobs',1)
     session = None
     try:
-        with execution(cache, jobs=jobs, devices=runtime.get('gpu_devices', ()),
+        with execution(cache, jobs=jobs, devices=runtime.get('gpu_devices',()),
                        scratch_root=runtime.get('scratch_root')) as session:
             return _make(args)
     finally:
