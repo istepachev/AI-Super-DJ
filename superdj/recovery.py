@@ -6,6 +6,19 @@ from .render import RenderError
 from .transition_quality import TransitionFailure
 
 
+def unsupported_attack_events(evidence,role):
+    """Retain physical source positions across every required timing view."""
+    source=evidence.get('warp',{}).get('source_kick_alignment',{}).get(role,{})
+    points=[p for p in evidence.get('final_attack',{}).get('measured',[]) if p['role']==role]
+    required=set((source.get('low_frequency_gap_recovery') or {}).get('recovered_beats',[]))
+    observed={p['beat'] for p in points if p.get('view')=='bass_body'}
+    visible=set((source.get('native_mixture_reference') or {}).get('bass_visible_beats',[]))
+    independent={p['beat'] for p in points if p.get('view')=='estimated_bass'}
+    failed=(required-observed)|((required&visible)-independent)
+    failed.update(p['beat'] for p in points if abs(p.get('delay_seconds',0.))>.003)
+    return [p['source_seconds'] for p in source.get('events',[]) if p['beat'] in failed]
+
+
 def alternative(plan, records, failure, excluded, attempt, *, sample_rate, ffmpeg):
     from .compact import arrange_sync
     sections = plan.get('sections') or {}
@@ -37,14 +50,9 @@ def alternative(plan, records, failure, excluded, attempt, *, sample_rate, ffmpe
         # A retry must not select the same unverified mandatory source event
         # under a different relative beat number in a nearly identical window.
         evidence=failure.evidence
-        warp=evidence.get('warp',{})
         role='head' if boundary=='start' else 'tail'
         if identity==failed_track and role in failed_roles:
-            source=warp.get('source_kick_alignment',{}).get(role,{})
-            required=set((source.get('low_frequency_gap_recovery') or {}).get('recovered_beats',[]))
-            observed={p['beat'] for p in evidence.get('final_attack',{}).get('measured',[])
-                      if p['role']==role and p.get('view')=='bass_body'}
-            rejected=[p['source_seconds'] for p in source.get('events',[]) if p['beat'] in required-observed]
+            rejected=unsupported_attack_events(evidence,role)
             if rejected:
                 prior=proposal.setdefault('rejected_attack_window_events',{}).setdefault(identity,{}).setdefault(role,[])
                 prior.extend(t for t in rejected if t not in prior)
