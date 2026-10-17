@@ -20,6 +20,19 @@ class WitnessWriter:
         self.output.write(audio)
 
 
+def _timing_limit_exceeded(value,limit,*,reference_seconds):
+    """Compare measured time differences without promoting roundoff to drift.
+
+    Subtracting second-valued timestamps loses precision at the scale of those
+    timestamps. Bound only that floating-point arithmetic, many orders below
+    one detector sample; the acoustic tolerance itself remains unchanged.
+    """
+    if not np.isfinite([value,limit,reference_seconds]).all() or value<0 or limit<0:
+        raise ValueError('Timing comparison requires finite nonnegative errors and limit')
+    uncertainty=8*np.finfo(float).eps*max(1.,abs(reference_seconds))
+    return value>limit and value-limit>uncertainty
+
+
 def verify_exported_pcm(master, encoded, *, gain_db=0.):
     """Every FLAC frame must match the master, allowing only declared quantization."""
     peak_error = 0.
@@ -106,7 +119,8 @@ def verify_master_rhythm(reference, master, rendered, *, tolerance_seconds=.003)
                 if not choices:
                     unresolved.append(frame)
                     continue
-                if any(abs(p['delay_seconds'])+prior_error>tolerance_seconds for p in choices):
+                if any(_timing_limit_exceeded(abs(p['delay_seconds'])+prior_error,tolerance_seconds,
+                        reference_seconds=frame/sr) for p in choices):
                     raise ValueError('Mastered percussion no longer meets the shared clock tolerance')
                 measured.append({'frame':frame,'views':choices})
             if unresolved:
