@@ -10,7 +10,7 @@ from .render import RenderError, _grid, _beat_window
 def preserve_minimum(plan, records, prepared, directory):
     """Repeat at most four stable bars inside the solo body for a small deficit.
 
-    Both mixture and prepared voice follow the identical edit. No invented beat
+    Mixture, prepared voice and drums follow the identical edit. No invented beat
     timings, silence padding or repeating an entire section. Locks/protected
     sources are not altered. Record the original-to-edited source timeline.
     Large deficits require another recording/decision rather than fake length.
@@ -27,10 +27,10 @@ def preserve_minimum(plan, records, prepared, directory):
         row = by_id[identity]
         deficit = minimum - section['predicted_play_seconds']
         edge = result['edges'][position] if position < len(result['edges']) else None
-        if edge is None or deficit > 10 or row.get('protected_ranges') or section.get('locked_start') or section.get('locked_end'):
+        if deficit > 10 or row.get('protected_ranges') or section.get('locked_start') or section.get('locked_end'):
             raise RenderError(f"{identity}: cannot safely meet the critical playback minimum")
         grid = _grid(row, .75)
-        count = edge['overlap_bars']
+        count = edge['overlap_bars'] if edge is not None else 0
         end_bar = int(np.argmin(abs(grid[3] - section['end'])))
         insertion_index = end_bar - count
         insertion = float(grid[3][insertion_index])
@@ -63,6 +63,12 @@ def preserve_minimum(plan, records, prepared, directory):
             raise RenderError(f"{identity}: no short stable bar repeat meets playback minimum")
         voice_risk, _, _, length, loop_start, repeat_bars, insertion = min(choices)
         item = files[identity]
+        streams=[key for key in ('path','vocal_path','drum_path') if item.get(key)]
+        infos={key:sf.info(item[key]) for key in streams}
+        native=infos['path']
+        if any((value.samplerate,value.frames,value.channels)!=(native.samplerate,native.frames,2)
+               or value.subtype not in {'FLOAT','DOUBLE'} for value in infos.values()):
+            raise RenderError('A minimum repeat needs all prepared streams on the same stereo sample timeline')
         directory.mkdir(parents=True, exist_ok=True)
 
         def repeat_file(source, name):
@@ -105,14 +111,15 @@ def preserve_minimum(plan, records, prepared, directory):
             return str(destination)
 
         item['path'] = repeat_file(item['path'], identity + '_minimum.wav')
-        if item.get('vocal_path'):
-            item['vocal_path'] = repeat_file(item['vocal_path'], identity + '_minimum_voice.wav')
+        for key,label in (('vocal_path','voice'),('drum_path','drums')):
+            if item.get(key):item[key]=repeat_file(item[key],identity+'_minimum_'+label+'.wav')
         edit = {'id': identity, 'method': 'one short stable whole-bar repeat inside solo body',
                 'loop_start_seconds': loop_start, 'insertion_source_seconds': insertion,
                 'added_seconds': length, 'bars_repeated': repeat_bars,
                 'reason': 'critical minimum selected playback; model endpoint otherwise too early',
                 'repeat_selection': 'stable interior window, least estimated voice activity, then shortest addition',
                 'estimated_voice_risk': voice_risk if voice_profile else None,
+                'aligned_preparation_streams':streams,
                 'original_source_duration_seconds': row['duration'],
                 'synthetic_beat_extension': False, 'splices_conditioned_seconds': .002}
         item.setdefault('provenance', {})['timeline_edit'] = edit
@@ -145,7 +152,7 @@ def preserve_minimum(plan, records, prepared, directory):
         for key in ('source_span_seconds', 'predicted_solo_seconds', 'predicted_play_seconds'):
             section[key] += length
         section['minimum_repeat'] = edit
-        edge['cue_locks']['outgoing_end_seconds'] += length
+        if edge is not None:edge['cue_locks']['outgoing_end_seconds'] += length
         result['section_warnings'] = [w for w in result.get('section_warnings', [])
                                       if not w.startswith(identity + ': source and stable grid permit only')]
         result['section_warnings'].append(f"{identity}: one {length:.2f}s stable-bar repeat meets minimum playback ({section['predicted_play_seconds']:.2f}s including overlaps)")
