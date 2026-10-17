@@ -99,6 +99,19 @@ def reliability(clips, transition):
         'scope': 'recognition coverage, not certification of unknown figures'}
 
 
+def coverage_failure_context(report, transition):
+    """Attribute only an unambiguous failed coverage view, not other metrics."""
+    coverage=report.get('reliability',{})
+    failed=[row for row in coverage.get('decks',[]) if row.get('sufficient_for_automatic_window') is False]
+    if coverage.get('passed') is not False or len(failed)!=1:
+        return {}
+    row=failed[0]
+    if (row.get('role'),row.get('id')) not in (('tail',transition['from']),('head',transition['to'])):
+        return {}
+    return {'failed_track':row['id'],'failed_roles':[row['role']],
+        'failure_ownership_scope':'single failed rendered rhythm-coverage view; energy and vocal checks remain independent'}
+
+
 def verify_overlap(outgoing, incoming, mixed, sample_rate, clips, transition, *, vocal_out=None,
                    vocal_in=None, style='default', beat_phase=None):
     energy = audit_energy(outgoing, incoming, mixed, sample_rate)
@@ -108,6 +121,7 @@ def verify_overlap(outgoing, incoming, mixed, sample_rate, clips, transition, *,
     report = {'passed': energy['passed'] and voice['passed'] and coverage['passed'],
         'energy': energy, 'vocals': voice, 'reliability': coverage}
     if not report['passed']:
+        report.update(coverage_failure_context(report,transition))
         reasons = [label for label, value in (('sustained energy loss', energy),
             ('competing estimated foregrounds', voice), ('insufficient recognized rhythm coverage', coverage)) if not value['passed']]
         raise TransitionFailure(transition['from'], transition['to'], '; '.join(reasons), report)
