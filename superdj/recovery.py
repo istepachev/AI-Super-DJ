@@ -8,6 +8,8 @@ from .transition_quality import TransitionFailure
 
 def unsupported_attack_events(evidence,role):
     """Retain physical source positions across every required timing view."""
+    if role in evidence.get('canonical_attack_rejections',{}):
+        return list(evidence['canonical_attack_rejections'][role])
     source=evidence.get('warp',{}).get('source_kick_alignment',{}).get(role,{})
     points=[p for p in evidence.get('final_attack',{}).get('measured',[]) if p['role']==role]
     from .source_observability import required_bass_views

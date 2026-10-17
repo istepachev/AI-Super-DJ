@@ -141,6 +141,8 @@ def render(args, records=None, planned=None, prepared_data=None):
         raise FileExistsError("Output already exists; use a new name or --overwrite")
     records = records if records is not None else _records(args.records)
     planned = planned if planned is not None else read_json(args.plan)
+    from .minimum_timeline import native_records, native_plan, native_prepared
+    records, planned = native_records(records), native_plan(planned)
     validate_transition_policy(planned, allow_hard_cut=args.allow_hard_cut,
                                allow_unverified=args.allow_unverified,
                                tempo_conflict_policy=args.tempo_conflict_policy)
@@ -167,18 +169,17 @@ def render(args, records=None, planned=None, prepared_data=None):
         prepared = prepare_tracks(records, work, audamcp=args.audamcp, ffmpeg=args.ffmpeg,
                                   git=args.git, noise_profiles=profiles, progress=lambda s: print(s, flush=True),
                                   sample_rate=args.sample_rate)
+    prepared = native_prepared(prepared, work / 'native_prepared')
     from .adapters import measure_prepared
     measure_prepared(records, prepared, work, ffmpeg=args.ffmpeg, ffprobe=args.ffprobe)
-    from .minimum import preserve_minimum
-    planned, records, prepared = preserve_minimum(planned, records, prepared, work / 'minimum_playback')
     write_json(work / 'effective_plan.json', planned)
     write_json(work / 'effective_records.json', records)
     write_json(work / "prepared.json", prepared)
     premix = work / "premix.wav"
     print("Rendering tempo maps and transitions", flush=True)
     with phase('render_wall'):
-        from .recovery import render_with_recovery
-        rendered, planned = render_with_recovery(planned, records, prepared, premix, work / "render",
+        from .minimum_timeline import render_with_minimum_recovery
+        rendered, planned, records, prepared = render_with_minimum_recovery(planned, records, prepared, premix, work / "render",
                                ffmpeg=args.ffmpeg, rubberband=args.rubberband,
                                sample_rate=args.sample_rate,
                                max_tempo_change=planned.get("constraints", {}).get("max_tempo_change_per_deck", 0.06),
@@ -194,6 +195,8 @@ def render(args, records=None, planned=None, prepared_data=None):
                                bridge_overlap_beats=args.bridge_overlap_beats,
                                progress=lambda s: print(s, flush=True))
     write_json(work / 'effective_plan.json', planned)
+    write_json(work / 'effective_records.json', records)
+    write_json(work / 'prepared.json', prepared)
     write_json(work / "render.json", rendered)
     if len(rendered["tracks"]) != len(records) or len({t["id"] for t in rendered["tracks"]}) != len(records):
         raise RuntimeError("Render did not preserve every track exactly once")
