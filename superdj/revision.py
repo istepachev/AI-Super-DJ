@@ -8,8 +8,9 @@ def revised_plan(manifest, *, drop=None, transition=None, sample_rate=44100, ffm
     from .compact import arrange_sync
     from .recovery import alternative
     from .transition_quality import TransitionFailure
-    old = manifest['plan']
-    records = deepcopy(manifest['selection_and_analysis'])
+    from .minimum_timeline import native_plan, native_records
+    old = native_plan(manifest['plan'])
+    records = native_records(manifest['selection_and_analysis'])
     order = old['order']
     if len(set(order))!=len(order) or set(order)!={r['id'] for r in records}:
         raise ValueError('Revision manifest must contain every unique analyzed source once')
@@ -88,7 +89,8 @@ def revised_plan(manifest, *, drop=None, transition=None, sample_rate=44100, ffm
 
 def validated_records(manifest, session, *, ffmpeg):
     from . import stems
-    records = deepcopy(manifest['selection_and_analysis'])
+    from .minimum_timeline import native_records
+    records = native_records(manifest['selection_and_analysis'])
     def one(record):
         expected = record.get('provenance',{}).get('source_sha256')
         if not expected or session.digest(record['path'])!=expected:
