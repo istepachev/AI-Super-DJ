@@ -17,11 +17,24 @@ shorten when evidence or a short source would otherwise erase its core.
 
 Target 180–240 seconds of full playback including both overlaps; hard cap 300
 on actual rendered frames. Solo time excludes the overlaps and receives no extra
-three-to-four-minute allowance. Keep at least 120 seconds including overlaps. A small deficit can use one short stable whole-bar repeat
-inside the body: at most four bars and ten seconds. Apply it identically to
-prepared mixture and voice, retain the source and record the timeline edit.
-Protected ranges/approved locks do not receive this edit. Larger/unrepairable
-deficits stop instead of silently bypassing the minimum.
+three-to-four-minute allowance. The full-play floor is 60 seconds. A native
+1:50 or 1:30 exception remains valid and does not stop a set. Below 120 seconds,
+try an optional supported whole-phrase loop toward two minutes; if it fails,
+retain the available native play at or above one minute. Never fabricate beats
+or silence to manufacture duration.
+
+Loops use stable 1/2/4/8/16-bar source regions inside the solo body, at most four
+copies and sixty added seconds. Preserve protected ranges, approved locks and
+the native ending. Compare native harmony, active bass waveform coherence,
+levels, estimated voice risk and actual cross energy. The complementary bass
+and melodic curves change the prefix before the copied downbeat without
+removing time. Apply the same linear edit to mixture, voice and drums. Save
+checksummed native join context for an exact PCM inverse. Signal checks do not
+promise a perceptually invisible loop.
+
+Automatic folder selection excludes native sources shorter than one minute
+with a named ledger. Report those omissions. Explicitly required recordings
+are retained; a sub-minute selection needs another span or a supported loop.
 
 Long playback is a per-request opt-in: `--long-play` targets 360 seconds with
 a 420-second full-play cap; `--track-play-seconds` can set another requested

@@ -18,8 +18,10 @@ def inputs(tmp_path):
     rows[0]['downbeats']=[t for t in rows[0]['downbeats'] if t<119]
     plan=arrange_sync(plan_tracks(rows,mode='fixed'),rows)
     t=np.arange(sr*125)/sr
-    voice=.03*np.sin(2*np.pi*(390*t+.13*t*t))
-    drums=.04*np.sin(2*np.pi*79*t)*(1+.3*np.sin(.83*t))
+    # Stable musical cycles permit a verified phrase join. The former chirp
+    # was deliberately non-cyclic and can now legitimately retain short play.
+    voice=.03*np.sin(2*np.pi*400*t)
+    drums=.04*np.sin(2*np.pi*80*t)*(1+.3*np.sin(2*np.pi*t/9.6))
     values={'path':voice+drums,'vocal_path':voice,'drum_path':drums}
     prepared={'a':{},'b':{'path':'unused'}}
     for key,audio in values.items():
@@ -37,7 +39,7 @@ def test_short_repeat_preserves_mixture_voice_and_drum_alignment_and_originals(t
     assert len(mixture)==len(voice)==len(drums)==125*sr+round(edit['added_seconds']*sr)
     np.testing.assert_allclose(mixture,voice+drums,atol=3e-8,rtol=2e-6)
     assert set(edit['aligned_preparation_streams'])=={'path','vocal_path','drum_path'}
-    assert extended['sections']['a']['predicted_play_seconds']>=120
+    assert extended['sections']['a']['predicted_play_seconds']>plan['sections']['a']['predicted_play_seconds']>=60
     assert revised[0]['duration']>rows[0]['duration']
     for key,path in prepared['a'].items():assert hashlib.sha256(Path(path).read_bytes()).hexdigest()==hashes[key]
 
@@ -67,7 +69,7 @@ def test_short_final_source_repeats_inside_solo_and_preserves_the_native_ending(
     sr,rows,plan,prepared=final_inputs(tmp_path)
     extended,revised,processed=preserve_minimum(plan,rows,prepared,tmp_path/'repeat')
     edit=extended['minimum_playback_edits'][0]
-    assert extended['sections']['a']['predicted_play_seconds']>=120
+    assert extended['sections']['a']['predicted_play_seconds']>plan['sections']['a']['predicted_play_seconds']>=60
     for key in ('path','vocal_path','drum_path'):
         original=sf.read(prepared['a'][key],dtype='float32')[0]
         result=sf.read(processed['a'][key],dtype='float32')[0]
@@ -83,7 +85,9 @@ def test_final_repeat_does_not_override_source_locks_or_protected_material(tmp_p
     if constraint=='protected_range':rows[1]['protected_ranges']=[[90.,95.]]
     else:plan['sections']['a'][constraint]=True
     hashes={k:hashlib.sha256(Path(p).read_bytes()).hexdigest() for k,p in prepared['a'].items()}
-    with pytest.raises(RenderError,match='cannot safely meet'):
-        preserve_minimum(plan,rows,prepared,tmp_path/'repeat')
+    result,_,unchanged=preserve_minimum(plan,rows,prepared,tmp_path/'repeat')
+    assert not result['minimum_playback_edits']
+    assert result['sections']['a']['predicted_play_seconds']==plan['sections']['a']['predicted_play_seconds']
+    assert unchanged==prepared
     assert not (tmp_path/'repeat').exists()
     assert hashes=={k:hashlib.sha256(Path(p).read_bytes()).hexdigest() for k,p in prepared['a'].items()}

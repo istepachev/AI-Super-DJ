@@ -15,7 +15,7 @@ python -m superdj archive-audit --project "project.djs" --cue "export.cue" --aud
 Keep the report folder outside this repository. For FFmpeg tools outside PATH,
 provide `--ffprobe "path/to/ffprobe"` and `--ffmpeg "path/to/ffmpeg"`.
 
-- `--min-track-seconds 120` sets the requested minimum selected playback span.
+- `--min-track-seconds 60` sets the requested minimum selected playback span.
 - `--measure` decodes and measures the complete exported audio, including
   loudness and peaks. It requires `--audio`; without this option, audio is only
   probed for container duration, codec, sample rate and channels.
@@ -82,7 +82,7 @@ report = audit_archive(
     "project.djs",
     cue="export.cue",
     export_duration_s=3600.0,  # independently measured exported audio
-    minimum_track_s=120.0,
+    minimum_track_s=60.0,
     include_native_state=False,
 )
 ```

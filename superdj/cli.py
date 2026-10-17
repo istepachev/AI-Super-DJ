@@ -676,7 +676,7 @@ def main(argv=None):
     djp.add_argument("--cue", help="Exported CUE chapters")
     djp.add_argument("--audio", help="Exported audio for duration and optional full-file QA")
     djp.add_argument("--work", required=True, help="Private report folder outside this repository")
-    djp.add_argument("--min-track-seconds", type=float, default=120.0)
+    djp.add_argument("--min-track-seconds", type=float, default=60.0)
     djp.add_argument("--include-native-state", action="store_true", help="Preserve complete native metadata in the private report")
     djp.add_argument("--measure", action="store_true", help="Decode and measure the complete exported audio")
     _audio(djp)

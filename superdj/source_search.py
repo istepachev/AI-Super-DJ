@@ -54,11 +54,11 @@ def fresh_arrangement_alternative(plan, records, error, excluded, attempt, *, sa
             maximum_play_seconds=preferences.get('maximum_play_seconds',300.),
             excluded_sections=blocked,section_ranges=ranges)
         selected = candidate['sections'][identity]
-        if selected['predicted_play_seconds'] >= 120:
+        if selected['predicted_play_seconds'] >= 60:
             break
         blocked[identity].append([selected['start'],selected['end']])
     else:
-        raise RenderError('No distinct failed-boundary candidate retains 120 seconds') from error
+        raise RenderError('No distinct failed-boundary candidate retains 60 seconds') from error
     assert candidate['order'] == plan['order']
     assert [e.get('overlap_bars') for e in candidate['edges']] == [e.get('overlap_bars') for e in plan['edges']]
     for key,value in candidate['sections'].items():

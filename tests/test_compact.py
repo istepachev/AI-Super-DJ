@@ -234,6 +234,7 @@ def test_real_compact_render_matches_solo_budget_or_refuses_a_clock_conflict(tmp
 
 
 def test_minimum_repeat_preserves_phase_voice_edit_and_original_file(tmp_path):
+    from superdj.minimum import legacy_minimum as preserve_minimum
     sr = 8000
     rows = [record('a', 125, 100), record('b', 320, 126)]
     rows[0]['downbeats'] = [t for t in rows[0]['downbeats'] if t < 119]
@@ -241,7 +242,7 @@ def test_minimum_repeat_preserves_phase_voice_edit_and_original_file(tmp_path):
     audio = np.column_stack((original, original)).astype(np.float32)
     source, voice = tmp_path / 'a.wav', tmp_path / 'voice.wav'
     sf.write(source, audio, sr, subtype='FLOAT'); sf.write(voice, audio * .5, sr, subtype='FLOAT')
-    plan = arrange_sync(plan_tracks(rows, mode='fixed'), rows)
+    plan = arrange_sync(plan_tracks(rows, mode='fixed'), rows, minimum_play_seconds=120.)
     assert plan['sections']['a']['predicted_play_seconds'] < 120
     prepared = {'a': {'path': str(source), 'vocal_path': str(voice)}, 'b': {'path': 'unused'}}
     extended, revised, processed = preserve_minimum(plan, rows, prepared, tmp_path / 'repeat')
@@ -262,10 +263,11 @@ def test_minimum_repeat_preserves_phase_voice_edit_and_original_file(tmp_path):
 
 
 def test_minimum_repeat_can_use_earlier_stable_body_when_exit_annotations_disagree(tmp_path):
+    from superdj.minimum import legacy_minimum as preserve_minimum
     sr=8000
     rows=[record('a',125,100),record('b',320,126)]
     rows[0]['downbeats']=[t for t in rows[0]['downbeats'] if t<119]
-    plan=arrange_sync(plan_tracks(rows,mode='fixed'),rows)
+    plan=arrange_sync(plan_tracks(rows,mode='fixed'),rows,minimum_play_seconds=120.)
     grid=_grid(rows[0],.75)
     edge=plan['edges'][0]
     end=int(np.argmin(abs(grid[3]-plan['sections']['a']['end'])))-edge['overlap_bars']

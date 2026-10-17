@@ -10,15 +10,23 @@ from .render import RenderError
 
 
 def recipe(edit):
-    """Accept only the single, bounded edit whose inverse we can establish."""
-    if edit.get('method') != 'one short stable whole-bar repeat inside solo body':
+    """Accept only bounded edits with an established native inverse."""
+    legacy=edit.get('method')=='one short stable whole-bar repeat inside solo body'
+    modern=edit.get('method')=='verified phrase repeat with complementary-band join'
+    if not legacy and not modern:
         raise RenderError('Unknown source timeline edit; analyze the original again')
     start, insertion, length = (float(edit[k]) for k in
         ('loop_start_seconds', 'insertion_source_seconds', 'added_seconds'))
     original = float(edit['original_source_duration_seconds'])
-    if (not np.isfinite([start,insertion,length,original]).all() or start < 0
-            or not 0 < length <= 10 or abs(insertion-start-length)>1e-6
-            or insertion >= original or edit.get('bars_repeated') not in (1,2,4)):
+    count=1 if legacy else edit.get('repeat_count')
+    rate=edit.get('sample_rate',48000) if modern else 48000
+    if isinstance(rate,bool) or not isinstance(rate,int) or not 1000<=rate<=384000:
+        raise RenderError('Invalid sample rate in source timeline edit')
+    if (isinstance(count,bool) or not isinstance(count,int) or not 1<=count<=4
+            or not np.isfinite([start,insertion,length,original]).all() or start < 0
+            or not 0 < length <= (10 if legacy else 60)
+            or abs(insertion-start-length/count)>(1e-6 if legacy else 1/rate+1e-6)
+            or insertion >= original or edit.get('bars_repeated') not in ((1,2,4) if legacy else (1,2,4,8,16))):
         raise RenderError('Invalid source timeline edit; analyze the original again')
     return start, insertion, length, original
 
@@ -28,7 +36,8 @@ def native_time(value, edit):
     if value < insertion-1e-6:
         return value
     if value < insertion+length-1e-6:
-        return start+value-insertion
+        cycle=length/edit.get('repeat_count',1)
+        return start+(value-insertion)%cycle
     return value-length
 
 
@@ -85,8 +94,10 @@ def native_plan(plan):
             if edge['from']==identity:
                 edge['cue_locks']['outgoing_end_seconds']-=length
         result['section_warnings']=[w for w in result.get('section_warnings',[])
-            if not w.startswith(identity+': one ') or 'stable-bar repeat meets minimum playback' not in w]
+            if not w.startswith(identity+': optional smooth phrase loop')
+            and (not w.startswith(identity+': one ') or 'stable-bar repeat meets minimum playback' not in w)]
     result.pop('minimum_playback_edits',None)
+    result.pop('short_track_loop_reviews',None)
     return result
 
 
@@ -111,14 +122,27 @@ def native_prepared(prepared, directory):
                 if source.channels!=2 or source.subtype not in ('FLOAT','DOUBLE'):
                     raise RenderError('Timeline recovery requires stereo floating-point preparations')
                 first=round(insertion*source.samplerate)
-                count=first-round(start*source.samplerate)
+                count=round(length*source.samplerate)
                 if first+count>=len(source):
                     raise RenderError('Timeline edit exceeds the prepared source')
                 with sf.SoundFile(destination,'w',samplerate=source.samplerate,channels=2,subtype=source.subtype) as out:
-                    remaining=first
+                    context=(edit.get('native_join_contexts') or {}).get(key)
+                    native_context=None
+                    if context:
+                        from .execution import sha256
+                        if sha256(context['path'])!=context['sha256']:
+                            raise RenderError('Native loop restoration context changed')
+                        native_context=np.load(context['path'],allow_pickle=False)
+                        if native_context.shape!=(context['frames'],2) or native_context.dtype!=np.float32 or not np.isfinite(native_context).all():
+                            raise RenderError('Invalid native loop restoration context')
+                    elif edit.get('method')=='verified phrase repeat with complementary-band join':
+                        raise RenderError('Missing native context for a conditioned phrase loop')
+                    remaining=first-(len(native_context) if native_context is not None else 0)
+                    if remaining<0:raise RenderError('Native loop restoration context exceeds prefix')
                     while remaining:
                         block=source.read(min(262144,remaining),dtype='float64',always_2d=True)
                         out.write(block);remaining-=len(block)
+                    if native_context is not None:out.write(native_context)
                     source.seek(first+count)
                     for block in source.blocks(blocksize=262144,dtype='float64',always_2d=True):
                         out.write(block)

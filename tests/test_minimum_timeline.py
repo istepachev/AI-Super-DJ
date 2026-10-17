@@ -50,8 +50,10 @@ def test_inverse_recovers_original_grid_plan_and_all_pcm_without_changing_inputs
 
 
 def test_legacy_repeat_recovers_mixture_and_voice_but_keeps_native_drums(tmp_path):
+    from superdj.minimum import legacy_minimum
     _,rows,plan,prepared=inputs(tmp_path)
-    _,_,processed=preserve_minimum(plan,rows,prepared,tmp_path/'repeat')
+    plan['sections']['a']['minimum_play_seconds']=120.
+    _,_,processed=legacy_minimum(plan,rows,prepared,tmp_path/'repeat')
     processed['a']['provenance']['timeline_edit'].pop('aligned_preparation_streams')
     processed['a']['drum_path']=prepared['a']['drum_path']
     restored=native_prepared(processed,tmp_path/'native')
@@ -83,7 +85,7 @@ def test_retry_repeats_afresh_and_searches_only_native_sources(tmp_path,monkeypa
     def render(candidate,records,files,*args,**kwargs):
         calls.append(files['a']['path'])
         assert records[0]['duration']>rows[0]['duration']
-        assert candidate['sections']['a']['predicted_play_seconds']>=120
+        assert candidate['sections']['a']['predicted_play_seconds']>plan['sections']['a']['predicted_play_seconds']>=60
         assert len({sf.info(files['a'][k]).frames for k in ('path','vocal_path','drum_path')})==1
         if len(calls)==1:raise TransitionFailure('a','b','test failed first window')
         return {'tracks':[]}

@@ -1,4 +1,4 @@
-"""Explicit short, bar-aligned repeat to meet a critical playback minimum."""
+"""Short-play policy plus compatibility with older bounded-repeat archives."""
 from copy import deepcopy
 from pathlib import Path
 import numpy as np
@@ -7,7 +7,7 @@ import soundfile as sf
 from .render import RenderError, _grid, _beat_window
 
 
-def preserve_minimum(plan, records, prepared, directory):
+def legacy_minimum(plan, records, prepared, directory):
     """Repeat at most four stable bars inside the solo body for a small deficit.
 
     Mixture, prepared voice and drums follow the identical edit. No invented beat
@@ -159,3 +159,9 @@ def preserve_minimum(plan, records, prepared, directory):
         edits.append(edit)
     result['minimum_playback_edits'] = edits
     return result, rows, files
+
+
+def preserve_minimum(plan,records,prepared,directory):
+    """Factory: 60-second floor and optional, verified extension toward 120."""
+    from .short_tracks import preserve_short_tracks
+    return preserve_short_tracks(plan,records,prepared,directory)

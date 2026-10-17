@@ -235,7 +235,7 @@ def _bounds(beats: float, tempos: list[float]) -> list[float] | None:
 
 
 def audit_archive(project: str | Path | ArchiveProject, *, cue: str | Path | Mapping[str, Any] | None = None,
-                   export_duration_s: float | None = None, minimum_track_s: float = 120,
+                   export_duration_s: float | None = None, minimum_track_s: float = 60,
                    include_native_state: bool = False) -> dict[str, Any]:
     """Produce a JSON-serializable structural audit, never changing input files.
 
