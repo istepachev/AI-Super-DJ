@@ -1,5 +1,9 @@
 # Acoustic SYNC verification
 
+## Gradual orchestration recovery
+
+Two independently aligned decks can still conflict during their combined bass/percussion crossover. Before selecting different native source windows, ordinary shared-phase styles can try at most three other placements of the same gradual transfer inside the unchanged overlap. Preserve its full width, the shared clock, native source bounds and all middle/high curves. An explicit bass position or width prevents this automatic relocation. The candidates must pass the same native-identity, required-attack, paired-front, 3 ms, actual energy, estimated foreground and recognition-coverage checks. Exhaustion retains a failure; it never authorizes a quick cut, pitch-changing correction or weaker thresholds. Store the chosen beat span and failed alternatives in `gradual_orchestration_search`. All verification components must use the actual tonal-conflict and band settings, including ordinary-style attenuation.
+
 ## Native figures and actual map safety
 
 A recovered familiar kick waveform is evidence of identity, not proof that it is the primary hit for the nearest model beat. Against an established native phase family, observations displaced by more than the bounded phase tolerance remain `native_rhythm_observations`; they are retained at source timing, excluded from quarter-note controls, and not counted as certified on-beat primary attacks. A global consistent grid bias is supported; it is the deviation from the established family that matters. Reviewed variable-meter evidence keeps its explicit exception. Do not erase a real fill or invent a missing primary hit.
