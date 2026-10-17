@@ -187,19 +187,24 @@ def test_real_zhilin_long_render_preserves_three_minute_sections(tmp_path, nativ
             cue_locks={"outgoing_end_seconds": records[0]["beats"][485],
                        "incoming_start_seconds": records[1]["beats"][65]})
         edge.pop("section_overlap_bars", None)
-    if native_beats:
-        # This fixed partial-bar fixture produces a strong >3 ms combined
-        # bass contradiction despite correctly timed separate decks. It used
-        # to pass only after an automatic one-beat percussion switch. Locks
-        # prohibit cue recovery, so refuse the export instead of hiding it.
-        from superdj.transition_quality import TransitionFailure
-        with pytest.raises(TransitionFailure, match='Combined percussion attack misses the shared clock'):
-            render_plan(planned, records, {}, tmp_path / "set.wav", tmp_path / "render",
-                ffmpeg=ffmpeg, rubberband=rubberband, sample_rate=sr)
-        assert not (tmp_path / 'set.wav').exists()
-        return
     result = render_plan(planned, records, {}, tmp_path / "set.wav", tmp_path / "render",
         ffmpeg=ffmpeg, rubberband=rubberband, sample_rate=sr)
+    if native_beats:
+        # This fixture's old >3 ms raw peak belongs to the dominant other
+        # source. It may pass only with independent attribution evidence,
+        # unchanged PCM timing and the original broad musical handoff.
+        transition=result['transitions'][0]
+        audit=transition['blended_front_audit']
+        ambiguities=[a for c in audit['checks'] for a in c['raw_mixture_identity_ambiguities']]
+        assert ambiguities and any(abs(a['raw_delay_seconds'])>.003 for a in ambiguities)
+        assert all(a['raw_candidate_other_waveform_cosine']>=.98
+                   and a['other_to_own_band_power_ratio']>=4 for a in ambiguities)
+        assert not audit['local_combined_waveform_refinements']
+        assert audit['paired_source_front_audit']['maximum_pair_error_seconds']<=.003
+        assert transition['frequency_processing']['musical_handoff_continuity']['passed']
+        assert transition.get('percussion_ownership_policy')!='sequential'
+        assert all(not t['warp'].get('fine_attack_timing')
+                   and not t['warp'].get('native_attack_preservation') for t in result['tracks'])
     assert result["transitions"][0]["bars"] == (12.75 if native_beats else 40)
     assert not result["transitions"][0].get("fallback_from_ordinary", False)
     assert all(180 <= track["duration_seconds"] <= 240 for track in result["tracks"])
