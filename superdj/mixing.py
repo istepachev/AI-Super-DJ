@@ -105,7 +105,8 @@ def envelopes(n, beats, *, tonal_conflict=False, beat_phase=None, style='default
 
 def blend(outgoing, incoming, sample_rate, *, bass_hz=180.0,
           beats=64, tonal_conflict=False, beat_phase=None, style='default', profile=None,
-          mid_handoff_bars=None, bass_handoff_beats=None,drums_out=None,drums_in=None,percussion_policy='shared',handoff_windows=None):
+          mid_handoff_bars=None, bass_handoff_beats=None,drums_out=None,drums_in=None,percussion_policy='shared',handoff_windows=None,
+          allow_abrupt_percussion=False):
     if outgoing.shape != incoming.shape or outgoing.ndim != 2 or outgoing.shape[1] != 2:
         raise ValueError("Frequency blend needs equally sized stereo blocks")
     if not np.isfinite(outgoing).all() or not np.isfinite(incoming).all():
@@ -129,7 +130,7 @@ def blend(outgoing, incoming, sample_rate, *, bass_hz=180.0,
     if percussion_policy!='shared' and drums_out is None:raise ValueError('Sequential percussion requires both final drum estimates')
     from .percussion import percussion_gains
     gains=percussion_gains(gains,beat_phase,beats,percussion_policy)
-    continuity=validate_handoff_continuity(gains,beat_phase,beats) if style=='zhilin' else None
+    continuity=validate_handoff_continuity(gains,beat_phase,beats,allow_abrupt_percussion=allow_abrupt_percussion) if style=='zhilin' else None
     mixed = low_a * gains['bass_out'] + low_b * gains['bass_in']
     mixed += mid_a * gains['mid_out'] + mid_b * gains['mid_in']
     mixed += high_a * gains['high_out'] + high_b * gains['high_in']
@@ -146,9 +147,9 @@ def blend(outgoing, incoming, sample_rate, *, bass_hz=180.0,
                     'ownership_policy':percussion_policy,
                     'maximum_simultaneous_estimated_drum_gain_product':float(np.max(gains.get('drums_out',gains['bass_out'])*gains.get('drums_in',gains['bass_in']))),
                     'maximum_outgoing_drum_gain_after_handoff':float(np.max(gains.get('drums_out',gains['bass_out'])[percussion_phase>=curves['bass_handoff_fraction'][1]])) if np.any(percussion_phase>=curves['bass_handoff_fraction'][1]) else None}
-        if percussion_policy=='sequential':
+        if percussion_policy in ('sequential','smooth'):
             first=np.flatnonzero(gains['drums_out'][:,0]<1)[0];last=np.flatnonzero(gains['drums_in'][:,0]>=1)[0]
-            percussion.update(method='Sequential estimated percussion ownership for unresolved leading fronts or displaced native figures; harmonic band curves remain unchanged',
+            percussion.update(method=('Explicit sequential percussion effect' if percussion_policy=='sequential' else 'Gradual complementary estimated percussion transfer; independent harmonic band curves retained'),
                 handoff_fraction=[float(percussion_phase[first]),float(percussion_phase[last])],
                 handoff_beats=float((percussion_phase[last]-percussion_phase[first])*beats))
     report = {"method": "three complementary zero-phase bands with independent bass/mid/high envelopes",
@@ -162,7 +163,7 @@ def blend(outgoing, incoming, sample_rate, *, bass_hz=180.0,
     return mixed.astype(np.float32), report
 
 
-def validate_handoff_continuity(gains,beat_phase,beats):
+def validate_handoff_continuity(gains,beat_phase,beats,*,allow_abrupt_percussion=False):
     """A sample-smooth envelope can still switch the musical core too quickly.
 
     Check effective accompaniment gains after routing. A short drum transfer
@@ -170,15 +171,19 @@ def validate_handoff_continuity(gains,beat_phase,beats):
     """
     phase=np.asarray(beat_phase) if beat_phase is not None else np.linspace(0,1,len(gains['mid_in']))
     spans={}
-    for band in ('bass','mid'):
-        transfer=np.asarray(gains[band+'_in'])[:,0]
+    bands=['bass','mid']+(['percussion'] if 'drums_in' in gains else [])
+    for band in bands:
+        transfer=np.asarray(gains['drums_in' if band=='percussion' else band+'_in'])[:,0]
         if transfer.shape!=phase.shape or not np.isfinite(transfer).all() or np.any(np.diff(transfer)<-1e-9):raise ValueError('Accompaniment handoff must be finite and monotonic')
         first=np.flatnonzero(transfer>=.1);last=np.flatnonzero(transfer>=.9)
         if not len(first) or not len(last):raise ValueError('Incomplete accompaniment handoff')
         spans[band]=float((phase[last[0]]-phase[first[0]])*beats)
     required={'bass':min(2.,beats/4),'mid':min(4.,beats/4)}
+    if 'percussion' in spans:required['percussion']=0. if allow_abrupt_percussion else min(2.,beats/4)
+    if spans.get('percussion',float('inf'))+1e-5<required.get('percussion',0.):
+        raise ValueError('Percussion handoff is too short for a smooth mix; select a gradual transfer or another source window')
     if any(spans[k]+1e-5<required[k] for k in spans):
         raise ValueError('Accompaniment energy handoff is too short; select compatible phrases and a gradual band transfer instead of a core cut')
     return {'executed':True,'effective_10_90_shared_beats':spans,'minimum_10_90_shared_beats':required,
-        'passed':True,'method':'actual accompaniment gain progression after routing; separate from primary-attack timing and sample continuity',
+        'passed':True,'abrupt_percussion_explicitly_allowed':bool(allow_abrupt_percussion),'method':'actual accompaniment and estimated percussion gain progression after routing; separate from primary-attack timing',
         'limitations':'A minimum envelope span does not certify source phrasing, every residual figure or subjective quality'}

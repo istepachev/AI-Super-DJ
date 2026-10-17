@@ -58,7 +58,7 @@ def test_native_uncertainty_uses_sequential_drums_and_preserves_harmonic_overlap
     warp={'source_kick_alignment':{'head':{'unverified_native_bass_candidates':[{'source_seconds':5.}]}}}
     saved=deepcopy(warp)
     assert needs_handoff({},warp,style='zhilin')
-    assert ownership_policy({},warp)=='sequential'
+    assert ownership_policy({},warp)=='smooth'
     assert not needs_handoff({},warp,style='default')
     assert warp==saved
 

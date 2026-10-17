@@ -21,15 +21,24 @@ def ambiguous_front(source):
 def ownership_policy(outgoing_warp,incoming_warp):
     sources=[w.get('source_kick_alignment',{}).get(role,{}) for w,role in ((outgoing_warp or {},'tail'),(incoming_warp or {},'head'))]
     uncertain=any(ambiguous_front(s) or s.get('native_rhythm_observations') or s.get('unverified_native_bass_candidates') for s in sources)
-    return 'sequential' if uncertain else 'shared'
+    return 'smooth' if uncertain else 'shared'
 
 def percussion_gains(gains,beat_phase,beats,policy='shared'):
-    if policy not in ('shared','sequential'):raise ValueError('Unknown percussion ownership policy')
+    if policy not in ('shared','smooth','sequential'):raise ValueError('Unknown percussion ownership policy')
     if policy=='shared':return gains
     from .mixing import smooth
     phase=np.asarray(beat_phase) if beat_phase is not None else np.linspace(0,1,len(gains['bass_in']))
     both=(gains['bass_in'][:,0]>=.49)&(gains['bass_in'][:,0]<=.51)
     center=float(np.median(phase[both])) if both.any() else .55
+    if policy=='smooth':
+        # Preserve a gradual rhythm handoff even when the bass envelope is
+        # brief. These are gain curves, never an audio timing/pitch repair.
+        changing=np.flatnonzero((gains['bass_in'][:,0]>0)&(gains['bass_in'][:,0]<1))
+        width=(phase[changing[-1]]-phase[changing[0]])*beats if len(changing) else 0.
+        width=min(float(beats),max(8.,float(width)))
+        first=max(0.,min(center*beats-width/2,beats-width))
+        incoming=smooth((phase*beats-first)/width)[:,None]
+        return {**gains,'drums_out':1-incoming,'drums_in':incoming}
     beat=min(beats-1,max(1,int(np.ceil(center*beats))));clock=phase*beats
     old=(1-smooth((clock-(beat-1))/.9))[:,None]
     new=smooth((clock-(beat-.1))/.1)[:,None]
