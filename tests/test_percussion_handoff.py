@@ -39,11 +39,11 @@ def test_automatic_handoff_is_conditional_and_uses_exact_postprocessed_pcm(tmp_p
     import soundfile as sf
     warp={'source_kick_alignment':{'head':{'attack_front_comparison':{'upper_front_selected':True}}}}
     assert needs_handoff({},warp,style='zhilin')
-    assert not needs_handoff({},warp,style='default')
+    assert needs_handoff({},warp,style='default')
     assert not needs_handoff(warp,{},style='zhilin')
     recovered={'source_kick_alignment':{'tail':{'low_frequency_gap_recovery':{'recovered_beats':[41]}}}}
     assert needs_handoff(recovered,{},style='zhilin')
-    assert not needs_handoff(recovered,{},style='default')
+    assert needs_handoff(recovered,{},style='default')
     captured=[]
     monkeypatch.setattr(stems,'configuration',lambda:{'include_drums':True})
     def separate(source,digest,cache,config,ffmpeg):

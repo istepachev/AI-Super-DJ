@@ -187,6 +187,17 @@ def test_real_zhilin_long_render_preserves_three_minute_sections(tmp_path, nativ
             cue_locks={"outgoing_end_seconds": records[0]["beats"][485],
                        "incoming_start_seconds": records[1]["beats"][65]})
         edge.pop("section_overlap_bars", None)
+    if native_beats:
+        # This fixed partial-bar fixture produces a strong >3 ms combined
+        # bass contradiction despite correctly timed separate decks. It used
+        # to pass only after an automatic one-beat percussion switch. Locks
+        # prohibit cue recovery, so refuse the export instead of hiding it.
+        from superdj.transition_quality import TransitionFailure
+        with pytest.raises(TransitionFailure, match='Combined percussion attack misses the shared clock'):
+            render_plan(planned, records, {}, tmp_path / "set.wav", tmp_path / "render",
+                ffmpeg=ffmpeg, rubberband=rubberband, sample_rate=sr)
+        assert not (tmp_path / 'set.wav').exists()
+        return
     result = render_plan(planned, records, {}, tmp_path / "set.wav", tmp_path / "render",
         ffmpeg=ffmpeg, rubberband=rubberband, sample_rate=sr)
     assert result["transitions"][0]["bars"] == (12.75 if native_beats else 40)

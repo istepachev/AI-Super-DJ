@@ -54,12 +54,12 @@ def test_strong_native_contradiction_is_not_dropped_as_uncertainty(tmp_path):
     assert exc.value.evidence['native_estimated_percussion_reference']['delay_seconds']>.007
 
 
-def test_native_uncertainty_uses_sequential_drums_and_preserves_harmonic_overlap():
+def test_native_uncertainty_uses_gradual_drums_and_preserves_harmonic_overlap():
     warp={'source_kick_alignment':{'head':{'unverified_native_bass_candidates':[{'source_seconds':5.}]}}}
     saved=deepcopy(warp)
     assert needs_handoff({},warp,style='zhilin')
     assert ownership_policy({},warp)=='smooth'
-    assert not needs_handoff({},warp,style='default')
+    assert needs_handoff({},warp,style='default')
     assert warp==saved
 
 

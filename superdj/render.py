@@ -1431,8 +1431,7 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                     mid_handoff_bars=transition.get('mid_handoff_bars'),
                     bass_handoff_beats=transition.get('bass_handoff_beats'),handoff_windows=transition.get('handoff_windows'),**percussion_args)
                 transition["frequency_processing"] = evidence
-                if (mode == 'beatmapped_bass_swap' and transition.get('tempo_technique') == 'shared_phase_sync'
-                        and plan.get('style') == 'zhilin'):
+                if mode == 'beatmapped_bass_swap' and transition.get('tempo_technique') == 'shared_phase_sync':
                     from .percussion import verify_blended_fronts,verification_components
                     from .mixing import envelopes
                     gains,_=envelopes(incoming,transition.get('beats',64),beat_phase=beat_phase,style=plan.get('style','default'),mid_handoff_bars=transition.get('mid_handoff_bars'),bass_handoff_beats=transition.get('bass_handoff_beats'),handoff_windows=transition.get('handoff_windows'))
@@ -1485,7 +1484,7 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
         # configuration belongs to the cache key for that fallback as well.
         uses_drums = (transition['mode'] == 'beatmapped_bass_swap' and
                       (needs_handoff(clips[position-1].get('warp'), clip.get('warp'), style=plan.get('style','default'))
-                       or (plan.get('style') == 'zhilin' and transition.get('tempo_technique') == 'shared_phase_sync')))
+                       or transition.get('tempo_technique') == 'shared_phase_sync'))
         value = cached('overlap', {'outgoing': clips[position-1], 'incoming': clip,
             'transition': transition, 'style': plan.get('style', 'default'), 'bass_hz': bass_hz,
             'sample_rate': sample_rate, 'decoder': render_controls['ffmpeg'],

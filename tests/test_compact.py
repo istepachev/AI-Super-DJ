@@ -173,7 +173,7 @@ def test_curves_never_boost_layered_bands_and_mids_handoff_faster_than_highs():
     for band in ('bass', 'mid', 'high'):
         assert np.max(gains[band + '_out'] + gains[band + '_in']) <= 1 + 1e-12
     assert report['incoming_mid_opening_beats'] == 16
-    assert report['bass_handoff_beats'] == 4
+    assert report['bass_handoff_beats'] == 16
     assert report['phase_source'] == 'shared integrated clock'
     assert np.all(gains['mid_out'][phase > .55] == 0)
     assert np.all(gains['mid_in'][phase < .30] == 0)
@@ -188,7 +188,8 @@ def test_identical_decks_do_not_gain_three_db_in_highs_and_mids():
     assert np.max(abs(mixed)) <= np.max(abs(audio)) + .0002
 
 
-def test_real_compact_render_matches_solo_budget_and_shared_phase(tmp_path):
+@pytest.mark.parametrize('resonant_kicks', [False, True])
+def test_real_compact_render_matches_solo_budget_or_refuses_a_clock_conflict(tmp_path, resonant_kicks):
     ffmpeg, rubberband = os.getenv('SUPERDJ_FFMPEG'), os.getenv('SUPERDJ_RUBBERBAND')
     if not ffmpeg or not rubberband:
         pytest.skip('Actual audio tools required')
@@ -197,14 +198,30 @@ def test_real_compact_render_matches_solo_budget_and_shared_phase(tmp_path):
     for row in rows:
         t = np.arange(320 * sr) / sr
         audio = .07 * np.sin(2 * np.pi * 440 * t)
-        pulse_t=np.arange(round(.12*sr))/sr
-        pulse=.18*np.sin(2*np.pi*80*pulse_t)*np.exp(-pulse_t/.035)+.06*np.random.default_rng(11).normal(size=len(pulse_t))*np.exp(-pulse_t/.003)
-        for beat in row['beats']:
-            first=round(beat*sr);last=min(first+len(pulse),len(audio));audio[first:last]+=pulse[:last-first]
+        if resonant_kicks:
+            pulse_t=np.arange(round(.12*sr))/sr
+            pulse=.18*np.sin(2*np.pi*80*pulse_t)*np.exp(-pulse_t/.035)+.06*np.random.default_rng(11).normal(size=len(pulse_t))*np.exp(-pulse_t/.003)
+            for beat in row['beats']:
+                first=round(beat*sr);last=min(first+len(pulse),len(audio));audio[first:last]+=pulse[:last-first]
+        else:
+            width=64
+            pulse=.25*np.exp(-.5*(np.arange(-width,width+1)/(sr*.0015))**2)
+            for beat in row['beats']:
+                center=round(beat*sr);audio[center-width:center+width+1]+=pulse
         path = tmp_path / (row['id'] + '.wav')
         sf.write(path, np.column_stack((audio, audio)), sr, subtype='FLOAT')
         row['path'] = str(path)
     plan = arrange_sync(plan_tracks(rows, mode='fixed'), rows, sample_rate=sr)
+    if resonant_kicks:
+        # Retain the old waveform as a refusal regression: its actual blend
+        # has a strong delayed bass view. Ordinary SYNC now applies the same
+        # unchanged clock gate as Zhilin and must not conceal it by cutting.
+        from superdj.transition_quality import TransitionFailure
+        with pytest.raises(TransitionFailure,match='Combined percussion attack misses the shared clock'):
+            render_plan(plan, rows, {}, tmp_path / 'set.wav', tmp_path / 'render',
+                        ffmpeg=ffmpeg, rubberband=rubberband, sample_rate=sr)
+        assert not (tmp_path/'set.wav').exists()
+        return
     result = render_plan(plan, rows, {}, tmp_path / 'set.wav', tmp_path / 'render',
                          ffmpeg=ffmpeg, rubberband=rubberband, sample_rate=sr)
     assert result['transitions'][0]['tempo_technique'] == 'shared_phase_sync'

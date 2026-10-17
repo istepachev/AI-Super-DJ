@@ -5,7 +5,7 @@ import numpy as np
 import soundfile as sf
 
 def needs_handoff(outgoing_warp,incoming_warp,*,style='default'):
-    if style!='zhilin':return False
+    if style not in ('default','sync','zhilin'):raise ValueError('Unknown percussion mixing style')
     return any((warp.get('source_kick_alignment',{}).get(role,{}).get('attack_front_comparison') or {}).get('upper_front_selected',False)
                or (warp.get('source_kick_alignment',{}).get(role,{}).get('low_frequency_gap_recovery') or {}).get('recovered_beats')
                or warp.get('source_kick_alignment',{}).get(role,{}).get('native_rhythm_observations')

@@ -19,7 +19,7 @@ def split_bands(audio, sample_rate, bass_hz=180.0, high_hz=3500.0):
 
 def envelopes(n, beats, *, tonal_conflict=False, beat_phase=None, style='default', profile=None,
               mid_handoff_bars=None, bass_handoff_beats=None,handoff_windows=None):
-    """Complementary per-band transfer, with a brief soft mid handoff.
+    """Complementary, gradual per-band transfer for every ordinary style.
 
     Both bass lines and dense mid parties are never held at full level at once.
     Highs change over the whole transition. Use the renderer's actual shared
@@ -45,6 +45,12 @@ def envelopes(n, beats, *, tonal_conflict=False, beat_phase=None, style='default
         mid=np.interp(p[:,0],grid,reference['mid_in'])[:,None]
         high=np.interp(p[:,0],grid,reference['high_in'])[:,None]
         start,end=reference['bass_transfer_fraction']
+        if bass_handoff_beats is None and not (handoff_windows or {}).get('bass'):
+            # Preserve the reference's long handoff while keeping shortened
+            # source overlaps from scaling it down to a one-bar switch.
+            width=min(1.,max(end-start,16./beats))
+            center=(start+end)/2
+            start=max(0.,min(center-width/2,1-width));end=start+width
         if bass_handoff_beats is not None:
             center=(start+end)/2;width=bass_handoff_beats/beats
             start=max(0.,min(center-width/2,1-width));end=start+width
@@ -80,11 +86,14 @@ def envelopes(n, beats, *, tonal_conflict=False, beat_phase=None, style='default
             'phase_source':'shared integrated clock' if beat_phase is not None else 'linear phase',
             'handoff_windows_shared_beats':handoff_windows,
             'foreground_conflict_policy':'Complementary accompaniment; separate aligned vocal handoff; dense instrumental conflicts need cue review'}
-    mid_beats = min(beats * .4, 8 if tonal_conflict else 16)
+    mid_beats = min(float(beats), 8 if tonal_conflict else 16)
     mid_width = mid_beats / beats
-    mid = smooth((p - (.43 - mid_width / 2)) / mid_width)
-    bass_beats = min(4, beats * .2)
-    bass = smooth((p - (.55 - bass_beats / beats / 2)) / (bass_beats / beats))
+    mid_start=max(0.,min(.43-mid_width/2,1-mid_width))
+    mid = smooth((p - mid_start) / mid_width)
+    bass_beats = min(float(beats), max(8., beats / 8))
+    bass_width=bass_beats/beats
+    bass_start=max(0.,min(.55-bass_width/2,1-bass_width))
+    bass = smooth((p - bass_start) / bass_width)
     high = smooth(p)
     quiet_db = 2 if tonal_conflict else 1
     quiet = 10 ** (-quiet_db * (1 - mid) / 20)
@@ -94,8 +103,8 @@ def envelopes(n, beats, *, tonal_conflict=False, beat_phase=None, style='default
     report = {'incoming_mid_opening_beats': mid_beats,
               'incoming_initial_attenuation_db': quiet_db,
               'bass_handoff_beats': bass_beats,
-              'mid_handoff_fraction': [.43 - mid_width / 2, .43 + mid_width / 2],
-              'bass_handoff_fraction': [.55 - bass_beats / beats / 2, .55 + bass_beats / beats / 2],
+              'mid_handoff_fraction': [mid_start, mid_start+mid_width],
+              'bass_handoff_fraction': [bass_start, bass_start+bass_width],
               'high_handoff_fraction': [0., 1.],
               'band_pair_gain_sum_maximum': {band: float(np.max(gains[band + '_out'] + gains[band + '_in']))
                                              for band in ('bass', 'mid', 'high')},
@@ -127,10 +136,10 @@ def blend(outgoing, incoming, sample_rate, *, bass_hz=180.0,
     low_b, mid_b, high_b = split_bands(incoming, sample_rate, bass_hz)
     gains, curves = envelopes(n, beats, tonal_conflict=tonal_conflict, beat_phase=beat_phase,style=style,profile=profile,
                              mid_handoff_bars=mid_handoff_bars,bass_handoff_beats=bass_handoff_beats,handoff_windows=handoff_windows)
-    if percussion_policy!='shared' and drums_out is None:raise ValueError('Sequential percussion requires both final drum estimates')
+    if percussion_policy!='shared' and drums_out is None:raise ValueError('Percussion routing requires both final drum estimates')
     from .percussion import percussion_gains
     gains=percussion_gains(gains,beat_phase,beats,percussion_policy)
-    continuity=validate_handoff_continuity(gains,beat_phase,beats,allow_abrupt_percussion=allow_abrupt_percussion) if style=='zhilin' else None
+    continuity=validate_handoff_continuity(gains,beat_phase,beats,allow_abrupt_percussion=allow_abrupt_percussion)
     mixed = low_a * gains['bass_out'] + low_b * gains['bass_in']
     mixed += mid_a * gains['mid_out'] + mid_b * gains['mid_in']
     mixed += high_a * gains['high_out'] + high_b * gains['high_in']
