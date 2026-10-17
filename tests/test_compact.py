@@ -212,18 +212,21 @@ def test_real_compact_render_matches_solo_budget_or_refuses_a_clock_conflict(tmp
         sf.write(path, np.column_stack((audio, audio)), sr, subtype='FLOAT')
         row['path'] = str(path)
     plan = arrange_sync(plan_tracks(rows, mode='fixed'), rows, sample_rate=sr)
-    if resonant_kicks:
-        # Retain the old waveform as a refusal regression: its actual blend
-        # has a strong delayed bass view. Ordinary SYNC now applies the same
-        # unchanged clock gate as Zhilin and must not conceal it by cutting.
-        from superdj.transition_quality import TransitionFailure
-        with pytest.raises(TransitionFailure,match='Combined percussion attack misses the shared clock'):
-            render_plan(plan, rows, {}, tmp_path / 'set.wav', tmp_path / 'render',
-                        ffmpeg=ffmpeg, rubberband=rubberband, sample_rate=sr)
-        assert not (tmp_path/'set.wav').exists()
-        return
     result = render_plan(plan, rows, {}, tmp_path / 'set.wav', tmp_path / 'render',
                          ffmpeg=ffmpeg, rubberband=rubberband, sample_rate=sr)
+    if resonant_kicks:
+        # This previously refused aligned resonant kicks. A different wide
+        # crossover may now succeed; every actual clock/energy gate must pass.
+        transition=result['transitions'][0]
+        search=transition['gradual_orchestration_search']
+        assert search['passed'] and search['timing_gate_relaxed'] is False
+        assert search['source_windows_and_clock_unchanged']
+        assert search['bass_transfer_width_preserved'] and search['middle_and_high_curves_preserved']
+        assert transition['quality_gate']['passed']
+        assert transition['frequency_processing']['musical_handoff_continuity']['passed']
+        assert transition['frequency_processing']['percussion_processing']['handoff_beats']>=15.99
+        assert not transition['blended_front_audit']['local_combined_waveform_refinements']
+        assert all((view['maximum_error_seconds'] or 0)<=.003 for view in transition['blended_front_audit']['checks'])
     assert result['transitions'][0]['tempo_technique'] == 'shared_phase_sync'
     assert result['transitions'][0]['frequency_processing']['phase_source'] == 'shared integrated clock'
     for track in result['tracks']:

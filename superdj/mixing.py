@@ -36,7 +36,13 @@ def envelopes(n, beats, *, tonal_conflict=False, beat_phase=None, style='default
     for label,value,limit in (('mid_handoff_bars',mid_handoff_bars,beats/4),('bass_handoff_beats',bass_handoff_beats,beats)):
         if value is not None and (isinstance(value,bool) or not np.isfinite(value) or not 0<value<=limit):
             raise ValueError(f'{label} must be positive and within the overlap')
-    if style!='zhilin' and (mid_handoff_bars is not None or bass_handoff_beats is not None or handoff_windows is not None):
+    if handoff_windows is not None:
+        if not isinstance(handoff_windows,dict) or set(handoff_windows)-{'bass','mid'}:
+            raise ValueError('Handoff windows support bass and middle only')
+        for span in handoff_windows.values():
+            if not isinstance(span,(list,tuple)) or len(span)!=2 or not all(np.isfinite(x) for x in span) or not 0<=span[0]<span[1]<=beats:
+                raise ValueError('Handoff windows need two increasing shared-beat positions within the overlap')
+    if style!='zhilin' and (mid_handoff_bars is not None or bass_handoff_beats is not None or 'mid' in (handoff_windows or {})):
         raise ValueError('Per-transition handoff overrides require DJ Zhilin')
     if style=='zhilin':
         from .zhilin import reference_profile
@@ -93,6 +99,9 @@ def envelopes(n, beats, *, tonal_conflict=False, beat_phase=None, style='default
     bass_beats = min(float(beats), max(8., beats / 8))
     bass_width=bass_beats/beats
     bass_start=max(0.,min(.55-bass_width/2,1-bass_width))
+    if (handoff_windows or {}).get('bass'):
+        first,last=handoff_windows['bass']
+        bass_start=first/beats;bass_width=(last-first)/beats;bass_beats=last-first
     bass = smooth((p - bass_start) / bass_width)
     high = smooth(p)
     quiet_db = 2 if tonal_conflict else 1
