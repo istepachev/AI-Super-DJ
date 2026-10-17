@@ -154,13 +154,16 @@ def test_source_span_is_not_actual_playback_span_and_cue_intervals_exclude_overl
     assert first["export_chapter_interval_s"] == 100
     assert first["playback_duration_s"] is None
     assert first["playback_duration_bounds_s"] == pytest.approx([100 + 32 / 3, 116])
-    assert first["minimum_duration"]["status"] == "below_minimum_under_timing_assumptions"
+    assert first["minimum_duration"]["status"] == "at_least_minimum_under_timing_assumptions"
     assert first["minimum_duration"]["audibility_verified"] is False
     assert report["transitions"][0]["bars"] == 8
     assert report["transitions"][0]["export_end_bounds_s"] == pytest.approx([100 + 32 / 3, 116])
     assert report["tracks"][1]["playback_duration_s"] == 150
     assert report["project_duration_metadata_s"] == 999
     assert report["export_duration_s"] == 250
+    explicit_longer = audit_archive(ArchiveProject(project_data(), {}), cue=parse_cue_text(cue_text()),
+                                    export_duration_s=250,minimum_track_s=120)
+    assert explicit_longer['tracks'][0]['minimum_duration']['status']=='below_minimum_under_timing_assumptions'
 
 
 def test_phrase_data_or_bar_number_does_not_establish_reviewed_phrasing():
