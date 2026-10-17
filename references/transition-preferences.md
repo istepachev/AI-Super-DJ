@@ -1,5 +1,7 @@
 # Transition preference policy
 
+All ordinary styles and Mood/Classic/Fuzzy require a gradual transfer of the rhythmic foundation. Validate actual post-routing bass, middle and percussion curves; a long accompaniment overlap cannot certify a short percussion switch. No automatic sequential percussion repair or hard cut is permitted. If smooth routing still fails unchanged timing/energy checks, choose a compatible source window; explicit user locks remain constraints. Deliberate abrupt effects require the user's explicit selection.
+
 Newly built sets use DJ Zhilin shared-phase SYNC with Mood ordering by default.
 The older F/SYNC envelopes remain available through explicit `--style sync`.
 Reviewed montages and explicit cue locks remain constraints.
@@ -30,11 +32,11 @@ do not enable this mode. Old plans with a solo-only budget still receive the
 ordinary 300-second full-play check.
 
 Complementary bands at 180/3500 Hz reconstruct the source. Bass transfers over
-four shared beats near 55% of the transition. Mids transfer over 8–16 beats
+at least eight shared beats near 55% of the transition, within its available length. Mids transfer over 8–16 beats
 around 43%, initially quieter on the incoming deck. Highs cross throughout
 the overlap. Each pair's gain sum stays at or below one. These narrow bass/mid
 curves belong to the explicit default style. DJ Zhilin instead spreads mids
-across almost the whole overlap and bass across one eighth (four of 32 bars),
+across almost the whole overlap and bass across one eighth (four of 32 bars), retaining at least sixteen shared beats within shorter available overlaps,
 with gentle full-overlap highs. The default packaged reference profile derives effective
 band shares from approved native volume and EQ automation. Incoming
 mids precede the bass handoff and outgoing mids remain afterwards. Complementary

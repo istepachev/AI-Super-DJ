@@ -15,7 +15,9 @@ def test_a_sample_smooth_core_cut_is_not_a_musical_transition():
 def test_a_short_percussion_transfer_does_not_move_the_entire_accompaniment():
     phase=np.linspace(0,1,64001);base,_=envelopes(len(phase),128,beat_phase=phase,style='zhilin')
     gains=percussion_gains(base,phase,128,'sequential')
-    assert validate_handoff_continuity(gains,phase,128)['passed']
+    with pytest.raises(ValueError,match='Percussion handoff is too short'):
+        validate_handoff_continuity(gains,phase,128)
+    assert validate_handoff_continuity(gains,phase,128,allow_abrupt_percussion=True)['passed']
     assert all(np.array_equal(base[k],gains[k]) for k in base)
 
 

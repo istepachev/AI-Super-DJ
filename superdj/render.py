@@ -98,6 +98,11 @@ def _grid(record: Mapping[str, Any], confidence: float) -> tuple[bool, str, np.n
     bars = _array(record.get("downbeats"), f"{identity}.downbeats")
     details = record.get("grid") or {}
     meter = int(details.get("meter") or details.get("meter_declared") or record.get("meter") or 0)
+    decoded = details.get('metrical_decode') or {}
+    # An accepted neural 4/4 decode can contain phase corrections elsewhere.
+    # Keep the whole-grid rejection; test actual local windows independently.
+    if not meter and decoded.get('accepted') is True and decoded.get('meter') == 4:
+        meter = 4
     if not len(bars):
         return False, "no measured/predicted downbeats", beats, bars, meter
     if meter != 4:
@@ -143,8 +148,10 @@ def _beat_window(beats: np.ndarray, bars: np.ndarray, begin_bar: int,
 def _local_validation_possible(record: Mapping[str, Any], grid: tuple[Any, ...]) -> bool:
     details = record.get("grid") or {}
     decoded = details.get("metrical_decode") or {}
+    local_reason = ('confidence below' in grid[1] or
+                    grid[1] == 'downbeat meter consistency is below 0.80')
     return bool(record.get("grid_status") == "model_predicted" and grid[4] == 4
-                and "confidence below" in grid[1] and decoded.get("accepted") is True
+                and local_reason and decoded.get("accepted") is True
                 and float(decoded.get("phase_contrast") or 0) >= 0.25
                 and len(details.get("neural_downbeat_probability_by_beat") or []) == len(grid[2])
                 and len(details.get("neural_beat_probability_by_beat") or []) == len(grid[2]))
@@ -1424,8 +1431,7 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                     mid_handoff_bars=transition.get('mid_handoff_bars'),
                     bass_handoff_beats=transition.get('bass_handoff_beats'),handoff_windows=transition.get('handoff_windows'),**percussion_args)
                 transition["frequency_processing"] = evidence
-                if (mode == 'beatmapped_bass_swap' and transition.get('tempo_technique') == 'shared_phase_sync'
-                        and plan.get('style') == 'zhilin'):
+                if mode == 'beatmapped_bass_swap' and transition.get('tempo_technique') == 'shared_phase_sync':
                     from .percussion import verify_blended_fronts,verification_components
                     from .mixing import envelopes
                     gains,_=envelopes(incoming,transition.get('beats',64),beat_phase=beat_phase,style=plan.get('style','default'),mid_handoff_bars=transition.get('mid_handoff_bars'),bass_handoff_beats=transition.get('bass_handoff_beats'),handoff_windows=transition.get('handoff_windows'))
@@ -1435,15 +1441,15 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                         mixed,front_report=verify_blended_fronts(mixed,sample_rate,clips[position-1].get('warp'),clip.get('warp'),gains,directory/f'percussion-fronts-{position:02}',ffmpeg=ffmpeg,components=components,
                             allow_pitch_changing_residual=allow_pitch_changing_residual)
                     except ValueError as error:
-                        if percussion_args.get('percussion_policy')=='sequential':raise
+                        if percussion_args.get('percussion_policy')=='smooth':raise
                         # Both timed decks already passed their independent
                         # clock audit. A conflicting combined figure requires
                         # another orchestration, never a relaxed timing gate.
                         if not percussion_args:
                             percussion_args,percussion_report=final_drum_estimates(previous_tail,block,sample_rate,directory/f'percussion-{position:02}',ffmpeg=ffmpeg)
                             transition['percussion_estimates']=percussion_report
-                        percussion_args['percussion_policy']='sequential'
-                        transition['percussion_ownership_policy']='sequential'
+                        percussion_args['percussion_policy']='smooth'
+                        transition['percussion_ownership_policy']='smooth'
                         transition['percussion_routing_review']={'reason':str(error),'independent_deck_clock_checks_retained':True,
                             'source_windows_clock_overlap_and_harmonic_curves_unchanged':True,'timing_gate_relaxed':False}
                         mixed,evidence=blend(previous_tail,block,sample_rate,bass_hz=bass_hz,beats=transition.get('beats',64),
@@ -1452,11 +1458,11 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                         transition['frequency_processing']=evidence
                         gains,_=envelopes(incoming,transition.get('beats',64),beat_phase=beat_phase,style=plan.get('style','default'),
                             mid_handoff_bars=transition.get('mid_handoff_bars'),bass_handoff_beats=transition.get('bass_handoff_beats'),handoff_windows=transition.get('handoff_windows'))
-                        gains=percussion_gains(gains,beat_phase,transition.get('beats',64),'sequential')
+                        gains=percussion_gains(gains,beat_phase,transition.get('beats',64),'smooth')
                         components=verification_components(previous_tail,block,sample_rate,gains,bass_hz=bass_hz,
                             **{k:v for k,v in percussion_args.items() if k!='percussion_policy'})
                         mixed,front_report=verify_blended_fronts(mixed,sample_rate,clips[position-1].get('warp'),clip.get('warp'),gains,
-                            directory/f'percussion-fronts-{position:02}-sequential',ffmpeg=ffmpeg,components=components,
+                            directory/f'percussion-fronts-{position:02}-smooth',ffmpeg=ffmpeg,components=components,
                             allow_pitch_changing_residual=allow_pitch_changing_residual)
                     transition['blended_front_audit']=front_report
             if transition.get('tempo_technique') == 'shared_phase_sync':
@@ -1478,7 +1484,7 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
         # configuration belongs to the cache key for that fallback as well.
         uses_drums = (transition['mode'] == 'beatmapped_bass_swap' and
                       (needs_handoff(clips[position-1].get('warp'), clip.get('warp'), style=plan.get('style','default'))
-                       or (plan.get('style') == 'zhilin' and transition.get('tempo_technique') == 'shared_phase_sync')))
+                       or transition.get('tempo_technique') == 'shared_phase_sync'))
         value = cached('overlap', {'outgoing': clips[position-1], 'incoming': clip,
             'transition': transition, 'style': plan.get('style', 'default'), 'bass_hz': bass_hz,
             'sample_rate': sample_rate, 'decoder': render_controls['ffmpeg'],

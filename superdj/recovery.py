@@ -58,6 +58,9 @@ def alternative(plan, records, failure, excluded, attempt, *, sample_rate, ffmpe
             if rejected:
                 prior=proposal.setdefault('rejected_attack_window_events',{}).setdefault(identity,{}).setdefault(role,[])
                 prior.extend(t for t in rejected if t not in prior)
+        boundaries=proposal.setdefault('rejected_recovery_boundaries',{}).setdefault(identity,{})
+        prior_boundaries=boundaries.setdefault(role,[])
+        if section[boundary] not in prior_boundaries:prior_boundaries.append(section[boundary])
         for item in proposal['edges']:
             if boundary=='start' and item['to']==identity:
                 item.setdefault('cue_locks', {}).pop('incoming_start_seconds', None)
@@ -72,8 +75,13 @@ def alternative(plan, records, failure, excluded, attempt, *, sample_rate, ffmpe
         choices = [bars[index+offset] for offset in (-16,-8,8,16) if 0<=index+offset<len(bars)]
         choices += [float(c.get('time',c.get('seconds',-1))) for c in by_id[identity].get('cue_candidates',[])
                     if c.get('reviewed') or float(c.get('confidence') or 0)>=.5]
-        ranges = {identity: {boundary: [max(0., section[boundary]-radius), section[boundary]+radius],
-                             boundary+'_choices':choices}}
+        choices=[t for t in choices if all(abs(t-prior)>=1/sample_rate for prior in prior_boundaries)]
+        # Native opener/ending boundaries have no edge cue lock. Holding only
+        # edge locks allowed the solver to move the other end and retry the
+        # same failed overlap while reporting that its boundary had changed.
+        ranges={key:{b:[s[b],s[b]] for b in ('start','end')} for key,s in sections.items()}
+        ranges[identity].update({boundary:[max(0.,section[boundary]-radius),section[boundary]+radius],
+                                 boundary+'_choices':choices})
         preferences = proposal.get('mixing_preferences') or {}
         try:
             candidate = arrange_sync(proposal, records, sample_rate=sample_rate,
@@ -86,6 +94,8 @@ def alternative(plan, records, failure, excluded, attempt, *, sample_rate, ffmpe
             continue
         if candidate['order'] != plan['order']:
             raise RuntimeError('Window recovery changed the approved order')
+        if abs(candidate['sections'][identity][boundary]-section[boundary])<1/sample_rate:
+            raise RuntimeError('Window recovery retained the failed source boundary')
         # Holding other automatic endpoints during this one trial must not turn
         # them into user locks in the next trial or a future revision.
         for key, value in candidate['sections'].items():

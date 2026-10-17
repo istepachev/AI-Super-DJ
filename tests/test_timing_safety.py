@@ -77,7 +77,7 @@ def test_deliberate_musical_tempo_change_is_not_false_timing_damage():
 def test_ambiguous_earlier_click_selects_sequential_estimated_percussion():
     warp={'source_kick_alignment':{'tail':{'attack_front_comparison':{'matched_source_events':41,
         'body_minus_upper_median_seconds':.017875,'body_minus_upper_10_90_spread_seconds':.018125,'upper_front_selected':False}}}}
-    assert ownership_policy(warp,{})=='sequential'
+    assert ownership_policy(warp,{})=='smooth'
 
 
 def test_sequential_percussion_preserves_long_harmonic_curves_and_exact_components():
@@ -85,7 +85,7 @@ def test_sequential_percussion_preserves_long_harmonic_curves_and_exact_componen
     a=np.column_stack([.1*np.sin(t*2*np.pi*90)+.05*np.sin(t*2*np.pi*440)]*2).astype('float32')
     b=np.column_stack([.12*np.sin(t*2*np.pi*115)+.04*np.sin(t*2*np.pi*660)]*2).astype('float32')
     da=a*.6;db=b*.7
-    output,report=blend(a,b,sr,beats=128,beat_phase=phase,style='zhilin',drums_out=da,drums_in=db,percussion_policy='sequential')
+    output,report=blend(a,b,sr,beats=128,beat_phase=phase,style='zhilin',drums_out=da,drums_in=db,percussion_policy='sequential',allow_abrupt_percussion=True)
     base,_=envelopes(n,128,beat_phase=phase,style='zhilin');gains=percussion_gains(base,phase,128,'sequential')
     assert all(np.array_equal(base[k],gains[k]) for k in base)
     assert np.max(gains['drums_out']*gains['drums_in'])==0
@@ -177,7 +177,7 @@ def test_fallback_estimator_change_rebuilds_overlap_while_reusing_safe_decks(tmp
             report=render_plan(plan,records,{},tmp_path/f'{i}.wav',session.work,
                 ffmpeg=ffmpeg_executable(),rubberband=rubber,sample_rate=16000,tempo_conflict_policy='sync')
             transition=report['transitions'][0]
-            assert transition['percussion_ownership_policy']=='sequential'
+            assert transition['percussion_ownership_policy']=='smooth'
             assert 'blended_front_audit' in transition
             assert transition['quality_gate']['passed']
         assert calls==['first','second']
