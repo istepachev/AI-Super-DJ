@@ -1,6 +1,6 @@
 {
-  "schema_version": 3,
-  "model_version": "superdj-mode-priority-ranker-3",
+  "schema_version": 4,
+  "model_version": "superdj-mode-priority-ranker-4",
   "feature_version": "musical-priority-1",
   "priority_aware": true,
   "experimental": true,
@@ -812,6 +812,285 @@
       },
       "metadata_sha256": "13d659c85438031d22b2e03d28f1073605436438fb04fa58dcf537383ab0f37f",
       "cohort_group": "anonymous-residual-cohort-3"
+    },
+    {
+      "mode": "fuzzy",
+      "routing_controls": {
+        "priority": "key",
+        "bpm_tolerance": null
+      },
+      "metadata_sha256": "07015364cf805bee1354c931764e54a8acac852e07da0364bacb735c379f2646",
+      "cohort_group": "anonymous-fuzzy-input-pool-1"
+    },
+    {
+      "mode": "fuzzy",
+      "routing_controls": {
+        "priority": "bpm",
+        "bpm_tolerance": 6
+      },
+      "metadata_sha256": "cc0713da09dae8d1b91519e02f6e633dc9771cf9d7f27494d0db32e20a1bc5b0",
+      "cohort_group": "anonymous-fuzzy-input-pool-1"
+    },
+    {
+      "mode": "fuzzy",
+      "routing_controls": {
+        "priority": "key",
+        "bpm_tolerance": null
+      },
+      "metadata_sha256": "ef8fd9a346b80271116f308ddd706407218606186b8801047c140f2196d1c0cf",
+      "cohort_group": "anonymous-fuzzy-input-pool-8"
+    },
+    {
+      "mode": "fuzzy",
+      "routing_controls": {
+        "priority": "key",
+        "bpm_tolerance": null
+      },
+      "metadata_sha256": "55caca80ccb304300d3a62ecfd388e138223d93bac1b1554c5e15f481822a1e1",
+      "cohort_group": "anonymous-fuzzy-input-pool-8"
+    },
+    {
+      "mode": "fuzzy",
+      "routing_controls": {
+        "priority": "key",
+        "bpm_tolerance": null
+      },
+      "metadata_sha256": "55cad52e6f472a4c6e2043a4a558709624e3f925f1dbd7510121ce7fc59e1699",
+      "cohort_group": "anonymous-fuzzy-input-pool-8"
+    },
+    {
+      "mode": "fuzzy",
+      "routing_controls": {
+        "priority": "key",
+        "bpm_tolerance": null
+      },
+      "metadata_sha256": "6fbddaef4e163d5f5f3ba7eff6467d6fc5d9b8e3774351ce8982ec69847c626c",
+      "cohort_group": "anonymous-fuzzy-input-pool-8"
+    },
+    {
+      "mode": "fuzzy",
+      "routing_controls": {
+        "priority": "bpm",
+        "bpm_tolerance": 6
+      },
+      "metadata_sha256": "4184d0322486be0d9bef8e3b6a260547c0cefac7ed30b56e122a385ffc309c9e",
+      "cohort_group": "anonymous-fuzzy-input-pool-5"
+    },
+    {
+      "mode": "fuzzy",
+      "routing_controls": {
+        "priority": "bpm",
+        "bpm_tolerance": 6
+      },
+      "metadata_sha256": "73159ea7c0e705277542b6155bdf56a3966a678101a1a72bf7c1429f92206711",
+      "cohort_group": "anonymous-fuzzy-input-pool-5"
+    },
+    {
+      "mode": "fuzzy",
+      "routing_controls": {
+        "priority": "bpm",
+        "bpm_tolerance": 6
+      },
+      "metadata_sha256": "c0eb0cb4119d67d01ebac4ca4068ab161b84e47ddc577d240294be0c22a9eff5",
+      "cohort_group": "anonymous-fuzzy-input-pool-5"
+    },
+    {
+      "mode": "fuzzy",
+      "routing_controls": {
+        "priority": "bpm",
+        "bpm_tolerance": 6
+      },
+      "metadata_sha256": "b8d3c729df3a507a90782bc17756e63c3182d361871a5c056a7c4db167699c44",
+      "cohort_group": "anonymous-fuzzy-input-pool-5"
+    },
+    {
+      "mode": "fuzzy",
+      "routing_controls": {
+        "priority": "bpm",
+        "bpm_tolerance": 6
+      },
+      "metadata_sha256": "bc60bbc9ba1eb56fae0e3e4e2c912293d475a253369622d665f0401245ac13b9",
+      "cohort_group": "anonymous-fuzzy-input-pool-7"
+    },
+    {
+      "mode": "fuzzy",
+      "routing_controls": {
+        "priority": "bpm",
+        "bpm_tolerance": 6
+      },
+      "metadata_sha256": "9c5fa4cd9f5709e24d42c978fbe1dd108d76ad962c939e08e3b5a7552d7e37f1",
+      "cohort_group": "anonymous-fuzzy-input-pool-7"
+    },
+    {
+      "mode": "fuzzy",
+      "routing_controls": {
+        "priority": "key",
+        "bpm_tolerance": null
+      },
+      "metadata_sha256": "d9c8bc7e782be74e960662a0e38012847bdc22b4cecbfa085a89e127116b4fde",
+      "cohort_group": "anonymous-fuzzy-input-pool-7"
+    },
+    {
+      "mode": "fuzzy",
+      "routing_controls": {
+        "priority": "key",
+        "bpm_tolerance": null
+      },
+      "metadata_sha256": "4a8e6908563fe87f6f7ccb4b38cac06050ca266e7ce503bb519a2a18458e63c3",
+      "cohort_group": "anonymous-fuzzy-input-pool-7"
+    },
+    {
+      "mode": "fuzzy",
+      "routing_controls": {
+        "priority": "bpm",
+        "bpm_tolerance": 6
+      },
+      "metadata_sha256": "7ff9b0bf1720a0e72bb0c95cfb0d8d3ed7921a16347d838c42137e9fd1740e06",
+      "cohort_group": "anonymous-fuzzy-input-pool-3"
+    },
+    {
+      "mode": "fuzzy",
+      "routing_controls": {
+        "priority": "key",
+        "bpm_tolerance": null
+      },
+      "metadata_sha256": "9b7db8ccd7a8c4708bf23935f72a334f7866df01d6438b7e6da2927c33b9e47c",
+      "cohort_group": "anonymous-fuzzy-input-pool-3"
+    },
+    {
+      "mode": "fuzzy",
+      "routing_controls": {
+        "priority": "bpm",
+        "bpm_tolerance": 6
+      },
+      "metadata_sha256": "e5c856a479f717b1d5b3f757fcdd9d6a75b7566d0a4c0f7566309619581023e3",
+      "cohort_group": "anonymous-fuzzy-input-pool-3"
+    },
+    {
+      "mode": "fuzzy",
+      "routing_controls": {
+        "priority": "key",
+        "bpm_tolerance": null
+      },
+      "metadata_sha256": "30fd2b76d3e7662a3d2e1ad6ba4f5fe5de4f307a9ad6d34c58b458054c688745",
+      "cohort_group": "anonymous-fuzzy-input-pool-3"
+    },
+    {
+      "mode": "fuzzy",
+      "routing_controls": {
+        "priority": "key",
+        "bpm_tolerance": null
+      },
+      "metadata_sha256": "16bc9aba0b7cfbda7ed24df43fc08220788cac4c03dd2d49384bc7d4cf1f1436",
+      "cohort_group": "anonymous-fuzzy-input-pool-3"
+    },
+    {
+      "mode": "fuzzy",
+      "routing_controls": {
+        "priority": "key",
+        "bpm_tolerance": null
+      },
+      "metadata_sha256": "5ac9bc2fb069a0591e172f324f2a8e8defae8adafb67133d60e503119e743553",
+      "cohort_group": "anonymous-fuzzy-input-pool-6"
+    },
+    {
+      "mode": "fuzzy",
+      "routing_controls": {
+        "priority": "key",
+        "bpm_tolerance": null
+      },
+      "metadata_sha256": "6b795073bcefd5beb67b1b19886c53dc354b12ef53bcdb3231b1f2a095d8be59",
+      "cohort_group": "anonymous-fuzzy-input-pool-6"
+    },
+    {
+      "mode": "fuzzy",
+      "routing_controls": {
+        "priority": "key",
+        "bpm_tolerance": null
+      },
+      "metadata_sha256": "bf87a817857a805d9939484b3ea1a6a4b639907a9ee05b7604e5fb14027947ae",
+      "cohort_group": "anonymous-fuzzy-input-pool-6"
+    },
+    {
+      "mode": "fuzzy",
+      "routing_controls": {
+        "priority": "bpm",
+        "bpm_tolerance": 6
+      },
+      "metadata_sha256": "e247530656af7c4c7adc9866c1df23ef7c9e34f10fef2b00190d01b91ce6dc11",
+      "cohort_group": "anonymous-fuzzy-input-pool-6"
+    },
+    {
+      "mode": "fuzzy",
+      "routing_controls": {
+        "priority": "key",
+        "bpm_tolerance": null
+      },
+      "metadata_sha256": "0ead044bca4fd42371c6db5a9c802f5117d34150237915ae10b80d898f745700",
+      "cohort_group": "anonymous-fuzzy-input-pool-4"
+    },
+    {
+      "mode": "fuzzy",
+      "routing_controls": {
+        "priority": "key",
+        "bpm_tolerance": null
+      },
+      "metadata_sha256": "e2b888d8b65397d533f4040a4c9ddb10daf1618c5cdbd154b549f6dc2e582e4e",
+      "cohort_group": "anonymous-fuzzy-input-pool-4"
+    },
+    {
+      "mode": "fuzzy",
+      "routing_controls": {
+        "priority": "bpm",
+        "bpm_tolerance": 6
+      },
+      "metadata_sha256": "f7b2d3385a7eeac3f2bdb787118ff60d09226080755067d0a2a53328cc412f6c",
+      "cohort_group": "anonymous-fuzzy-input-pool-4"
+    },
+    {
+      "mode": "fuzzy",
+      "routing_controls": {
+        "priority": "bpm",
+        "bpm_tolerance": 6
+      },
+      "metadata_sha256": "28e4b9083386c50a1883586bdae4cbcc5a05c450717b32c53e20624f5f1ce564",
+      "cohort_group": "anonymous-fuzzy-input-pool-4"
+    },
+    {
+      "mode": "fuzzy",
+      "routing_controls": {
+        "priority": "bpm",
+        "bpm_tolerance": 6.0
+      },
+      "metadata_sha256": "0c3877bb322475ca97b0534f8a54419a5092d27dc2a9c4e84fd7d55365ccb371",
+      "cohort_group": "anonymous-fuzzy-input-pool-2"
+    },
+    {
+      "mode": "fuzzy",
+      "routing_controls": {
+        "priority": "bpm",
+        "bpm_tolerance": 6.0
+      },
+      "metadata_sha256": "fef5a2a03fafb183899e6f220cf090dc4d6f551ef8eca308af3354aa1dd13911",
+      "cohort_group": "anonymous-fuzzy-input-pool-2"
+    },
+    {
+      "mode": "fuzzy",
+      "routing_controls": {
+        "priority": "bpm",
+        "bpm_tolerance": 6.0
+      },
+      "metadata_sha256": "64496d190c562c20ca58ba9701885087cad2400daf6feef2c047e08ebab9bcad",
+      "cohort_group": "anonymous-fuzzy-input-pool-2"
+    },
+    {
+      "mode": "fuzzy",
+      "routing_controls": {
+        "priority": "bpm",
+        "bpm_tolerance": 6.0
+      },
+      "metadata_sha256": "a518749b799cf013549833153754adf95f2393c1b79e949c6def86656066fcf6",
+      "cohort_group": "anonymous-fuzzy-input-pool-2"
     }
   ],
   "feature_inputs": [
@@ -821,19 +1100,21 @@
     "explicit priority",
     "nullable explicit BPM tolerance"
   ],
-  "grouping_scope": "Connected shared source components; no cohort holdout claimed",
+  "grouping_scope": "Base fixed-fit metadata is retained; residual fitting uses equal input-pool/control/export/query weights. Latest held-out repeat orders share their pool with training; no independent-pool or source-recording validation is claimed.",
   "ranking_scope": "Fixed-option training prototype; local successor utility is not full-path or audible quality",
   "harmony_gate": "Caller mode remains independent; blocked targets remain in every evaluation denominator",
   "training_support_rows_prefiltered": true,
   "publication": {
     "preset": "harmonic-next-v1",
     "purpose": "Literal capped Top3 next-track suggestions",
-    "frozen_before_latest_forward_exports": true,
+    "revision": "fuzzy-residual-20261017",
+    "feature_inputs_unchanged": true,
     "inference_parameters_unchanged": true,
-    "provenance": "Anonymous cohort labels and musical-metadata commitments only; no source records, paths, titles or order lists",
-    "scope": "Experimental musical successor policy; empirical forward comparison on one new input pool, not independent-source validation or a calibrated quality probability",
-    "revision": "mood-residual-20261015",
-    "inference_freeze_scope": "Portable coefficients are identical to the selected profile frozen before forward comparison; runtime features and mode gate unchanged"
+    "inference_freeze_scope": "Published Fuzzy override is identical to the candidate frozen before held-out evaluation. This does not mean its weights are unchanged from the previous release.",
+    "original_mood_coefficients_and_calculation_unchanged": true,
+    "frozen_before_latest_forward_evaluation": true,
+    "provenance": "Anonymous pool labels and metadata commitments only; no source records, paths, titles or order lists",
+    "scope": "Experimental successor policy; latest validation is held-out repeat orders of one familiar pool, not independent-pool or source-recording validation or calibrated quality probability"
   },
   "mood_coefficient_update": {
     "version": "mood-residual-20261015",
@@ -868,6 +1149,367 @@
       "top3_after": 2320,
       "scope": "Repeated orders of one new input pool; some source recordings overlap older pools. Not independent-source validation, calibrated probability, full-route fidelity or audible quality."
     },
-    "original_fixed_fit_metadata": "Top-level fixed-fit selection and L2 describe the original base. This block describes the additive update. Fuzzy coefficients and harmonic eligibility are unchanged."
+    "original_fixed_fit_metadata": "Top-level fixed-fit selection and L2 describe the original base; this block describes its earlier Mood-only update. Its original coefficients and computation are retained. The later Fuzzy-only update is described separately."
+  },
+  "mode_coefficients": {
+    "fuzzy": [
+      0.4460333818892061,
+      -0.571601754184985,
+      0.5698210408405039,
+      0.592471391429267,
+      -0.9417126933341997,
+      0.0,
+      -0.04447653459921519,
+      0.0026570358531281717,
+      -0.05319186789275077,
+      0.0,
+      0.0,
+      -0.3254591699198797,
+      -0.105800997382095,
+      -0.2156300836512642,
+      -0.10982908626964823,
+      -1.3582156487475983,
+      1.0327564788275334,
+      -0.05725475672843433,
+      0.44485262362642297,
+      -0.6762759564915657,
+      0.4460333818892061,
+      0.5698210408405039,
+      -0.04447653459921519,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      -0.05319186789275077,
+      0.0,
+      0.0,
+      0.0,
+      0.592471391429267,
+      -0.571601754184985,
+      -0.49285752360735474,
+      0.0,
+      -0.009283389202298759,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.011940425055426581,
+      0.0,
+      -0.4488551697268435,
+      -0.6289183614525258,
+      0.44869041774232954,
+      -0.05319186789275077,
+      -0.371294145555786,
+      -0.3387369976854858,
+      -0.3339971078128877,
+      0.592471391429267,
+      0.0,
+      0.5698210408405039,
+      -0.12203755877027472,
+      -0.2328647564994993,
+      -0.15886041579446653,
+      0.0,
+      0.018051651740226316,
+      0.02884625183008449,
+      0.05319186788865814,
+      -1.5697566311449622e-12,
+      -0.2528206887623943,
+      -1.5106574116660452,
+      -0.031277304096129305,
+      -0.011215161742309725,
+      -0.18821614338961973,
+      0.04485953902135065,
+      -0.052014393853151625,
+      -0.024080576777596365,
+      -0.08117663797967299,
+      -0.02902094462409111,
+      0.049696544094425754,
+      -0.11740905891030079,
+      0.0,
+      0.0,
+      0.00608934253555287,
+      0.02365039862752274,
+      -0.04283501658683078,
+      0.007736796977024957,
+      0.01427443935505276,
+      -0.0003219899536867159,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.15253380056754567,
+      -0.022967096781698115,
+      -0.8844550119849898,
+      -0.8937357790101411,
+      0.40983650017888923,
+      0.03363843706063762,
+      -0.04705147673165889,
+      -0.045746597352400685,
+      0.25425422041846824,
+      0.07879633829502292,
+      0.16340311565591867,
+      -0.40493081099276607,
+      0.16638763369189752,
+      -0.16433522977209464,
+      -0.09887661367353744,
+      0.054680339822449645,
+      -1.5823520753434748,
+      -1.0584939782263296,
+      -1.297382012944349,
+      -1.23482369983448,
+      -0.04381470270903521,
+      0.19724709362765097,
+      0.0027690967947976916,
+      0.02986682740064263,
+      -0.060185926994874586,
+      0.0,
+      0.04489165267083229,
+      -0.00924842797173293,
+      0.0048620208735203774,
+      0.0,
+      0.0,
+      0.3161295527724778,
+      -0.45075060460636446,
+      0.41473062156730633,
+      0.4330442664367464,
+      -0.6226546957036201,
+      0.0,
+      -0.032111461574078896,
+      -0.04429286623742737,
+      -0.014094812655690075,
+      0.0,
+      0.0,
+      0.030173434527544896,
+      -0.11572370049824554,
+      -0.04277513298522203,
+      0.07294856751297799,
+      -0.43763011152395587,
+      0.46780354605139024,
+      -0.19178119620342318,
+      0.21582306728719197,
+      -0.2756035827732517,
+      0.12990382911586607,
+      -0.12085114957861981,
+      0.15509041927204079,
+      0.15942712499177658,
+      -0.31905799763058307,
+      0.0,
+      -0.012365073025136557,
+      0.046949902090555315,
+      -0.039097055237061196,
+      0.0,
+      0.0,
+      -0.3556326044476277,
+      0.009922703116149345,
+      -0.1728549506656405,
+      -0.182777653781798,
+      -0.9205855372236481,
+      0.564952932776014,
+      0.13452643947474557,
+      0.22902955633824384,
+      -0.4006723737184446,
+      0.7396592521566149,
+      -1.0321073797846927,
+      0.691377979033196,
+      0.06076219318392176,
+      0.4786891999691185,
+      -0.03591773748176427,
+      0.1341371522364304,
+      -0.7508682990498493,
+      0.0,
+      -0.04422764455817874,
+      0.14486621400177732,
+      0.012558921700242497,
+      0.0,
+      0.0,
+      0.17325197221699148,
+      -0.1556403209061137,
+      0.008805825655492212,
+      0.16444614656140477,
+      -0.5867621737068666,
+      0.7600141459235855,
+      -0.29692776311033675,
+      -0.18979314041492187,
+      -0.37432908354862987,
+      0.06076219318392176,
+      -0.03591773748176427,
+      -0.04422764455817874,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.012558921700242497,
+      0.0,
+      0.0,
+      0.0,
+      0.1341371522364304,
+      0.4786891999691185,
+      -0.3992357270388407,
+      0.0,
+      0.006124335853680567,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.13874187814820613,
+      0.0,
+      -0.351632572011008,
+      -0.03616698467146834,
+      0.20562840718580166,
+      0.012558921700242497,
+      -0.04422764455817874,
+      0.3093412514856829,
+      -0.3992357270388407,
+      0.1341371522364304,
+      0.0,
+      -0.03591773748176427,
+      -0.351632572011008,
+      0.16934794848322668,
+      0.0,
+      0.0,
+      0.03481584613038815,
+      -0.1917722679520974,
+      -0.012558921695576965,
+      1.979870370208598e-12,
+      -0.05497891573389768,
+      -0.12731288507800476,
+      0.043737331664177335,
+      -0.02163267811788357,
+      0.028783842669655987,
+      0.0049691717608132185,
+      0.0938888226735842,
+      -0.10273485131936759,
+      0.06703848413724503,
+      -0.02715165497795769,
+      -0.18604773623462095,
+      -0.043745180858550996,
+      0.0,
+      0.0,
+      0.16612555151823702,
+      -0.06572778301950107,
+      -0.13694231525488426,
+      0.1473348115621328,
+      0.0966679910432285,
+      -0.0469521559358013,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.15130575295113688,
+      0.11915547879348404,
+      -0.7097814189598645,
+      -1.5726476293859086,
+      0.07068936433656006,
+      -0.033523405671975426,
+      -0.024472922422226578,
+      -0.01810569704086761,
+      0.2834925225392765,
+      -0.2645471891095026,
+      0.22337405624897155,
+      -0.5684748786018295,
+      0.6889720437563475,
+      -0.12956430586516818,
+      0.1239179209795179,
+      -0.005401733444062348,
+      -1.4657801645651214,
+      -1.032721549194454,
+      -0.33643231482687264,
+      -1.1807105934830824,
+      -0.0055529735281295844,
+      0.0769125928006375,
+      0.2628560431059937,
+      0.22994045455993362,
+      0.149131429860174,
+      0.0,
+      0.046831883540589744,
+      0.03207913419038756,
+      -0.10322652077287786,
+      0.0,
+      0.0,
+      0.0660621720073338,
+      0.32152804685158914,
+      0.11496709347307366,
+      0.147502017955766,
+      -0.47156963587852957,
+      0.0,
+      0.012818445734772761,
+      -0.18372158865577815,
+      -0.007586551488770059,
+      0.0,
+      0.0,
+      0.021058425090408936,
+      -0.051903669684120385,
+      -0.015422622297163919,
+      0.03648104738709122,
+      -0.42601945285131515,
+      0.44707787794134624,
+      -0.16664639511443227,
+      0.1019863267807622,
+      -0.39439490907292757,
+      -0.005299978823921185,
+      0.1571611531174672,
+      -0.1508848309551998,
+      -0.01336486572112487,
+      -0.27929866317131735,
+      0.0,
+      -0.057046090292871963,
+      0.3285878026576805,
+      0.020145473189112827,
+      0.0,
+      0.0,
+      0.15219354712661579,
+      -0.10373665122201495,
+      0.02422844795233865,
+      0.12796509917430507,
+      -0.16074272085559596,
+      0.31293626798226676,
+      -0.13028136799588672,
+      -0.29177946719796594,
+      0.020065825524184323,
+      1.3959326019541232,
+      -0.2710799715714679,
+      0.06943723833665555
+    ]
+  },
+  "fuzzy_coefficient_update": {
+    "version": "fuzzy-residual-20261017",
+    "method": "L2-regularized residual on the original 159 musical features, stored as a full-width Fuzzy-only vector. Original shared coefficients remain byte-identical for Mood.",
+    "base_profile_sha256": "d5c0603110fb1603fdcf58d16ebd3147f34caff1804fe2c02b7e2f6acb71279a",
+    "l2_penalty": 0.003,
+    "feature_inputs_unchanged": true,
+    "feature_count": 159,
+    "training_exports": 31,
+    "training_input_pools": 8,
+    "fitting_weights": "Equal input pool, control, export and usable query",
+    "training_support": "Mode-allowed candidates after full remaining-pool feature extraction; blocked teacher excluded only from fit",
+    "selection": {
+      "method": "One fixed residual; no search against new held-out results",
+      "new_training_repeat_orders": 4,
+      "new_validation_repeat_orders": 3,
+      "validation_used_for_fit_or_parameter_selection": false
+    },
+    "forward_validation": {
+      "exports": 3,
+      "input_pools": 1,
+      "tracks_per_pool": 685,
+      "steps": 2043,
+      "top1_before": 800,
+      "top1_after": 839,
+      "top3_before": 1407,
+      "top3_after": 1429,
+      "scope": "Held-out repeat orders of a pool represented in training. Not an independent input-pool or source test, full-route match, calibrated probability or audible quality measurement."
+    },
+    "regression_guards": {
+      "old_exports": 94,
+      "old_steps": 33187,
+      "old_top1_delta": 223,
+      "old_top3_delta": 252,
+      "old_controls": "Known and unknown settings reported separately privately; both aggregates pass",
+      "old_fuzzy_key_and_bpm_top1_top3_nondecreasing": true,
+      "mood_original_vector_and_dot_unchanged": true
+    },
+    "inference": "Same full-width float64 feature dot, actual remaining pool, independent harmonic gate and list capped at three"
   }
 }

@@ -15,7 +15,7 @@ import time
 import numpy as np
 
 from .harmonize import _settings
-from .harmonize_modes import (_allowed, _musical, _pair, _rank_pool_context, feature_names,
+from .harmonize_modes import (_allowed, _coefficients_for_mode, _musical, _pair, _rank_pool_context, feature_names,
                               validate_mode_ranker_profile)
 from .harmonize_ranker import _rank
 
@@ -75,7 +75,7 @@ class DynamicModePool:
         self.keys = [_musical(record)[2] for record in self.records]
         self.family = self.profile["feature_family"]
         sharing = self.profile["sharing"]
-        weights = np.array(self.profile["coefficients"][mode if sharing == "separate" else "all"])
+        weights = np.array(_coefficients_for_mode(self.profile, mode))
         base_count = len(feature_names(self.family, "shared"))
         self.tolerance_weights = None
         if self.profile.get("priority_aware") is True:

@@ -676,15 +676,25 @@ def cross_validate_mode_ranker(examples, *, feature_families=DEFAULT_FEATURE_FAM
                 default_changed=False, experimental=True, utility_warning=UTILITY_WARNING)
 
 
+def _coefficients_for_mode(profile, mode):
+    """Select an already validated vector without combining its float terms."""
+    if mode in profile.get("mode_coefficients", {}):
+        return profile["mode_coefficients"][mode]
+    return profile["coefficients"][mode if profile["sharing"] == "separate" else "all"]
+
+
 def validate_mode_ranker_profile(profile):
     """Reject incompatible/tampered JSON profiles; no executable model format."""
-    if isinstance(profile, Mapping) and profile.get("model_version") == "superdj-mode-priority-ranker-3":
+    if isinstance(profile, Mapping) and profile.get("model_version") in {
+            "superdj-mode-priority-ranker-3", "superdj-mode-priority-ranker-4"}:
         from .harmonize_priority import validate_priority_profile
         return validate_priority_profile(profile)
     if not isinstance(profile, Mapping) or type(profile.get("schema_version")) is not int or profile.get("schema_version") != 1:
         raise ValueError("Unsupported mode-ranker profile schema")
     if profile.get("model_version") != MODEL_VERSION or profile.get("feature_version") != FEATURE_VERSION:
         raise ValueError("Unsupported mode-ranker feature version")
+    if "mode_coefficients" in profile:
+        raise ValueError("Mode coefficient overrides require priority profile version 4")
     if (profile.get("experimental") is not True or profile.get("identifier_features") is not False
             or profile.get("default_changed") is not False or profile.get("utility_warning") != UTILITY_WARNING):
         raise ValueError("Mode-ranker profile scope is incomplete")
@@ -737,7 +747,7 @@ def rank_mode_candidates(current, candidates, profile, *, mode="fuzzy", tie_tole
     priority_aware = profile.get("priority_aware") is True
     matrix = remaining_features(current, candidates, mode=mode, family=profile["feature_family"],
         sharing=profile["sharing"], priority_aware=priority_aware, **controls)
-    coefficients = profile["coefficients"][mode if profile["sharing"] == "separate" else "all"]
+    coefficients = _coefficients_for_mode(profile, mode)
     utilities = matrix @ np.asarray(coefficients)
     if not np.all(np.isfinite(utilities)):
         raise ValueError("Mode-ranker utility is non-finite")

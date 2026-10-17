@@ -492,7 +492,8 @@ def harmonize_rank(args):
     remaining = [r for i, r in by_id.items() if i not in played]
     from .presets import ordering_profile
     profile = ordering_profile(args.preset) if getattr(args, 'preset', None) else read_json(args.profile)
-    if profile.get('model_version') in {'superdj-mode-pool-ranker-2', 'superdj-mode-priority-ranker-3'}:
+    if profile.get('model_version') in {'superdj-mode-pool-ranker-2', 'superdj-mode-priority-ranker-3',
+                                       'superdj-mode-priority-ranker-4'}:
         from .harmonize_modes import rank_mode_candidates
         result = rank_mode_candidates(by_id[args.current], remaining, profile, mode=args.harmonic_mode,
             priority=_routing_priority(args), bpm_tolerance=getattr(args, 'bpm_tolerance', None))

@@ -14,10 +14,11 @@ import numpy as np
 
 from .harmonize import _number
 from .harmonize_modes import (FAMILIES, SHARING_OPTIONS, TRAINING_SUPPORTS, UTILITY_WARNING,
-    _allowed, _fit_sharing, _list, _minimum, _mode, _musical, _prepare)
+    _allowed, _coefficients_for_mode, _fit_sharing, _list, _minimum, _mode, _musical, _prepare)
 
 
 MODEL_VERSION = "superdj-mode-priority-ranker-3"
+MODE_COEFFICIENT_MODEL_VERSION = "superdj-mode-priority-ranker-4"
 FEATURE_VERSION = "musical-priority-1"
 PRIORITIES = ("key", "bpm", "unknown")
 TOLERANCE_NAMES = ("explicit_tolerance:within", "explicit_tolerance:clipped_gap_ratio",
@@ -77,7 +78,7 @@ def effective_weights(profile, mode, *, priority="unknown", bpm_tolerance=None):
     routing_controls(priority, bpm_tolerance)
     count = len(base_names(profile["feature_family"], "shared"))
     width = count+43
-    values = np.asarray(profile["coefficients"][mode if profile["sharing"] == "separate" else "all"])
+    values = np.asarray(_coefficients_for_mode(profile, mode))
     if profile["sharing"] == "interactions":
         with np.errstate(over="ignore", invalid="ignore"):
             values = values[:width]+float(mode == "mood")*values[width:]
@@ -181,9 +182,11 @@ def fit_priority_mode_ranker_fixed(examples, *, feature_family="tempo_rank_densi
 
 
 def validate_priority_profile(profile):
-    if not isinstance(profile, Mapping) or type(profile.get("schema_version")) is not int or profile["schema_version"] != 3:
+    versions = {3: MODEL_VERSION, 4: MODE_COEFFICIENT_MODEL_VERSION}
+    if (not isinstance(profile, Mapping) or type(profile.get("schema_version")) is not int
+            or profile["schema_version"] not in versions):
         raise ValueError("Unsupported priority profile schema")
-    if profile.get("model_version") != MODEL_VERSION or profile.get("feature_version") != FEATURE_VERSION:
+    if profile.get("model_version") != versions[profile["schema_version"]] or profile.get("feature_version") != FEATURE_VERSION:
         raise ValueError("Unsupported priority feature version")
     required = dict(priority_aware=True, experimental=True, identifier_features=False,
                     default_changed=False, training_only=True, independent_validation=False)
@@ -202,6 +205,19 @@ def validate_priority_profile(profile):
         if len(values) != len(names):
             raise ValueError("Priority profile coefficient count differs")
         validated[name] = [_number(value, "Coefficient") for value in values]
+    mode_coefficients = None
+    if profile["schema_version"] == 4:
+        overrides = profile.get("mode_coefficients")
+        if not isinstance(overrides, Mapping) or not overrides or not set(overrides) <= {"fuzzy", "mood"}:
+            raise ValueError("Mode coefficient overrides need known modes and at least one vector")
+        mode_coefficients = {}
+        for mode, values in overrides.items():
+            values = _list(values, "Mode coefficients")
+            if len(values) != len(names):
+                raise ValueError("Mode coefficient override count differs")
+            mode_coefficients[mode] = [_number(value, "Mode coefficient") for value in values]
+    elif "mode_coefficients" in profile:
+        raise ValueError("Mode coefficient overrides require priority profile version 4")
     if _number(profile.get("l2_penalty"), "L2 penalty") <= 0 or profile.get("training_support") not in TRAINING_SUPPORTS:
         raise ValueError("Invalid fixed training parameters")
     _minimum(profile.get("min_candidates"))
@@ -223,4 +239,7 @@ def validate_priority_profile(profile):
         digest = row.get("metadata_sha256")
         if not isinstance(digest, str) or len(digest) != 64 or any(character not in "0123456789abcdef" for character in digest):
             raise ValueError("Priority provenance needs SHA256 metadata fingerprints")
-    return dict(profile, coefficients=validated)
+    result = dict(profile, coefficients=validated)
+    if mode_coefficients is not None:
+        result["mode_coefficients"] = mode_coefficients
+    return result
