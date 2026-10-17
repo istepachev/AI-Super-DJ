@@ -98,6 +98,11 @@ def _grid(record: Mapping[str, Any], confidence: float) -> tuple[bool, str, np.n
     bars = _array(record.get("downbeats"), f"{identity}.downbeats")
     details = record.get("grid") or {}
     meter = int(details.get("meter") or details.get("meter_declared") or record.get("meter") or 0)
+    decoded = details.get('metrical_decode') or {}
+    # An accepted neural 4/4 decode can contain phase corrections elsewhere.
+    # Keep the whole-grid rejection; test actual local windows independently.
+    if not meter and decoded.get('accepted') is True and decoded.get('meter') == 4:
+        meter = 4
     if not len(bars):
         return False, "no measured/predicted downbeats", beats, bars, meter
     if meter != 4:
@@ -143,8 +148,10 @@ def _beat_window(beats: np.ndarray, bars: np.ndarray, begin_bar: int,
 def _local_validation_possible(record: Mapping[str, Any], grid: tuple[Any, ...]) -> bool:
     details = record.get("grid") or {}
     decoded = details.get("metrical_decode") or {}
+    local_reason = ('confidence below' in grid[1] or
+                    grid[1] == 'downbeat meter consistency is below 0.80')
     return bool(record.get("grid_status") == "model_predicted" and grid[4] == 4
-                and "confidence below" in grid[1] and decoded.get("accepted") is True
+                and local_reason and decoded.get("accepted") is True
                 and float(decoded.get("phase_contrast") or 0) >= 0.25
                 and len(details.get("neural_downbeat_probability_by_beat") or []) == len(grid[2])
                 and len(details.get("neural_beat_probability_by_beat") or []) == len(grid[2]))
