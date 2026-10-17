@@ -577,6 +577,10 @@ def _validate_playback_budget(clip, section, sample_rate):
         raise RenderError('Full playback above five minutes requires explicit long-play permission in the plan')
     if clip['output_frames']/sample_rate > maximum + 1/sample_rate:
         raise RenderError(f"{clip['id']}: full rendered playback exceeds {maximum:g}s including both overlaps; replan this source")
+    minimum=float(section.get('minimum_play_seconds',0.))
+    if not np.isfinite(minimum) or minimum<0:raise RenderError('Full playback minimum must be finite and nonnegative')
+    if clip['output_frames']/sample_rate < minimum-1/sample_rate:
+        raise RenderError(f"{clip['id']}: full rendered playback falls below {minimum:g}s; select a longer native span or a supported musical loop")
 
 
 def _measure(path: Path, block: int = 262144, *, witness=None, regions=()) -> dict[str, Any]:

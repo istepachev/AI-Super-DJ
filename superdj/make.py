@@ -68,10 +68,16 @@ def _make(args):
     current().jobs = resources['jobs']
     current().devices = tuple(resources['devices'])
     current().metrics['resources'] = resources
+    short_exclusions=[]
+    if folder_input:
+        files,short_exclusions=_folder_short_sources(files,resources['source_probes'])
+        write_json(work/'short_source_exclusions.json',short_exclusions)
+        if not files:raise ValueError('No source reaches the one-minute minimum in this automatic folder selection')
+        resources['source_probes']=[p for p in resources['source_probes'] if Path(p['path']) in set(files)]
     git = runtime.get("git", "git")
     records = [{"id": f"track_{i:02}", "path": str(p)} for i, p in enumerate(files, 1)]
     write_json(work / "playlist.json", {"tracks": records, "selection": "automatic folder history filtering" if folder_input else "all explicit supplied files retained",
-        'excluded_previous_sources':exclusions, 'workflow_preferences':preferences})
+        'excluded_previous_sources':exclusions,'excluded_short_sources':short_exclusions, 'workflow_preferences':preferences})
     if len(files) == 1:
         from .resources import admit_master
         probe = resources['source_probes'][0]
@@ -118,6 +124,21 @@ def _make(args):
     if runtime.get("beat_device"):
         argv += ["--device", runtime["beat_device"]]
     main(argv)
+
+
+def _folder_short_sources(files,probes):
+    """Automatic selection may omit sub-minute sources, always with a ledger.
+
+    Explicitly supplied files never enter this helper. Their selected section
+    can instead receive a supported loop; source identity is not discarded.
+    """
+    by_path={Path(p['path']):p for p in probes};kept=[];excluded=[]
+    for path in files:
+        duration=float(by_path[Path(path)]['duration_seconds'])
+        if duration<60:
+            excluded.append({'path':str(path),'duration_seconds':duration,'reason':'automatic folder selection: native source below one minute'})
+        else:kept.append(path)
+    return kept,excluded
 
 
 def make(args):

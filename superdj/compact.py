@@ -12,7 +12,7 @@ from .rhythm import bass_profile, support, weak_gap
 
 def arrange_sync(plan, records, *, target_solo_seconds=None, maximum_solo_seconds=None,
                  target_play_seconds=210., maximum_play_seconds=300.,
-                 minimum_play_seconds=120., sample_rate=48000, zhilin=False, ffmpeg=None,
+                 minimum_play_seconds=60., sample_rate=48000, zhilin=False, ffmpeg=None,
                  allow_long_play=False, excluded_sections=None, section_ranges=None):
     """Choose energetic cores and stable overlap windows without project timings.
 
@@ -31,8 +31,8 @@ def arrange_sync(plan, records, *, target_solo_seconds=None, maximum_solo_second
         raise ValueError("Legacy solo target must be 180–240 seconds; full playback cap still applies")
     if not 8 <= maximum_solo_seconds <= maximum_play_seconds:
         raise ValueError("Solo maximum must fit within the full playback maximum")
-    if minimum_play_seconds < 120 or minimum_play_seconds > target_play_seconds:
-        raise ValueError("Minimum selected playback must be 120 seconds or longer")
+    if not np.isfinite(minimum_play_seconds) or minimum_play_seconds < 60 or minimum_play_seconds > target_play_seconds:
+        raise ValueError("Minimum selected playback must be 60 seconds or longer")
     result = deepcopy(plan)
     by_id = {str(row['id']): row for row in records}
     order = result['order']
@@ -283,6 +283,6 @@ def arrange_sync(plan, records, *, target_solo_seconds=None, maximum_solo_second
         edge.setdefault('cue_locks', {}).update(outgoing_end_seconds=sections[edge['from']]['end'],
                                                incoming_start_seconds=sections[edge['to']]['start'])
     result.update(sections=sections, section_warnings=warnings, rhythm_profiles=profiles, style='zhilin' if zhilin else 'default',
-        section_policy=f'shared-phase SYNC; target {play_low:g}–{play_high:g}s full playback including both overlaps, hard maximum {maximum_play_seconds:g}s; minimum 120s; target exceptions recorded',
+        section_policy=f'shared-phase SYNC; target {play_low:g}–{play_high:g}s full playback including both overlaps, hard maximum {maximum_play_seconds:g}s; minimum {minimum_play_seconds:g}s; short-play loops are best effort',
         long_play_explicit=bool(allow_long_play))
     return result
