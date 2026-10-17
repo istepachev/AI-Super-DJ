@@ -50,3 +50,40 @@ def test_misaligned_drum_preparation_stops_before_writing_a_repeat(tmp_path,brok
     with pytest.raises(RenderError,match='same stereo sample timeline'):
         preserve_minimum(plan,rows,prepared,tmp_path/'repeat')
     assert not (tmp_path/'repeat').exists()
+
+
+def final_inputs(tmp_path):
+    sr,rows,_,prepared=inputs(tmp_path)
+    short=record('a',121,100);short['downbeats']=[t for t in short['downbeats'] if t<119]
+    rows=[rows[1],short]
+    for path in prepared['a'].values():
+        audio=sf.read(path,dtype='float32')[0];sf.write(path,audio[:121*sr],sr,subtype='FLOAT')
+    plan=arrange_sync(plan_tracks(rows,mode='fixed'),rows)
+    assert 110<=plan['sections']['a']['predicted_play_seconds']<120
+    return sr,rows,plan,prepared
+
+
+def test_short_final_source_repeats_inside_solo_and_preserves_the_native_ending(tmp_path):
+    sr,rows,plan,prepared=final_inputs(tmp_path)
+    extended,revised,processed=preserve_minimum(plan,rows,prepared,tmp_path/'repeat')
+    edit=extended['minimum_playback_edits'][0]
+    assert extended['sections']['a']['predicted_play_seconds']>=120
+    for key in ('path','vocal_path','drum_path'):
+        original=sf.read(prepared['a'][key],dtype='float32')[0]
+        result=sf.read(processed['a'][key],dtype='float32')[0]
+        insertion=round(edit['insertion_source_seconds']*sr);length=round(edit['added_seconds']*sr)
+        assert np.array_equal(result[insertion+length:],original[insertion:])
+        assert len(result)==len(original)+length
+    assert prepared['a']['path']!=processed['a']['path']
+
+
+@pytest.mark.parametrize('constraint',['locked_start','locked_end','protected_range'])
+def test_final_repeat_does_not_override_source_locks_or_protected_material(tmp_path,constraint):
+    sr,rows,plan,prepared=final_inputs(tmp_path)
+    if constraint=='protected_range':rows[1]['protected_ranges']=[[90.,95.]]
+    else:plan['sections']['a'][constraint]=True
+    hashes={k:hashlib.sha256(Path(p).read_bytes()).hexdigest() for k,p in prepared['a'].items()}
+    with pytest.raises(RenderError,match='cannot safely meet'):
+        preserve_minimum(plan,rows,prepared,tmp_path/'repeat')
+    assert not (tmp_path/'repeat').exists()
+    assert hashes=={k:hashlib.sha256(Path(p).read_bytes()).hexdigest() for k,p in prepared['a'].items()}

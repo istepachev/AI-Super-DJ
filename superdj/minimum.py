@@ -27,10 +27,10 @@ def preserve_minimum(plan, records, prepared, directory):
         row = by_id[identity]
         deficit = minimum - section['predicted_play_seconds']
         edge = result['edges'][position] if position < len(result['edges']) else None
-        if edge is None or deficit > 10 or row.get('protected_ranges') or section.get('locked_start') or section.get('locked_end'):
+        if deficit > 10 or row.get('protected_ranges') or section.get('locked_start') or section.get('locked_end'):
             raise RenderError(f"{identity}: cannot safely meet the critical playback minimum")
         grid = _grid(row, .75)
-        count = edge['overlap_bars']
+        count = edge['overlap_bars'] if edge is not None else 0
         end_bar = int(np.argmin(abs(grid[3] - section['end'])))
         insertion_index = end_bar - count
         insertion = float(grid[3][insertion_index])
@@ -152,7 +152,7 @@ def preserve_minimum(plan, records, prepared, directory):
         for key in ('source_span_seconds', 'predicted_solo_seconds', 'predicted_play_seconds'):
             section[key] += length
         section['minimum_repeat'] = edit
-        edge['cue_locks']['outgoing_end_seconds'] += length
+        if edge is not None:edge['cue_locks']['outgoing_end_seconds'] += length
         result['section_warnings'] = [w for w in result.get('section_warnings', [])
                                       if not w.startswith(identity + ': source and stable grid permit only')]
         result['section_warnings'].append(f"{identity}: one {length:.2f}s stable-bar repeat meets minimum playback ({section['predicted_play_seconds']:.2f}s including overlaps)")
