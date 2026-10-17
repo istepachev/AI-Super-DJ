@@ -87,6 +87,61 @@ def verification_components(outgoing,incoming,sample_rate,gains,*,bass_hz=180.,d
     return result
 
 
+def _foreground_identity_ambiguities(audio,own,other,sample_rate,centres,raw,isolated,band):
+    """A matching dominant other deck cannot identify a quiet source's attack.
+
+    The known contributions must already reconstruct the actual PCM. Only an
+    eligible native-template match in the actual own contribution can supply
+    timing. This never substitutes a fresh, guessed separation for a late hit.
+    """
+    candidates=[i for i,(t,a,b) in enumerate(zip(centres,raw,isolated))
+        if a['eligible'] and abs(a['time']-.2-t)>.003
+        and not (b['eligible'] and abs(b['time']-.2-t)>.003)]
+    if not candidates:return {}
+    from scipy.signal import butter,sosfiltfilt
+    filtered=[sosfiltfilt(butter(3,band,btype='bandpass',fs=sample_rate,output='sos'),x.mean(axis=1))
+              for x in (audio,own,other)]
+    result={}
+    for i in candidates:
+        stamp=raw[i]['time']-.2
+        first=max(0,round((stamp-.012)*sample_rate));last=min(len(audio),round((stamp+.045)*sample_rate))
+        a,b,c=(x[first:last] for x in filtered)
+        powers=[float(np.dot(x,x)) for x in (a,b,c)]
+        if min(powers)<=1e-20:continue
+        similarity=float(np.dot(a,c)/np.sqrt(powers[0]*powers[2]))
+        dominance=powers[2]/powers[1]
+        if similarity<.98 or dominance<4:continue
+        result[i]={'seconds':centres[i],'raw_delay_seconds':raw[i]['time']-.2-centres[i],
+            'raw_template_correlation':raw[i].get('template_correlation'),
+            'own_delay_seconds':isolated[i]['time']-.2-centres[i] if isolated[i]['eligible'] else None,
+            'own_unverified_candidate_delay_seconds':isolated[i]['time']-.2-centres[i],
+            'own_template_correlation':isolated[i].get('template_correlation'),
+            'other_to_own_band_power_ratio':dominance,'raw_candidate_other_waveform_cosine':similarity,
+            'classification':'raw peak is not uniquely attributable to this source; known other foreground explains it',
+            'timing_view':'own native-template timing still required; raw contradiction retained'}
+    return result
+
+
+def _paired_front_audit(checks,sample_rate):
+    """Retain the worst source-aware primary/bass difference on each beat."""
+    from .integrity import _timing_limit_exceeded
+    groups={}
+    for check in checks:
+        side=check['role'].split(':')[0]
+        for point in check['recognized']:
+            frame=round(point['seconds']*sample_rate)
+            groups.setdefault(frame,{}).setdefault(side,[]).append(point['delay_seconds'])
+    pairs=[]
+    for frame,views in groups.items():
+        if not views.get('head') or not views.get('tail'):continue
+        worst=max(abs(a-b) for a in views['tail'] for b in views['head'])
+        if _timing_limit_exceeded(worst,.003,reference_seconds=frame/sample_rate):
+            raise ValueError('Combined paired percussion attacks miss the shared clock; review the rendered overlap')
+        pairs.append(worst)
+    return {'coincident_source_beats':len(pairs),'maximum_pair_error_seconds':max(pairs) if pairs else None,
+        'tolerance_seconds':.003,'scope':'worst recognized primary/bass difference across actual audible source contributions; prior coverage gates retained'}
+
+
 def verify_blended_fronts(audio,sample_rate,outgoing_warp,incoming_warp,gains,directory,*,ffmpeg='ffmpeg',components=None,allow_pitch_changing_residual=False):
     """Check identified source fronts in the actual blend; bound local repair."""
     from .kick_grid import template_attack_rows
@@ -143,12 +198,25 @@ def verify_blended_fronts(audio,sample_rate,outgoing_warp,incoming_warp,gains,di
                     row['eligible']=False
             minimum=.90 if band==[35,180] else .65
             rows=template_attack_rows(np.pad(corrected,((pad,pad),(0,0))),sample_rate,[t+.2 for t in centres],templates,attack_band_hz=band,minimum_correlation=minimum)
-            raw_rows=[dict(r) for r in rows];component_used=[]
+            raw_rows=[dict(r) for r in rows];component_used=[];identity_ambiguities={};own_fresh=None
             if current_components:
                 other='head' if role.startswith('tail') else 'tail'
                 isolated=corrected-current_components[other]
                 recovered=template_attack_rows(np.pad(isolated,((pad,pad),(0,0))),sample_rate,[t+.2 for t in centres],templates,attack_band_hz=band,minimum_correlation=minimum)
+                identity_ambiguities=_foreground_identity_ambiguities(corrected,isolated,current_components[other],sample_rate,centres,rows,recovered,band)
+                if any(not recovered[i]['eligible'] for i in identity_ambiguities):
+                    own_estimate,_=final_drum_estimates(isolated,isolated,sample_rate,Path(directory)/f'own-view-{attempt}',ffmpeg=ffmpeg)
+                    own_fresh=template_attack_rows(np.pad(own_estimate['drums_out'],((pad,pad),(0,0))),sample_rate,[t+.2 for t in centres],templates,attack_band_hz=band,minimum_correlation=minimum)
                 for i,(old,new) in enumerate(zip(rows,recovered)):
+                    if i in identity_ambiguities:
+                        candidate=new if new['eligible'] else own_fresh[i]
+                        if candidate['eligible'] and abs(candidate['time']-.2-centres[i])<=.003:
+                            rows[i]=candidate;component_used.append(centres[i])
+                            identity_ambiguities[i].update(own_delay_seconds=candidate['time']-.2-centres[i],
+                                own_template_correlation=candidate.get('template_correlation'),
+                                timing_view='native template in actual own contribution'+(' via fresh percussion view' if not new['eligible'] else ''),
+                                fresh_own_percussion_view_used=not new['eligible'])
+                            continue
                     # Keep strong contradictory raw timing evidence. A weak
                     # match to the other kick is not evidence of this source.
                     if old['eligible'] and old.get('template_correlation',0)>=.90 and abs(old['time']-.2-centres[i])>.003:continue
@@ -171,7 +239,9 @@ def verify_blended_fronts(audio,sample_rate,outgoing_warp,incoming_warp,gains,di
                 if abs(row['delay_seconds'])>.003:
                     if not allow_pitch_changing_residual or attempt or row['correlation']<.9 or abs(row['delay_seconds'])>.006:raise ValueError('Combined percussion attack misses the shared clock; review the rendered overlap')
                     residuals.append(row)
-            checks.append({'role':role,'audible_source_events':len(centres),'recognized':measured,'unverified_source_seconds':[t for t,r in zip(centres,rows) if not r['eligible']],'attack_band_hz':band,'fresh_percussion_view_used':fresh is not None,'known_other_deck_subtraction_seconds':component_used,'raw_mixture_unverified_seconds':[t for t,r in zip(centres,raw_rows) if not r['eligible'] or t not in observable],
+            checks.append({'role':role,'audible_source_events':len(centres),'recognized':measured,'unverified_source_seconds':[t for t,r in zip(centres,rows) if not r['eligible']],'attack_band_hz':band,'fresh_percussion_view_used':fresh is not None,'known_other_deck_subtraction_seconds':component_used,'raw_mixture_unverified_seconds':[t for i,(t,r) in enumerate(zip(centres,raw_rows)) if not r['eligible'] or t not in observable or i in identity_ambiguities],
+                'raw_mixture_identity_ambiguities':list(identity_ambiguities.values()),
+                'fresh_known_own_percussion_view_used':own_fresh is not None,
                 'native_observable_source_events':len(observable),'coverage_minimum_matches':minimum_count,'observed_native_unique_events':len(verified_native),
                 'native_ambiguous_source_seconds':[t for t in centres if t not in observable],'required_source_seconds':sorted(required),
                 'native_ambiguous_output_candidates':unknown_candidates,
@@ -199,4 +269,5 @@ def verify_blended_fronts(audio,sample_rate,outgoing_warp,incoming_warp,gains,di
             if np.any(np.diff(indices)<=0) or rate_change>=.03:raise ValueError('Final front correction exceeds gentle local rate bounds')
             block=original[first:last];corrected[first:last]=np.column_stack([np.interp(indices,t,block[:,ch]) for ch in (0,1)]).astype('float32');refinements.append({**row,'start_frame':first,'end_frame':last,'context_seconds':2*support,'maximum_local_rate_change':rate_change})
             for key,value in original_components.items():current_components[key][first:last]=np.column_stack([np.interp(indices,t,value[first:last,ch]) for ch in (0,1)]).astype('float32')
-    return corrected,{'executed':True,'recognized_fronts_only':True,'checks':checks,'local_combined_waveform_refinements':refinements,'other_pcm_retained':True,'measurement_limit_seconds':.003}
+    paired=_paired_front_audit(checks,sample_rate)
+    return corrected,{'executed':True,'recognized_fronts_only':True,'checks':checks,'paired_source_front_audit':paired,'local_combined_waveform_refinements':refinements,'other_pcm_retained':True,'measurement_limit_seconds':.003}

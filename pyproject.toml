@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "superdj"
-version = "0.20.11"
+version = "0.20.12"
 description = "AI Super DJ: local music planning, DJ Zhilin mixing and verified audio export"
 requires-python = ">=3.12"
 license = {text = "MIT"}
