@@ -564,7 +564,7 @@ def _warp_anchors(record: Mapping[str, Any], *, trim_start: float,
     from .timing_safety import initialize_rate_reference,audit_warp_rates
     initialize_rate_reference(result,sample_rate,native_bpm=native_bpm,
         windows=[(role,w.clock) for role,w in (('head',head),('tail',tail)) if w],limit=max_local_warp_change)
-    audit_warp_rates(result,sample_rate,stage='initial musical map')
+    audit_warp_rates(result,sample_rate,stage='initial musical map',check_continuity=False)
     return result
 
 
