@@ -151,9 +151,15 @@ def test_zero_coverage_stays_explicit(tmp_path):
 
 def test_source_tempo_variation_is_not_discarded_as_bad_attacks(tmp_path):
     path,warp,sr=fixture(tmp_path,variable=True)
-    report=refine_source_controls(path,warp,sr)['head']
+    from superdj.timing_safety import SourceWindowFailure
+    original=deepcopy(warp['anchors'])
+    # Native variable rhythm remains recognized. It cannot authorize a map
+    # exceeding the new factory bar-continuity bound: select another window.
+    with pytest.raises(SourceWindowFailure,match='within a bar'):
+        refine_source_controls(path,warp,sr)
+    report=warp['source_kick_alignment']['head']
     assert report['supported']>=.8*report['detected']
-    assert all(b['source_frame']>a['source_frame'] for a,b in zip(warp['anchors'],warp['anchors'][1:]))
+    assert warp['anchors']==original
 
 def test_half_time_kicks_remain_sparse_evidence(tmp_path):
     missing=set(range(1,34,2))

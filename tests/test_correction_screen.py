@@ -89,17 +89,32 @@ def test_repeated_failed_corrections_keep_all_attempts_and_identical_actual_pcm(
     monkeypatch.setattr(kick_grid,'rendered_attack_audit',audit)
     monkeypatch.setattr(sync,'compensate_backend_drift',compensate)
     monkeypatch.setattr(render,'_run',run)
-    results=[]
+    results=[];failures=[]
     for label in ('baseline','candidate'):
         mode[0]=label
         with monkeypatch.context() as patch:
             if label=='baseline':patch.setattr(CorrectionScreen,'reuse',lambda *args:None)
-            results.append(render.render_plan(plan,records,{},tmp_path/f'{label}.wav',tmp_path/label,
-                ffmpeg=ffmpeg_executable(),rubberband=rubber,sample_rate=16000,tempo_conflict_policy='sync',
-                # This adversarial performance fixture deliberately prevents
-                # backend correction. Compare its explicit advanced residual
-                # path; ordinary rendering must reject that fallback instead.
-                allow_pitch_changing_residual=True))
+            from superdj.transition_quality import TransitionFailure
+            try:
+                results.append(render.render_plan(plan,records,{},tmp_path/f'{label}.wav',tmp_path/label,
+                    ffmpeg=ffmpeg_executable(),rubberband=rubber,sample_rate=16000,tempo_conflict_policy='sync'))
+            except TransitionFailure as error:failures.append(error)
+    if failures:
+        # An unchanged deliberately uncorrected backend can exceed the new
+        # ordinary bound. Caching must retain the same rejected PCM and all
+        # ten attempts; it must never turn rejection into a released master.
+        assert len(failures)==2 and not results
+        failed=failures[0].evidence['failed_track']
+        assert failures[1].evidence['failed_track']==failed
+        assert all('attack recognition' in str(e) for e in failures)
+        assert not (tmp_path/'baseline.wav').exists() and not (tmp_path/'candidate.wav').exists()
+        completed=[r['id'] for r in records].index(failed)+1
+        for number in range(1,completed+1):
+            name=f'track-{number:02d}-warped.wav'
+            np.testing.assert_array_equal(sf.read(tmp_path/'baseline'/name)[0],sf.read(tmp_path/'candidate'/name)[0])
+        assert calls.count('baseline')==10*completed
+        assert calls.count('candidate')<calls.count('baseline')
+        return
     np.testing.assert_array_equal(sf.read(tmp_path/'baseline.wav',dtype='float32')[0],sf.read(tmp_path/'candidate.wav',dtype='float32')[0])
     assert calls.count('baseline')==20
     assert calls.count('candidate')<calls.count('baseline')

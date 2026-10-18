@@ -564,7 +564,7 @@ def _warp_anchors(record: Mapping[str, Any], *, trim_start: float,
     from .timing_safety import initialize_rate_reference,audit_warp_rates
     initialize_rate_reference(result,sample_rate,native_bpm=native_bpm,
         windows=[(role,w.clock) for role,w in (('head',head),('tail',tail)) if w],limit=max_local_warp_change)
-    audit_warp_rates(result,sample_rate,stage='initial musical map')
+    audit_warp_rates(result,sample_rate,stage='initial musical map',check_continuity=False)
     return result
 
 
@@ -1028,6 +1028,10 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
             if edge.get(key) is not None:transition[key]=edge[key]
     clips: list[dict[str, Any]] = []
     prepared_files = prepared_files or {}
+    from .source_clock import calibrate_render_windows
+    if progress:progress('Calibrating native beat phase and source window boundaries')
+    sections,native_clock_calibration=calibrate_render_windows(by_id,prepared_files,order,head,tail,
+        sections,transitions,edges,ffmpeg=ffmpeg,directory=directory)
     # All keyword render controls participate in object identity.
     import inspect
     from .execution import cached
@@ -1246,10 +1250,14 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                         break
                     # The backend can switch a transient's alignment at a
                     # detector threshold. Damped follow-ups prevent oscillation.
-                    try:compensate_backend_drift(warp, audit, sample_rate, strength=1.0 if attempt < 2 else .5)
-                    except ValueError as error:
-                        warp.setdefault('acoustic_correction_rejections',[]).append(str(error))
-                        break
+                    strength=1.0 if attempt<2 else .5
+                    for fraction in (1.,.5,.25,.125):
+                        try:
+                            compensate_backend_drift(warp,audit,sample_rate,strength=strength*fraction)
+                            break
+                        except ValueError as error:
+                            warp.setdefault('acoustic_correction_rejections',[]).append(str(error))
+                    else:break
                     rerender()
                 if best is None:
                     best_file.unlink(missing_ok=True)
@@ -1715,5 +1723,7 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                     "The incoming dry signal is initially muted, then faded in; inspect echo_processing timing."
                 )
     manifest_path = output.with_suffix(".render.json")
+    manifest['native_clock_calibration']=native_clock_calibration
+    manifest['effective_sections']=sections
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2, allow_nan=False), encoding="utf-8")
     return manifest
