@@ -8,8 +8,10 @@ from .transition_quality import TransitionFailure
 
 def unsupported_attack_events(evidence,role):
     """Retain physical source positions across every required timing view."""
+    timing=evidence.get('source_timing_evidence',{}).get('short_term_timing_continuity',{})
+    rate_positions=list(timing.get('worst_source_seconds',[])) if evidence.get('failed_role')==role and not timing.get('passed',True) else []
     if role in evidence.get('canonical_attack_rejections',{}):
-        return list(evidence['canonical_attack_rejections'][role])
+        return list(dict.fromkeys([*evidence['canonical_attack_rejections'][role],*rate_positions]))
     source=evidence.get('warp',{}).get('source_kick_alignment',{}).get(role,{})
     points=[p for p in evidence.get('final_attack',{}).get('measured',[]) if p['role']==role]
     from .source_observability import required_bass_views
@@ -18,7 +20,7 @@ def unsupported_attack_events(evidence,role):
     independent={p['beat'] for p in points if p.get('view')=='estimated_bass'}
     failed=(required['mixture']-observed)|(required['estimate']-independent)
     failed.update(p['beat'] for p in points if abs(p.get('delay_seconds',0.))>.003)
-    return [p['source_seconds'] for p in source.get('events',[]) if p['beat'] in failed]
+    return list(dict.fromkeys([*[p['source_seconds'] for p in source.get('events',[]) if p['beat'] in failed],*rate_positions]))
 
 
 def alternative(plan, records, failure, excluded, attempt, *, sample_rate, ffmpeg):

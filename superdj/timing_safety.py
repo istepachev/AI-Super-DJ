@@ -149,6 +149,10 @@ def audit_warp_rates(warp, sample_rate, *, stage, enforce=True, check_continuity
         times=np.r_[times,fine_times[monitored]];corrections=np.r_[corrections,fine_corrections[monitored]]
     continuity=_short_term_rate_span(times,corrections) if check_continuity else {
         'executed':False,'passed':False,'reason':'coarse grid only; native-source refinement must pass before stretching'}
+    if continuity.get('worst_output_seconds'):
+        continuity['worst_source_seconds']=(np.interp(
+            np.asarray(continuity['worst_output_seconds'])*sample_rate,output,source)/sample_rate
+            +warp.get('trim_start_seconds',0.)).tolist()
     result={'executed':True,'stage':stage,'minimum_actual_playback_rate':minimum,
         'maximum_actual_playback_rate':maximum,'maximum_timing_correction_change':worst,
         'maximum_allowed_timing_change':reference['maximum_timing_change'],'monitored_intervals':int(active.sum()),

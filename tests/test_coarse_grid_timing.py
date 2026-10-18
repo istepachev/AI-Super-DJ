@@ -79,3 +79,15 @@ def test_a_smooth_musical_tempo_change_is_not_a_correction_speed_pulse():
     audit=audit_warp_rates(warp,sr,stage='deliberate smooth musical curve')
     assert audit['short_term_timing_continuity']['passed']
     assert warp['anchors']==before
+
+
+def test_rate_recovery_rejects_native_positions_only_on_the_failed_side():
+    from superdj.recovery import unsupported_attack_events
+    evidence={'failed_role':'head','source_timing_evidence':{'short_term_timing_continuity':{
+        'passed':False,'worst_output_seconds':[65.17,65.70],'worst_source_seconds':[93.997,94.455]}}}
+    before=deepcopy(evidence)
+    assert unsupported_attack_events(evidence,'head')==[93.997,94.455]
+    assert unsupported_attack_events(evidence,'tail')==[]
+    evidence['canonical_attack_rejections']={'head':[93.997,95.053]}
+    assert unsupported_attack_events(evidence,'head')==[93.997,95.053,94.455]
+    assert evidence['source_timing_evidence']==before['source_timing_evidence']
