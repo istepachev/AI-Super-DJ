@@ -23,7 +23,7 @@ class DerivedAudio:
         # separately padded copies of the same mixture have different IDs.
         pcm = np.ascontiguousarray(audio)
         key = (kind, pcm.dtype.str, pcm.shape, audio.strides, parameters,
-               hashlib.blake2b(memoryview(pcm).cast('B'), digest_size=32).digest())
+               hashlib.sha256(memoryview(pcm).cast('B')).digest())
         with self.lock:
             if key in self.entries:
                 self.entries.move_to_end(key)

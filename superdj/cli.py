@@ -210,13 +210,12 @@ def render(args, records=None, planned=None, prepared_data=None):
     with phase('mastering_wall'):
         mastered = master_set(premix, master_path, work, bitwize=args.bitwize, git=args.git,
                               target_lufs=args.target_lufs, ceiling_db=-1.5)
-    from .integrity import verify_master_rhythm
-    with phase('master_rhythm_check_wall'):
-        mastered['rhythm_preservation'] = verify_master_rhythm(premix, master_path, rendered)
-    print("Exporting and independently checking full FLAC/MP3 files", flush=True)
-    with phase('export_and_checks_wall'):
-        exported = export_audio(master_path, directory, args.name, ffmpeg=args.ffmpeg, ffprobe=args.ffprobe,
-                                mp3=not args.no_mp3, overwrite=args.overwrite)
+    from .finishing import finish_verified
+    print("Checking mastered rhythm and exporting verified FLAC/MP3 files", flush=True)
+    with phase('finalization_wall'):
+        mastered['rhythm_preservation'], exported = finish_verified(
+            premix, master_path, rendered, directory, args.name, ffmpeg=args.ffmpeg,
+            ffprobe=args.ffprobe, mp3=not args.no_mp3, overwrite=args.overwrite)
     manifest = {"schema_version": 1, "created_utc": datetime.now(timezone.utc).isoformat(),
                 "selection_and_analysis": records, "plan": planned, "preparation": prepared,
                 "render": rendered, "mastering": mastered, "exports": exported,

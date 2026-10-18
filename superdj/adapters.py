@@ -111,8 +111,10 @@ def _worker(job: dict) -> dict:
         sf.write = write_large_wav
         try:
             from .mastering import accelerated_limiter
+            from .lra_parallel import parallel_lra
             with accelerated_limiter(mastering_module, job.get('accelerate', True)
-                    and job.get('limiter_lookahead_ms',5)>0) as acceleration:
+                    and job.get('limiter_lookahead_ms',5)>0) as acceleration, \
+                    parallel_lra(mastering_module, enabled=job.get('parallel_lra', True)) as lra:
                 result = master_track(job["input"], job["output"], ceiling_db=job["ceiling_db"], preset=preset)
         finally:
             sf.write = original_write
@@ -122,6 +124,7 @@ def _worker(job: dict) -> dict:
                 "function": "tools.mastering.master_tracks.master_track", "preset": preset,
                 "ceiling_db": job["ceiling_db"], "large_file_container": output_container or None,
                 "limiter_acceleration": acceleration,
+                "lra_parallelism": lra,
                 "upstream_measurements_before_encoded_QA": result}}
     raise ValueError("Unknown adapter action")
 
