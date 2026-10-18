@@ -146,7 +146,10 @@ def test_unconfirmed_preview_restores_full_audio_and_legacy_correction(tmp_path,
     rubber = os.getenv('SUPERDJ_RUBBERBAND') or shutil.which('rubberband')
     if not rubber:
         pytest.skip('Actual Rubber Band required')
-    records = _long_records(tmp_path,[174,128,174])
+    # Preview fallback is a PCM/restoration check. Keep its source clock
+    # feasible under the independent bar-rate guard; large-curve timing and
+    # rejection of unsafe maps have their own acoustic regression tests.
+    records = _long_records(tmp_path,[174,160,174])
     plan = plan_tracks(records,mode='fixed')
     settings = dict(ffmpeg=decoder,rubberband=rubber,sample_rate=16000,
                     tempo_conflict_policy='sync',transition_bars=16,sync_transition_bars=16)

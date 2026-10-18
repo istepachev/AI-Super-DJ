@@ -66,7 +66,7 @@ def test_repeated_failed_corrections_keep_all_attempts_and_identical_actual_pcm(
     from superdj.planner import plan_tracks
     rubber=os.getenv('SUPERDJ_RUBBERBAND') or shutil.which('rubberband')
     if not rubber:pytest.skip('Actual Rubber Band required')
-    records=RenderedSyncTests().fixtures(tmp_path,[120,122]);plan=plan_tracks(records,mode='fixed')
+    records=RenderedSyncTests().fixtures(tmp_path,[120,120]);plan=plan_tracks(records,mode='fixed')
     real_audit=kick_grid.rendered_attack_audit;real_run=render._run
     observations={};calls=[];mode=['baseline']
     def audit(path,mapping,sample_rate):
@@ -96,10 +96,9 @@ def test_repeated_failed_corrections_keep_all_attempts_and_identical_actual_pcm(
             if label=='baseline':patch.setattr(CorrectionScreen,'reuse',lambda *args:None)
             results.append(render.render_plan(plan,records,{},tmp_path/f'{label}.wav',tmp_path/label,
                 ffmpeg=ffmpeg_executable(),rubberband=rubber,sample_rate=16000,tempo_conflict_policy='sync',
-                # This adversarial performance fixture deliberately prevents
-                # backend correction. Compare its explicit advanced residual
-                # path; ordinary rendering must reject that fallback instead.
-                allow_pitch_changing_residual=True))
+                # Force all ten search attempts while real final PCM must
+                # retain ordinary pitch-preserving timing verification.
+                allow_pitch_changing_residual=False))
     np.testing.assert_array_equal(sf.read(tmp_path/'baseline.wav',dtype='float32')[0],sf.read(tmp_path/'candidate.wav',dtype='float32')[0])
     assert calls.count('baseline')==20
     assert calls.count('candidate')<calls.count('baseline')

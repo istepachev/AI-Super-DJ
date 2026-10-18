@@ -212,6 +212,8 @@ def test_real_compact_render_matches_solo_budget_or_refuses_a_clock_conflict(tmp
         sf.write(path, np.column_stack((audio, audio)), sr, subtype='FLOAT')
         row['path'] = str(path)
     plan = arrange_sync(plan_tracks(rows, mode='fixed'), rows, sample_rate=sr)
+    from copy import deepcopy
+    original_plan=deepcopy(plan)
     result = render_plan(plan, rows, {}, tmp_path / 'set.wav', tmp_path / 'render',
                          ffmpeg=ffmpeg, rubberband=rubberband, sample_rate=sr)
     if resonant_kicks:
@@ -230,10 +232,11 @@ def test_real_compact_render_matches_solo_budget_or_refuses_a_clock_conflict(tmp
     assert result['transitions'][0]['tempo_technique'] == 'shared_phase_sync'
     assert result['transitions'][0]['frequency_processing']['phase_source'] == 'shared integrated clock'
     for track in result['tracks']:
-        expected = plan['sections'][track['id']]['predicted_solo_seconds']
+        expected = result['effective_sections'][track['id']]['predicted_solo_seconds']
         assert abs(track['solo_seconds'] - expected) < .001
         assert 180 <= track['output_frames']/sr <= 240
     assert sf.info(tmp_path / 'set.wav').frames == result['total_frames']
+    assert plan==original_plan
 
 
 def test_minimum_repeat_preserves_phase_voice_edit_and_original_file(tmp_path):
