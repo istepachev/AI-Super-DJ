@@ -109,7 +109,7 @@ def test_source_preflight_single_role_reaches_the_first_window_retry(monkeypatch
         updated=deepcopy(plan)
         updated['sections']['1']['start']+=2
         return updated
-    monkeypatch.setattr(recovery,'arrange_sync',solver)
+    monkeypatch.setattr('superdj.compact.arrange_sync',solver)
     updated,_=recovery.alternative(plan,records,TransitionFailure('0','1','pulse',evidence),{},1,
                                    sample_rate=48000,ffmpeg=None)
     assert visited
