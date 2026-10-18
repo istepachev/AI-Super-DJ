@@ -146,15 +146,15 @@ def test_unconfirmed_preview_restores_full_audio_and_legacy_correction(tmp_path,
     rubber = os.getenv('SUPERDJ_RUBBERBAND') or shutil.which('rubberband')
     if not rubber:
         pytest.skip('Actual Rubber Band required')
-    # Preview fallback is a PCM/restoration check. Keep its source clock
-    # feasible under the independent bar-rate guard; large-curve timing and
-    # rejection of unsafe maps have their own acoustic regression tests.
-    records = _long_records(tmp_path,[174,160,174])
+    records = _long_records(tmp_path,[174,128,174])
     plan = plan_tracks(records,mode='fixed')
     settings = dict(ffmpeg=decoder,rubberband=rubber,sample_rate=16000,
                     tempo_conflict_policy='sync',transition_bars=16,sync_transition_bars=16)
-    baseline=render_plan(plan,records,{},tmp_path/'baseline.wav',tmp_path/'baseline',**settings)
-    if not any(len((track.get('warp') or {}).get('post_render_transient_audit',{}).get('iterations',[]))>2
+    from superdj.transition_quality import TransitionFailure
+    rejected=None;baseline=None
+    try:baseline=render_plan(plan,records,{},tmp_path/'baseline.wav',tmp_path/'baseline',**settings)
+    except TransitionFailure as error:rejected=error
+    if baseline and not any(len((track.get('warp') or {}).get('post_render_transient_audit',{}).get('iterations',[]))>2
                for track in baseline['tracks']):
         pytest.skip('This backend version aligned the fixture without repeated correction')
     called=[]
@@ -163,10 +163,22 @@ def test_unconfirmed_preview_restores_full_audio_and_legacy_correction(tmp_path,
         return deepcopy(warp)
     monkeypatch.setattr('superdj.acoustic_preview.screen_correction',unconfirmed)
     with execution(jobs=2) as session:
-        render_plan(plan,records,{},tmp_path/'screened.wav',session.work,**settings)
+        if rejected:
+            with pytest.raises(TransitionFailure) as caught:
+                render_plan(plan,records,{},tmp_path/'screened.wav',session.work,**settings)
+            assert caught.value.evidence['failed_track']==rejected.evidence['failed_track']
+            assert not (tmp_path/'baseline.wav').exists() and not (tmp_path/'screened.wav').exists()
+            # Retain the original high-change fixture. If its backend requires
+            # an unsafe correction, both paths must reject and restore exactly
+            # the same full-deck PCM instead of requiring an unsafe export.
+            failed=int(rejected.evidence['failed_track'])+1
+            for number in range(1,failed+1):
+                name=f'track-{number:02d}-warped.wav'
+                np.testing.assert_array_equal(sf.read(tmp_path/'baseline'/name)[0],sf.read(session.work/name)[0])
+        else:render_plan(plan,records,{},tmp_path/'screened.wav',session.work,**settings)
         assert called and session.metrics['counts']['acoustic_preview_fallbacks'] >= 1
         assert not session.metrics['counts'].get('acoustic_preview_confirmed')
-    np.testing.assert_array_equal(sf.read(tmp_path/'baseline.wav')[0],sf.read(tmp_path/'screened.wav')[0])
+    if baseline:np.testing.assert_array_equal(sf.read(tmp_path/'baseline.wav')[0],sf.read(tmp_path/'screened.wav')[0])
 
 
 @pytest.mark.parametrize('jobs',[1,2,4])

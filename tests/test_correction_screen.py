@@ -66,7 +66,7 @@ def test_repeated_failed_corrections_keep_all_attempts_and_identical_actual_pcm(
     from superdj.planner import plan_tracks
     rubber=os.getenv('SUPERDJ_RUBBERBAND') or shutil.which('rubberband')
     if not rubber:pytest.skip('Actual Rubber Band required')
-    records=RenderedSyncTests().fixtures(tmp_path,[120,120]);plan=plan_tracks(records,mode='fixed')
+    records=RenderedSyncTests().fixtures(tmp_path,[120,122]);plan=plan_tracks(records,mode='fixed')
     real_audit=kick_grid.rendered_attack_audit;real_run=render._run
     observations={};calls=[];mode=['baseline']
     def audit(path,mapping,sample_rate):
@@ -89,16 +89,29 @@ def test_repeated_failed_corrections_keep_all_attempts_and_identical_actual_pcm(
     monkeypatch.setattr(kick_grid,'rendered_attack_audit',audit)
     monkeypatch.setattr(sync,'compensate_backend_drift',compensate)
     monkeypatch.setattr(render,'_run',run)
-    results=[]
+    results=[];failures=[]
     for label in ('baseline','candidate'):
         mode[0]=label
         with monkeypatch.context() as patch:
             if label=='baseline':patch.setattr(CorrectionScreen,'reuse',lambda *args:None)
-            results.append(render.render_plan(plan,records,{},tmp_path/f'{label}.wav',tmp_path/label,
-                ffmpeg=ffmpeg_executable(),rubberband=rubber,sample_rate=16000,tempo_conflict_policy='sync',
-                # Force all ten search attempts while real final PCM must
-                # retain ordinary pitch-preserving timing verification.
-                allow_pitch_changing_residual=False))
+            from superdj.transition_quality import TransitionFailure
+            try:
+                results.append(render.render_plan(plan,records,{},tmp_path/f'{label}.wav',tmp_path/label,
+                    ffmpeg=ffmpeg_executable(),rubberband=rubber,sample_rate=16000,tempo_conflict_policy='sync'))
+            except TransitionFailure as error:failures.append(error)
+    if failures:
+        # An unchanged deliberately uncorrected backend can exceed the new
+        # ordinary bound. Caching must retain the same rejected PCM and all
+        # ten attempts; it must never turn rejection into a released master.
+        assert len(failures)==2 and not results
+        assert [e.evidence['failed_track'] for e in failures]==['a','a']
+        assert all('attack recognition' in str(e) for e in failures)
+        assert not (tmp_path/'baseline.wav').exists() and not (tmp_path/'candidate.wav').exists()
+        np.testing.assert_array_equal(sf.read(tmp_path/'baseline/track-01-warped.wav')[0],
+                                      sf.read(tmp_path/'candidate/track-01-warped.wav')[0])
+        assert calls.count('baseline')==10
+        assert calls.count('candidate')<calls.count('baseline')
+        return
     np.testing.assert_array_equal(sf.read(tmp_path/'baseline.wav',dtype='float32')[0],sf.read(tmp_path/'candidate.wav',dtype='float32')[0])
     assert calls.count('baseline')==20
     assert calls.count('candidate')<calls.count('baseline')
