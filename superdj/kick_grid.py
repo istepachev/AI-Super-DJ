@@ -147,7 +147,7 @@ def augment_source_attacks(audio,sample_rate,centres,accepted,attack_band_hz=(10
 
 def refine_source_controls(path,warp,sample_rate,evidence=None):
     from copy import deepcopy
-    from .timing_safety import initialize_rate_reference,audit_warp_rates,classify_native_phase,SourceWindowFailure
+    from .timing_safety import initialize_rate_reference,audit_warp_rates,classify_native_phase,SourceWindowFailure,_native_consensus
     initialize_rate_reference(warp,sample_rate)
     original_anchors=deepcopy(warp['anchors'])
     reports={}
@@ -223,6 +223,8 @@ def refine_source_controls(path,warp,sample_rate,evidence=None):
         reports[role]['native_phase_policy']='Waveform identity alone cannot assign a fill/ghost to a primary beat; displaced figures remain at native source timing'
         reports[role]['coarse_grid_consensus_recoveries']=[{'beat':r['index']+1,'source_seconds':base+r['time'],
             **r['coarse_grid_consensus_rescue']} for r in accepted if r.get('coarse_grid_consensus_rescue')]
+        native_clock=_native_consensus(phase_references,float(np.median(np.diff(centres)))) if not isolated and not (stem or {}).get('allow_variable_attack_family') else None
+        reports[role]['stable_native_primary_clock']=bool(native_clock is not None)
         reports[role]['unverified_native_bass_candidates']=unverified_bass
         if comparison:reports[role]['attack_front_comparison']=comparison
         reports[role]['low_frequency_gap_recovery']={'executed':bool(stem and not isolated),
@@ -239,21 +241,33 @@ def refine_source_controls(path,warp,sample_rate,evidence=None):
         known_offsets=[actual_by_index[i]-mapping[i]['source_seconds'] for i in known_indices]
         known_times=[actual_by_index[i] for i in known_indices]
         reports[role]['coarse_grid_inference_repairs']=[]
-        times=[start];offsets=[0.]
+        # A window endpoint inside an untrimmed advanced caller's clip can
+        # follow the native clock too. Actual sample cuts remain immovable;
+        # ordinary rendering calibrates those cuts before constructing a map.
+        source_limit=warp['trim_start_seconds']+original_anchors[-1]['source_frame']/sample_rate
+        def boundary_offset(value,index):
+            if native_clock is None or value<=warp['trim_start_seconds']+1/sample_rate or value>=source_limit-1/sample_rate:return 0.
+            return float(base+np.polyval(native_clock,index-1)-value)
+        times=[start];offsets=[boundary_offset(start,0)]
         for index,point in enumerate(mapping[1:-1],1):
             actual=actual_by_index.get(index,point['source_seconds']+float(np.interp(index,known_indices,known_offsets)))
-            # Preserve the established interpolation for ordinary labels,
-            # native tempo variation and unobserved boundary regions. Repair
-            # only a large interior label error bracketed by nearby audio.
+            # Infer physical source times, including missing boundary beats,
+            # rather than adding offsets back onto erroneous coarse labels.
             if index not in actual_by_index:
                 right=int(np.searchsorted(known_indices,index))
                 if 0<right<len(known_indices) and known_indices[right]-known_indices[right-1]<=4:
                     inferred=float(np.interp(index,known_indices,known_times))
-                    if abs(inferred-actual)>.035:
+                    if native_clock is not None or abs(inferred-actual)>.035:
                         reports[role]['coarse_grid_inference_repairs'].append({'beat':point['beat'],
                             'previous_inferred_source_seconds':actual,'inferred_source_seconds':inferred,
                             'method':'nearby recognized native source times; no attack invented'})
                         actual=inferred
+                elif native_clock is not None:
+                    inferred=float(base+np.polyval(native_clock,index-1))
+                    reports[role]['coarse_grid_inference_repairs'].append({'beat':point['beat'],
+                        'previous_inferred_source_seconds':actual,'inferred_source_seconds':inferred,
+                        'method':'established native clock, including unobserved ends; no attack invented'})
+                    actual=inferred
             times.append(point['source_seconds']);offsets.append(actual-point['source_seconds'])
         for row in accepted:
             point=mapping[row['index']+1]
@@ -280,7 +294,7 @@ def refine_source_controls(path,warp,sample_rate,evidence=None):
             low_path=Path(path).with_name(Path(path).stem+f'-{role}-bass-attack-templates.npz')
             np.savez_compressed(low_path,templates=np.asarray(low_templates,dtype='float32'))
             reports[role]['bass_attack_templates_path']=str(low_path)
-        times.append(end);offsets.append(0.)
+        times.append(end);offsets.append(boundary_offset(end,len(mapping)-1))
         reports[role]['inferred_grid_points']=len(mapping)-2-len(accepted)
         for anchor in warp['anchors']:
             if anchor['role']!=role+'_sync_control':continue

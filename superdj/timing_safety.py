@@ -4,13 +4,13 @@ from collections import deque
 import numpy as np
 
 
-def _short_term_rate_span(times, corrections):
-    """Rate range in every one-second window, independent of control density."""
+def _short_term_rate_span(times, corrections, window_seconds=2.):
+    """Rate range over a bar, independent of control density."""
     order=np.argsort(times,kind='stable');times=np.asarray(times)[order];values=np.asarray(corrections)[order]
     low=deque();high=deque();worst=0.;span=None
     for i,stamp in enumerate(times):
-        while low and times[low[0]]<stamp-1.:low.popleft()
-        while high and times[high[0]]<stamp-1.:high.popleft()
+        while low and times[low[0]]<stamp-window_seconds:low.popleft()
+        while high and times[high[0]]<stamp-window_seconds:high.popleft()
         while low and values[low[-1]]>=values[i]:low.pop()
         while high and values[high[-1]]<=values[i]:high.pop()
         low.append(i);high.append(i)
@@ -18,10 +18,44 @@ def _short_term_rate_span(times, corrections):
         if difference>worst:
             worst=difference
             span=sorted([float(times[low[0]]),float(times[high[0]])])
-    return {'executed':True,'window_seconds':1.,'maximum_correction_rate_span':worst,
-            'maximum_allowed_correction_rate_span':.10,'worst_output_seconds':span,
-            'passed':worst<=.10+1e-5,
-            'method':'range of actual/intended musical rates in every one-second window; controls cannot hide a pulse by subdivision'}
+    return {'executed':True,'window_seconds':window_seconds,'maximum_correction_rate_span':worst,
+            'maximum_allowed_correction_rate_span':.05,'worst_output_seconds':span,
+            'passed':worst<=.05+1e-5,
+            'method':'range of actual/intended musical rates over a complete bar; controls cannot hide a pulse by subdivision'}
+
+
+def _native_consensus(references,period):
+    indices=np.asarray([r['index'] for r in references],dtype=float)
+    times=np.asarray([r['time'] for r in references],dtype=float)
+    if len(indices)<8 or np.ptp(indices)<7:return None
+    initial=np.polyfit(indices,times,1)
+    proposals=[initial]
+    if len(indices)>=16:
+        rng=np.random.default_rng(0)
+        for _ in range(256):
+            a,b=rng.choice(len(indices),2,replace=False)
+            if abs(indices[b]-indices[a])<max(4,np.ptp(indices)/3):continue
+            slope=(times[b]-times[a])/(indices[b]-indices[a])
+            proposals.append(np.asarray([slope,times[a]-slope*indices[a]]))
+    best=None
+    for line in proposals:
+        if line[0]<=0 or abs(line[0]/period-1)>.03:continue
+        residual=abs(times-np.polyval(line,indices));mask=residual<=.010
+        if mask.sum()<8:continue
+        coverage=np.ptp(indices[mask])/np.ptp(indices)
+        required=len(indices) if len(indices)<16 else max(8,.60*len(indices))
+        if mask.sum()<required or coverage<.75:continue
+        score=(int(mask.sum()),-float(residual[mask].sum()))
+        if best is None or score>best[0]:best=(score,mask)
+    if best is None:return None
+    mask=best[1]
+    for _ in range(3):
+        line=np.polyfit(indices[mask],times[mask],1)
+        updated=abs(times-np.polyval(line,indices))<=.010
+        if updated.sum()<max(8,.60*len(indices)) or np.ptp(indices[updated])<.75*np.ptp(indices):return None
+        if np.array_equal(mask,updated):break
+        mask=updated
+    return line if line[0]>0 and abs(line[0]/period-1)<=.03 else None
 
 
 class SourceWindowFailure(ValueError):
@@ -74,27 +108,23 @@ def classify_native_phase(rows, centres, references):
     baseline=float(np.median(offsets));period=float(np.median(np.diff(centres)))
     spread=float(np.percentile(abs(offsets-baseline),90))
     tolerance=max(.035,min(.060,.10*period))
-    if spread>tolerance:
+    consensus=_native_consensus(references,period)
+    if spread>tolerance and consensus is None:
         raise SourceWindowFailure('Native primary attack phase is ambiguous; review another source window')
-    indices=np.asarray([r['index'] for r in references],dtype=float)
-    reference_times=np.asarray([r['time'] for r in references],dtype=float)
-    consensus=None
-    if np.ptp(indices)>=7:
-        line=np.polyfit(indices,reference_times,1)
-        # Rescue a mislabelled coarse beat only from an independently tight
-        # native attack family. A displaced fill must still remain displaced.
-        if line[0]>0 and abs(line[0]/period-1)<=.03 and np.max(abs(reference_times-np.polyval(line,indices)))<=.010:
-            consensus=line
     accepted=[];displaced=[]
     for row in rows:
         residual=float(row['time']-centres[row['index']]-baseline)
-        if abs(residual)<=tolerance:accepted.append(row)
-        elif consensus is not None and abs(row['time']-np.polyval(consensus,row['index']))<=.010:
-            accepted.append({**row,'coarse_grid_consensus_rescue':{
-                'coarse_phase_residual_seconds':residual,
-                'native_family_residual_seconds':float(row['time']-np.polyval(consensus,row['index']))}})
-        else:displaced.append({**row,'native_phase_residual_seconds':residual,
-            'established_native_phase_offset_seconds':baseline,'assignment_tolerance_seconds':tolerance,
+        native_residual=float(row['time']-np.polyval(consensus,row['index'])) if consensus is not None else residual
+        assignment_tolerance=.010 if consensus is not None else tolerance
+        if abs(native_residual)<=assignment_tolerance:
+            if abs(residual)>tolerance:
+                accepted.append({**row,'coarse_grid_consensus_rescue':{
+                    'coarse_phase_residual_seconds':residual,'native_family_residual_seconds':native_residual}})
+            else:accepted.append(row)
+        else:displaced.append({**row,'native_phase_residual_seconds':native_residual,
+            'coarse_phase_residual_seconds':residual,
+            'assignment_reference':'stable native audio consensus' if consensus is not None else 'coarse source phase family',
+            'established_native_phase_offset_seconds':baseline,'assignment_tolerance_seconds':assignment_tolerance,
             'classification':'recognized native figure; quarter-note assignment unsupported; retain its source timing'})
     return accepted,displaced
 
@@ -122,8 +152,24 @@ def initialize_rate_reference(warp, sample_rate, *, native_bpm=None, windows=(),
         # Advanced callers without a supplied clock retain their original
         # map as the reference. Standard renderers provide the musical curve.
         active[:]=True
+        # An advanced caller can supply coarse observations without a shared
+        # musical clock. Their quarter-label jitter is not intended tempo.
+        # Estimate only the slow native trend for this legacy reference;
+        # ordinary renderers always supply the exact immutable shared curve.
+        from scipy.ndimage import uniform_filter1d
+        if any(len(m)>=10 for m in warp.get('input_output_beat_mapping',{}).values()):active[:]=False
+        for mapping in warp.get('input_output_beat_mapping',{}).values():
+            if len(mapping)<10:continue
+            native=np.asarray([p['source_seconds'] for p in mapping])*sample_rate
+            target=np.asarray([p['output_seconds'] for p in mapping])*sample_rate
+            slopes=np.diff(native)/np.diff(target)
+            smooth=uniform_filter1d(slopes,size=min(9,len(slopes)),mode='nearest')
+            middle=(output[:-1]+output[1:])/2;mask=(middle>=target[0])&(middle<=target[-1])
+            active|=mask
+            expected[mask]=np.interp(middle[mask],(target[:-1]+target[1:])/2,smooth)
     if np.any(expected<=0):raise ValueError('Invalid intended musical timing reference')
     warp['timing_rate_reference']={'expected_musical_rates':expected.tolist(),'monitored_intervals':active.tolist(),
+        'continuity_window_seconds':max([2.]+[4*60/min(w['start_bpm'],w['end_bpm']) for _,w in windows if w]),
         'maximum_timing_change':float(limit),'anchor_count':len(anchors),
         'method':'immutable intended musical rates; actual source/output frame differences are remeasured after every edit'}
 
@@ -147,7 +193,7 @@ def audit_warp_rates(warp, sample_rate, *, stage, enforce=True, check_continuity
         minimum=min(minimum,float(effective.min()));maximum=max(maximum,float(effective.max()))
         if monitored.any():worst=max(worst,float(additional[monitored].max()))
         times=np.r_[times,fine_times[monitored]];corrections=np.r_[corrections,fine_corrections[monitored]]
-    continuity=_short_term_rate_span(times,corrections) if check_continuity else {
+    continuity=_short_term_rate_span(times,corrections,reference.get('continuity_window_seconds',2.)) if check_continuity else {
         'executed':False,'passed':False,'reason':'coarse grid only; native-source refinement must pass before stretching'}
     if continuity.get('worst_output_seconds'):
         continuity['worst_source_seconds']=(np.interp(
@@ -167,7 +213,7 @@ def audit_warp_rates(warp, sample_rate, *, stage, enforce=True, check_continuity
     if enforce and worst>reference['maximum_timing_change']+1e-5:
         raise ValueError(f'Actual acoustic timing change {worst:.1%} exceeds {reference["maximum_timing_change"]:.1%}; review source phase/window')
     if enforce and check_continuity and not continuity['passed']:
-        raise ValueError(f'Short-term acoustic timing variation {continuity["maximum_correction_rate_span"]:.1%} exceeds 10.0% within one second; review source phase/window')
+        raise ValueError(f'Short-term acoustic timing variation {continuity["maximum_correction_rate_span"]:.1%} exceeds 5.0% within a bar; review source phase/window')
     return result
 
 

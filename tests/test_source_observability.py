@@ -101,12 +101,15 @@ def test_unobservable_candidate_never_enters_primary_source_controls(tmp_path,mo
     target=warp['input_output_beat_mapping']['head'][12]['output_seconds']
     anchor=next(a for a in warp['anchors'] if abs(a['output_seconds']-target)<1e-7)
     assert abs(anchor['source_seconds']-fake_time)>.015
-    # Bypassing native support used to move this point. The independent rate
-    # continuity guard must now reject that damaging edit and restore anchors.
+    # Bypassing native support still cannot authorize a shifted familiar
+    # shape: the independent native-phase family must keep it off the clock.
     monkeypatch.setattr('superdj.source_observability.bass_candidate_support',
         lambda path,warp,candidates,*args,**kwargs:(candidates,[],{'executed':False}))
     legacy=deepcopy(original)
-    with pytest.raises(SourceWindowFailure,match='Short-term acoustic timing') as exc:
-        kick_grid.refine_source_controls(native,legacy,sr,evidence)
-    assert not exc.value.evidence['short_term_timing_continuity']['passed']
-    assert legacy['anchors']==original['anchors']
+    fallback=kick_grid.refine_source_controls(native,legacy,sr,evidence)['head']
+    assert 12 not in {e['beat'] for e in fallback['events']}
+    figure=next(e for e in fallback['native_rhythm_observations'] if e['beat']==12)
+    assert abs(figure['source_seconds']-fake_time)<1/sr
+    assert figure['assignment_reference']=='stable native audio consensus'
+    moved=next(a for a in legacy['anchors'] if abs(a['output_seconds']-target)<1e-7)
+    assert abs(moved['source_seconds']-fake_time)>.015
