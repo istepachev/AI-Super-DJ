@@ -91,3 +91,26 @@ def test_rate_recovery_rejects_native_positions_only_on_the_failed_side():
     evidence['canonical_attack_rejections']={'head':[93.997,95.053]}
     assert unsupported_attack_events(evidence,'head')==[93.997,95.053,94.455]
     assert evidence['source_timing_evidence']==before['source_timing_evidence']
+
+
+def test_source_preflight_single_role_reaches_the_first_window_retry(monkeypatch):
+    from superdj import recovery
+    from superdj.transition_quality import TransitionFailure
+    from test_reliability import source_plan
+    records,plan=source_plan()
+    source_time=plan['sections']['1']['start']+2
+    evidence={'stage':'source-only timing preflight','failed_track':'1','failed_role':'head',
+        'source_timing_evidence':{'short_term_timing_continuity':{
+            'passed':False,'worst_source_seconds':[source_time]}}}
+    visited=[]
+    def solver(proposal,*args,**kwargs):
+        assert proposal['rejected_attack_window_events']['1']['head']==[source_time]
+        visited.append(True)
+        updated=deepcopy(plan)
+        updated['sections']['1']['start']+=2
+        return updated
+    monkeypatch.setattr(recovery,'arrange_sync',solver)
+    updated,_=recovery.alternative(plan,records,TransitionFailure('0','1','pulse',evidence),{},1,
+                                   sample_rate=48000,ffmpeg=None)
+    assert visited
+    assert updated['sections']['0']==plan['sections']['0']

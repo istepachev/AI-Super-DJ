@@ -40,7 +40,7 @@ def alternative(plan, records, failure, excluded, attempt, *, sample_rate, ffmpe
     elif attempt%2 == 0:
         options.reverse()
     failed_track=failure.evidence.get('failed_track')
-    failed_roles=failure.evidence.get('failed_roles',[])
+    failed_roles=failure.evidence.get('failed_roles') or ([source_role] if source_role else [])
     if failed_track and failed_roles:
         options=[item for item in options if item[0]==failed_track
                  and ('head' if item[1]=='start' else 'tail') in failed_roles]
