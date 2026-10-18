@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import numpy as np
 from scipy.signal import butter, sosfiltfilt
+from .derived_audio import derived
 
 
 def smooth(value):
@@ -12,9 +13,11 @@ def smooth(value):
 
 def split_bands(audio, sample_rate, bass_hz=180.0, high_hz=3500.0):
     """Complementary zero-phase decomposition; bands sum to the source."""
-    low = sosfiltfilt(butter(4, bass_hz, fs=sample_rate, output="sos"), audio, axis=0)
-    below_high = sosfiltfilt(butter(4, high_hz, fs=sample_rate, output="sos"), audio, axis=0)
-    return low, below_high - low, audio - below_high
+    def calculate():
+        low = sosfiltfilt(butter(4, bass_hz, fs=sample_rate, output="sos"), audio, axis=0)
+        below_high = sosfiltfilt(butter(4, high_hz, fs=sample_rate, output="sos"), audio, axis=0)
+        return low, below_high - low, audio - below_high
+    return derived('frequency_bands', audio, (sample_rate, bass_hz, high_hz), calculate)
 
 
 def envelopes(n, beats, *, tonal_conflict=False, beat_phase=None, style='default', profile=None,

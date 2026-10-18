@@ -3,8 +3,10 @@ from pathlib import Path
 from .mixing import blend,envelopes
 from .percussion import percussion_gains,verification_components,verify_blended_fronts
 from .transition_quality import TransitionFailure
+from .derived_audio import derived_scope
 
 
+@derived_scope()
 def gradual_alternative(outgoing,incoming,sample_rate,outgoing_warp,incoming_warp,
                         transition,directory,*,style,beat_phase,percussion_args,
                         initial_error,ffmpeg='ffmpeg',bass_hz=180.,tonal_conflict=False,

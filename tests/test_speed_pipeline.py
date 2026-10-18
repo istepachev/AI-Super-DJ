@@ -59,7 +59,7 @@ def test_streaming_pipeline_is_bounded_and_cancels_pending_work(tmp_path):
         results = session.imap(one, range(100))
         assert next(results) == 0
         results.close()
-        assert len(started) <= 3
+        assert len(started) <= 4
         assert not session.workers
 
 

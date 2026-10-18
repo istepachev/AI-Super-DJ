@@ -1382,11 +1382,13 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                 'next_transition': updates(position) if position < len(transitions) else {}}
 
     def prepare_overlap(position):
+        from .derived_audio import derived_scope
         clip = clips[position]
         transition = transitions[position-1]
         incoming = transition['overlap_frames']
         if not incoming:
             return None
+        @derived_scope()
         def produce():
             nonlocal transition
             with sf.SoundFile(clips[position-1]['audio_path']) as source:

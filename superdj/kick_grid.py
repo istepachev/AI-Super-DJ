@@ -4,6 +4,7 @@ This estimates attack time, not waveform phase or a calibrated kick probability.
 Unrecognised beats remain explicit gaps in coverage.
 """
 from pathlib import Path
+from .derived_audio import derived_scope
 import math
 import numpy as np
 import soundfile as sf
@@ -328,8 +329,11 @@ def refine_source_controls(path,warp,sample_rate,evidence=None):
 def template_attack_rows(audio,sample_rate,centres,templates,minimum_correlation=.65,attack_band_hz=(100,1400)):
     """Find the same source kick shape, rather than any nearby novelty peak."""
     rate=8000;divisor=math.gcd(sample_rate,rate)
-    band=resample_poly(np.mean(audio,axis=1),rate//divisor,sample_rate//divisor)
-    band=sosfiltfilt(butter(3,attack_band_hz,btype='bandpass',fs=rate,output='sos'),band)
+    from .derived_audio import derived
+    def calculate():
+        band=resample_poly(np.mean(audio,axis=1),rate//divisor,sample_rate//divisor)
+        return sosfiltfilt(butter(3,attack_band_hz,btype='bandpass',fs=rate,output='sos'),band)
+    band=derived('attack_band',audio,(sample_rate,tuple(attack_band_hz)),calculate)
     pre=96;search=280;rows=[]
     for index,(centre,template) in enumerate(zip(centres,templates)):
         post=len(template)-pre
@@ -395,6 +399,7 @@ def preserve_rendered_attacks(path, source_path, warp, sample_rate, gain=1., sou
     return islands
 
 
+@derived_scope()
 def rendered_attack_audit(path,warp,sample_rate):
     measured=[];pending=[]
     for role,source in warp.get('source_kick_alignment',{}).items():

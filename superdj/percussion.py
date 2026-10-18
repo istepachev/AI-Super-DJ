@@ -3,6 +3,7 @@ from pathlib import Path
 import hashlib
 import numpy as np
 import soundfile as sf
+from .derived_audio import derived_scope
 
 def needs_handoff(outgoing_warp,incoming_warp,*,style='default'):
     if style not in ('default','sync','zhilin'):raise ValueError('Unknown percussion mixing style')
@@ -49,12 +50,13 @@ def final_drum_estimates(outgoing,incoming,sample_rate,directory,*,ffmpeg='ffmpe
     from .stems import configuration,separate
     config=configuration()
     if config is None:raise RuntimeError('Percussion handoff requires the configured local Demucs runtime')
-    from .cues import runtime_config
     from .execution import current
-    shared_cache=current().root if current() else None
+    session=current()
+    shared_cache=session.root if session else None
     cache=Path(shared_cache)/'final-percussion' if shared_cache else Path(directory)
-    directory=Path(directory);directory.mkdir(parents=True,exist_ok=True);estimates=[];reports=[]
-    for role,pcm in (('out',outgoing),('in',incoming)):
+    directory=Path(directory);directory.mkdir(parents=True,exist_ok=True)
+    def one(item):
+        role,pcm=item
         if pcm.ndim!=2 or pcm.shape[1]!=2 or not np.isfinite(pcm).all():raise ValueError('Invalid final deck PCM')
         digest=hashlib.sha256(str(sample_rate).encode()+pcm.astype('float32').tobytes()).hexdigest();source=directory/f'{role}-{digest}.wav'
         if not source.exists():sf.write(source,pcm,sample_rate,subtype='FLOAT')
@@ -65,8 +67,10 @@ def final_drum_estimates(outgoing,incoming,sample_rate,directory,*,ffmpeg='ffmpe
             divisor=math.gcd(rate,sample_rate);drums=resample_poly(drums,sample_rate//divisor,rate//divisor,axis=0)
         if len(drums)>len(pcm):drums=drums[:len(pcm)]
         if drums.shape!=pcm.shape or not np.isfinite(drums).all():raise ValueError('Final drum estimate changed deck geometry')
-        estimates.append(drums);reports.append({'role':role,'final_deck_pcm_sha256':digest,'estimate_path':estimate['drums_path'],'provenance':estimate['provenance'],'estimated_not_ground_truth':True})
-    return {'drums_out':estimates[0],'drums_in':estimates[1]},reports
+        return drums,{'role':role,'final_deck_pcm_sha256':digest,'estimate_path':estimate['drums_path'],'provenance':estimate['provenance'],'estimated_not_ground_truth':True}
+    sides=(('out',outgoing),('in',incoming))
+    results=session.device_pair(one,sides) if session and config.get('device')!='cpu' else list(map(one,sides))
+    return {'drums_out':results[0][0],'drums_in':results[1][0]},[r[1] for r in results]
 
 def verification_components(outgoing,incoming,sample_rate,gains,*,bass_hz=180.,drums_out=None,drums_in=None):
     """Independently reconstruct each known final-deck contribution.
@@ -142,6 +146,7 @@ def _paired_front_audit(checks,sample_rate):
         'tolerance_seconds':.003,'scope':'worst recognized primary/bass difference across actual audible source contributions; prior coverage gates retained'}
 
 
+@derived_scope()
 def verify_blended_fronts(audio,sample_rate,outgoing_warp,incoming_warp,gains,directory,*,ffmpeg='ffmpeg',components=None,allow_pitch_changing_residual=False):
     """Check identified source fronts in the actual blend; bound local repair."""
     from .kick_grid import template_attack_rows

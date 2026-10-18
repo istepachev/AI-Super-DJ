@@ -52,6 +52,7 @@ def stage_fingerprint(stage, source=None):
     return hashlib.sha256(json.dumps({'code': files, 'environment': environment()}, sort_keys=True).encode()).hexdigest()
 
 _current = ContextVar('superdj_execution', default=None)
+_model_device = ContextVar('superdj_model_device', default=None)
 
 
 def current():
@@ -349,7 +350,10 @@ class Session:
                 channels=1 if kind == 'cue' else 2, ffmpeg=job.get('ffmpeg'))}
         # One process per interpreter/device, shared by cue and stem tasks.
         device = job.get('device', 'cpu')
-        if self.devices and device != 'cpu':
+        selected_device = _model_device.get()
+        if selected_device is not None and device != 'cpu':
+            device = selected_device
+        elif self.devices and device != 'cpu':
             with self.lock:
                 thread = threading.get_ident()
                 if thread not in self.thread_devices:
@@ -363,39 +367,102 @@ class Session:
                 self.workers[key] = worker = Worker(python, device, self)
         return worker.run(kind, job)
 
+    def device_pair(self, function, values):
+        """Two independent final decks, one worker on each configured GPU."""
+        devices = tuple(dict.fromkeys('cuda:0' if d == 'cuda' else d
+                                     for d in self.devices if d != 'cpu'))
+        values = tuple(values)
+        if len(values) != 2:
+            raise ValueError('A device pair requires exactly two decks')
+        if self.jobs < 2 or len(devices) < 2:
+            return list(map(function, values))
+        from .resources import available_memory
+        memory = available_memory()
+        # Extra decoder/model host buffers must fit alongside the caller.
+        needed = sum(getattr(v[1], 'nbytes', 0) for v in values)*8 + 1024**3
+        if memory is None or memory < needed:
+            return list(map(function, values))
+        def one(device, value):
+            token = _model_device.set(device)
+            try:
+                return function(value)
+            finally:
+                _model_device.reset(token)
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            futures = [pool.submit(copy_context().run, one, device, value)
+                       for device, value in zip(devices, values)]
+            try:
+                result = [f.result() for f in futures]
+            except BaseException:
+                for future in futures:
+                    future.cancel()
+                raise
+        self.count('parallel_final_deck_pairs')
+        return result
+
     def map(self, function, values):
         return list(self.imap(function, values))
 
     def imap(self, function, values):
-        """Bounded ordered pipeline; closing it cancels work not started yet."""
+        """Completion-driven bounded pipeline, delivered in input order."""
         if self.jobs == 1:
             yield from map(function, values)
             return
-        from collections import deque
         pool = ThreadPoolExecutor(max_workers=self.jobs)
         values = iter(values)
-        futures = deque()
-        try:
-            for _ in range(self.jobs):
+        context = copy_context()
+        condition = threading.Condition(threading.RLock())
+        futures = {}
+        state = dict(next=0, exhausted=False, stopped=False, failed=False)
+        from .resources import available_memory
+        memory = available_memory()
+        # At most two waves including the item held by the consumer. Running
+        # work never exceeds jobs; completed results cannot grow with set size.
+        window = 2*self.jobs-1 if memory is not None and memory > (self.jobs+1)*512*1024**2 else self.jobs
+        def completed(future):
+            with condition:
+                if not future.cancelled() and future.exception() is not None:
+                    state['failed'] = True
+                fill()
+                condition.notify_all()
+        def fill():
+            while (not any(state[k] for k in ('exhausted','stopped','failed'))
+                   and len(futures) < window
+                   and sum(not f.done() for f in futures.values()) < self.jobs):
                 try:
-                    value = next(values)
+                    value = context.copy().run(next, values)
                 except StopIteration:
+                    state['exhausted'] = True
                     break
-                futures.append(pool.submit(copy_context().run, function, value))
-            while futures:
-                result = futures.popleft().result()
-                # Start the next independent deck while its ready neighbours
-                # are being checked/blended by the consuming thread.
-                try:
-                    value = next(values)
-                except StopIteration:
-                    pass
-                else:
-                    futures.append(pool.submit(copy_context().run, function, value))
-                yield result
+                except BaseException as error:
+                    from concurrent.futures import Future
+                    failed = Future();failed.set_exception(error)
+                    futures[state['next']] = failed
+                    state['next'] += 1
+                    state['failed'] = True
+                    break
+                index = state['next'];state['next'] += 1
+                future = pool.submit(context.copy().run, function, value)
+                futures[index] = future
+                future.add_done_callback(completed)
+        try:
+            with condition:
+                fill()
+            index = 0
+            while True:
+                with condition:
+                    while index in futures and not futures[index].done():
+                        condition.wait()
+                    if index not in futures:
+                        break
+                    future = futures.pop(index);index += 1
+                    fill()
+                yield future.result()
         finally:
-            for future in futures:
-                future.cancel()
+            with condition:
+                state['stopped'] = True
+                for future in futures.values():
+                    future.cancel()
             pool.shutdown(wait=True, cancel_futures=True)
 
     def close(self):
