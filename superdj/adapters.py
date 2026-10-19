@@ -167,7 +167,7 @@ def prepare_tracks(records, work_dir, *, audamcp, ffmpeg="ffmpeg", git="git", no
         result = cached('preparation', dependencies, produce, Path(work_dir) / 'prepared')
         result['provenance']['original'] = record['path']
         return track_id, result
-    return dict(session.map(one, records))
+    return dict(session.cpu_map(one, records))
 
 
 def _prepare_tracks_uncached(records: list[dict], work_dir: str | Path, *, audamcp: str | Path, ffmpeg="ffmpeg", git="git", noise_profiles=None, progress=print,
@@ -231,7 +231,7 @@ def measure_prepared(records, prepared, work_dir, *, ffmpeg='ffmpeg', ffprobe='f
                     log=Path(work_dir)/f"{record['id']}_prepared_qa.log"), Path(work_dir)/'measurement_artifacts')
             item.update(source_measurements=measured, loudness_lufs=measured['integrated_lufs'])
         return record['id'], item
-    values = session.map(one, records) if session else list(map(one, records))
+    values = session.cpu_map(one, records) if session else list(map(one, records))
     for identity, item in values:
         prepared[identity] = item
     for record in records:

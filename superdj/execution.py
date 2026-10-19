@@ -279,10 +279,12 @@ class Worker:
 
 
 class Session:
-    def __init__(self, root, *, jobs=1, devices=(), scratch_root=None):
+    def __init__(self, root, *, jobs=1, cpu_jobs=None, devices=(), scratch_root=None):
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
         self.jobs = max(1, min(int(jobs), 4))
+        self.cpu_jobs = self.jobs if cpu_jobs is None else max(1, min(int(cpu_jobs), 4))
+        self.preparation_overlap = True
         if isinstance(devices, str) or any(not isinstance(d, str) or not (d == 'cpu' or d == 'cuda' or
                 (d.startswith('cuda:') and d[5:].isdigit())) for d in devices):
             raise ValueError('gpu_devices must be a list of available device names, for example cuda:0')
@@ -294,7 +296,10 @@ class Session:
         self.memo = {}
         self.decode_locks = {}
         self.lock = threading.Lock()
-        self.audio_next = 0
+        self.model_condition = threading.Condition()
+        self.model_running = 0
+        self.audio_condition = threading.Condition()
+        self.audio_busy = set()
         from .storage import private_path
         scratch_root = private_path(scratch_root or Path(tempfile.gettempdir())/'superdj-scratch')
         scratch_root.mkdir(parents=True, exist_ok=True)
@@ -333,14 +338,25 @@ class Session:
     def audio(self, job):
         # Never mix different upstream checkouts in one interpreter.
         checkout = job['checkout']
-        with self.lock:
-            slot = self.audio_next % self.jobs
-            self.audio_next += 1
-            key = ('audio', str(Path(checkout['path']).resolve()), checkout['revision'], slot)
-            worker = self.workers.get(key)
-            if worker is None:
-                self.workers[key] = worker = Worker(sys.executable, 'cpu', self, family='audio')
-        return worker.run('audio', job)
+        family = ('audio', str(Path(checkout['path']).resolve()), checkout['revision'])
+        # Lease a free checkout-scoped worker. Round-robin dispatch can wait on
+        # a slow mixture while a worker that finished another stem sits idle.
+        with self.audio_condition:
+            self.audio_condition.wait_for(lambda: len(self.audio_busy) < self.cpu_jobs and any(
+                (*family, slot) not in self.audio_busy for slot in range(self.cpu_jobs)))
+            key = next((*family, slot) for slot in range(self.cpu_jobs)
+                       if (*family, slot) not in self.audio_busy)
+            self.audio_busy.add(key)
+        try:
+            with self.lock:
+                worker = self.workers.get(key)
+                if worker is None:
+                    self.workers[key] = worker = Worker(sys.executable, 'cpu', self, family='audio')
+            return worker.run('audio', job)
+        finally:
+            with self.audio_condition:
+                self.audio_busy.remove(key)
+                self.audio_condition.notify_all()
 
     def model(self, python, kind, job):
         if kind in {'cue', 'stem'}:
@@ -354,10 +370,11 @@ class Session:
         if selected_device is not None and device != 'cpu':
             device = selected_device
         elif self.devices and device != 'cpu':
+            devices = tuple(dict.fromkeys('cuda:0' if d == 'cuda' else d for d in self.devices))[:self.jobs]
             with self.lock:
                 thread = threading.get_ident()
                 if thread not in self.thread_devices:
-                    self.thread_devices[thread] = self.devices[len(self.thread_devices) % len(self.devices)]
+                    self.thread_devices[thread] = devices[len(self.thread_devices) % len(devices)]
                 device = self.thread_devices[thread]
         key = (str(python), device)
         with self.lock:
@@ -365,7 +382,17 @@ class Session:
             if worker is None:
                 # Worker updates counts; avoid acquiring the same lock recursively.
                 self.workers[key] = worker = Worker(python, device, self)
-        return worker.run(kind, job)
+        # CPU queue growth must not multiply concurrent model calls, including
+        # configurations with different explicit devices/interpreters per model.
+        with self.model_condition:
+            self.model_condition.wait_for(lambda: self.model_running < self.jobs)
+            self.model_running += 1
+        try:
+            return worker.run(kind, job)
+        finally:
+            with self.model_condition:
+                self.model_running -= 1
+                self.model_condition.notify_all()
 
     def device_pair(self, function, values):
         """Two independent final decks, one worker on each configured GPU."""
@@ -405,10 +432,20 @@ class Session:
 
     def imap(self, function, values):
         """Completion-driven bounded pipeline, delivered in input order."""
-        if self.jobs == 1:
+        return self._imap(function, values, self.jobs)
+
+    def cpu_map(self, function, values):
+        return list(self.cpu_imap(function, values))
+
+    def cpu_imap(self, function, values):
+        """Independent CPU work need not wait for a model/GPU queue slot."""
+        return self._imap(function, values, self.cpu_jobs)
+
+    def _imap(self, function, values, jobs):
+        if jobs == 1:
             yield from map(function, values)
             return
-        pool = ThreadPoolExecutor(max_workers=self.jobs)
+        pool = ThreadPoolExecutor(max_workers=jobs)
         values = iter(values)
         context = copy_context()
         condition = threading.Condition(threading.RLock())
@@ -418,7 +455,7 @@ class Session:
         memory = available_memory()
         # At most two waves including the item held by the consumer. Running
         # work never exceeds jobs; completed results cannot grow with set size.
-        window = 2*self.jobs-1 if memory is not None and memory > (self.jobs+1)*512*1024**2 else self.jobs
+        window = 2*jobs-1 if memory is not None and memory > (jobs+1)*512*1024**2 else jobs
         def completed(future):
             with condition:
                 if not future.cancelled() and future.exception() is not None:
@@ -428,7 +465,7 @@ class Session:
         def fill():
             while (not any(state[k] for k in ('exhausted','stopped','failed'))
                    and len(futures) < window
-                   and sum(not f.done() for f in futures.values()) < self.jobs):
+                   and sum(not f.done() for f in futures.values()) < jobs):
                 try:
                     value = context.copy().run(next, values)
                 except StopIteration:
@@ -466,6 +503,8 @@ class Session:
             pool.shutdown(wait=True, cancel_futures=True)
 
     def close(self):
+        self.metrics['concurrency'] = {'model_jobs': self.jobs, 'cpu_jobs': self.cpu_jobs,
+                                       'preparation_overlap': self.preparation_overlap}
         for worker in self.workers.values():
             worker.close()
         self.scratch.cleanup()
@@ -473,14 +512,14 @@ class Session:
 
 
 @contextmanager
-def execution(cache=None, *, jobs=1, devices=(), report=None, scratch_root=None):
+def execution(cache=None, *, jobs=1, cpu_jobs=None, devices=(), report=None, scratch_root=None):
     if current() is not None:
         yield current()
         return
     from .storage import private_path, write_json
     temporary = tempfile.TemporaryDirectory(prefix='superdj-') if cache is None else None
     root = private_path(cache if cache is not None else temporary.name)
-    session = Session(root, jobs=jobs, devices=devices, scratch_root=scratch_root)
+    session = Session(root, jobs=jobs, cpu_jobs=cpu_jobs, devices=devices, scratch_root=scratch_root)
     session.persistent = cache is not None
     session.metrics['cache_policy'] = 'persistent' if session.persistent else 'temporary'
     # Worker creation counts under this lock as well.

@@ -139,8 +139,9 @@ def revise(args):
     cache = None if args.no_cache else args.cache or (runtime.get('cache_root') if runtime.get('cache_mode')=='persistent' else None)
     resources = preflight([r['path'] for r in source_manifest['selection_and_analysis']], output=output,
         scratch=runtime.get('scratch_root'),cache=cache,jobs=args.jobs or runtime.get('jobs'),
+        cpu_jobs=getattr(args,'cpu_jobs',None) or (None if args.jobs is not None else runtime.get('cpu_jobs')),
         devices=runtime.get('gpu_devices',()),ffprobe=runtime.get('ffprobe','ffprobe'),sample_rate=manifest['render']['sample_rate'])
-    with execution(cache,jobs=resources['jobs'],devices=resources['devices'],scratch_root=runtime.get('scratch_root'),
+    with execution(cache,jobs=resources['jobs'],cpu_jobs=resources['cpu_jobs'],devices=resources['devices'],scratch_root=runtime.get('scratch_root'),
                    report=output/'performance.json') as session:
         session.metrics['resources'] = resources
         verified = validated_records(source_manifest,session,ffmpeg=runtime.get('ffmpeg','ffmpeg'))

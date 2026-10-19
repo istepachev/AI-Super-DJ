@@ -163,6 +163,27 @@ def test_unknown_memory_finalization_is_serial(tmp_path,monkeypatch):
     assert calls==['rhythm','encode']
 
 
+@pytest.mark.parametrize('model_jobs,cpu_jobs',[(1,2),(2,1)])
+def test_finalization_uses_cpu_admission_independently_of_model_limit(tmp_path,resources,monkeypatch,model_jobs,cpu_jobs):
+    from superdj import integrity,quality
+    from superdj.execution import execution
+    encoded=threading.Event()
+    def encode(master,directory,name,**kw):
+        path=Path(directory)/f'{name}.flac';path.write_bytes(b'verified')
+        encoded.set()
+        return {'flac':{'path':str(path)}}
+    def rhythm(*args):
+        if cpu_jobs>=2:assert encoded.wait(5)
+        else:assert not encoded.is_set()
+        return {'verified':True}
+    monkeypatch.setattr(quality,'export_audio',encode)
+    monkeypatch.setattr(integrity,'verify_master_rhythm',rhythm)
+    with execution(jobs=model_jobs,cpu_jobs=cpu_jobs)as session:
+        checked,_=finish_verified('reference','master',{},tmp_path/'out','set',mp3=False)
+        assert checked['verified']
+        assert session.metrics['counts'].get('parallel_master_check_exports',0)==int(cpu_jobs>=2)
+
+
 def test_serial_and_parallel_actual_exports_are_byte_identical(tmp_path,resources):
     import soundfile as sf
     from superdj.audio import ffmpeg_executable

@@ -607,6 +607,7 @@ def main(argv=None):
     mp.add_argument("--cache", help="Opt in to a persistent content cache outside the repository")
     mp.add_argument("--no-cache", action="store_true", help="Use temporary scratch only; remove it after the run")
     mp.add_argument("--jobs", type=int, choices=range(1,5), help="Bound independent track tasks (1-4)")
+    mp.add_argument("--cpu-jobs", type=int, choices=range(1,5), help="Separate CPU preparation/render limit (1-4); resource checks may reduce it")
     revision = subs.add_parser('revise', help='Repair a transition or remove tracks and replan the remaining suffix')
     revision.add_argument('--manifest', required=True)
     change = revision.add_mutually_exclusive_group(required=True)
@@ -617,6 +618,7 @@ def main(argv=None):
     revision.add_argument('--cache')
     revision.add_argument('--no-cache', action='store_true')
     revision.add_argument('--jobs', type=int, choices=range(1,5))
+    revision.add_argument('--cpu-jobs', type=int, choices=range(1,5))
     ap = subs.add_parser("analyze")
     ap.add_argument("--work", required=True)
     _audio(ap); _source(ap)
@@ -713,8 +715,8 @@ def main(argv=None):
             runtime = runtime_config()
             records = _records(args.records)
             resources = preflight([row['path'] for row in records],output=args.output,scratch=args.work,
-                jobs=runtime.get('jobs'),devices=runtime.get('gpu_devices',()),ffprobe=args.ffprobe,sample_rate=args.sample_rate)
-            with execution(jobs=resources['jobs'],devices=resources['devices'],scratch_root=runtime.get('scratch_root'),
+                jobs=runtime.get('jobs'),cpu_jobs=runtime.get('cpu_jobs'),devices=runtime.get('gpu_devices',()),ffprobe=args.ffprobe,sample_rate=args.sample_rate)
+            with execution(jobs=resources['jobs'],cpu_jobs=resources['cpu_jobs'],devices=resources['devices'],scratch_root=runtime.get('scratch_root'),
                            report=Path(args.output)/'performance.json') as session:
                 session.metrics['resources'] = resources
                 render(args,records=records)
@@ -728,16 +730,19 @@ def main(argv=None):
             from .defaults import playback_defaults
             resources = preflight([row['path'] for row in _playlist(args)['tracks']], output=args.output,
                 scratch=args.work, cache=args.cache, jobs=runtime.get('jobs'),
+                cpu_jobs=runtime.get('cpu_jobs'),
                 devices=runtime.get('gpu_devices',()), ffprobe=args.ffprobe, sample_rate=args.sample_rate,
                 target_play_seconds=playback_defaults(long_play=args.long_play,target_play_seconds=args.track_play_seconds)['target_play_range_seconds'][1])
         with execution(args.cache, jobs=resources['jobs'] if resources else 1,
+                       cpu_jobs=resources['cpu_jobs'] if resources else None,
                        devices=resources['devices'] if resources else (),
                        report=Path(args.output) / 'performance.json', scratch_root=runtime.get('scratch_root')) as session:
             if resources:
                 session.metrics['resources'] = resources
+                session.preparation_overlap = resources['preparation_overlap']
             args.cache = str(session.root)
             from .pipeline import PreparationPipeline
-            pipeline = PreparationPipeline(args, session) if not args.prepared else None
+            pipeline = PreparationPipeline(args, session) if not args.prepared and session.preparation_overlap else None
             try:
                 with session.phase('analysis_wall'):
                     records = analyze(args, on_analyzed=pipeline.submit if pipeline else None)

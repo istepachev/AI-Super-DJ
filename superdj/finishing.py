@@ -73,7 +73,7 @@ def finish_verified(reference, master, rendered, output, name, *, ffmpeg='ffmpeg
     longest = max((edge.get('overlap_frames', 0) for edge in rendered.get('transitions', [])), default=0)
     required = max(512*1024**2, (longest+2*rendered.get('sample_rate', 0))*2*8*6)
     admitted = ((os.cpu_count() or 1) >= 2 and memory is not None and memory >= required
-                and (session is None or session.jobs >= 2))
+                and (session is None or session.cpu_jobs >= 2))
     parallel = admitted if parallel is None else bool(parallel) and admitted
     with tempfile.TemporaryDirectory(prefix='.superdj-export-', dir=output) as temporary:
         stage = Path(temporary)

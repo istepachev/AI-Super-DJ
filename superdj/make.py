@@ -63,9 +63,12 @@ def _make(args):
     resources = preflight(files, output=output, scratch=work,
         cache=current().root if current().persistent else None,
         jobs=getattr(args,'jobs',None) or runtime.get('jobs'),devices=runtime.get('gpu_devices',()),ffprobe=ffprobe,sample_rate=1,
+        cpu_jobs=getattr(args,'cpu_jobs',None) or (None if getattr(args,'jobs',None) is not None else runtime.get('cpu_jobs')),
         target_play_seconds=playback_defaults(long_play=getattr(args,'long_play',False),
             target_play_seconds=getattr(args,'track_play_seconds',None))['target_play_range_seconds'][1])
     current().jobs = resources['jobs']
+    current().cpu_jobs = resources['cpu_jobs']
+    current().preparation_overlap = resources['preparation_overlap']
     current().devices = tuple(resources['devices'])
     current().metrics['resources'] = resources
     short_exclusions=[]

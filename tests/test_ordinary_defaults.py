@@ -230,7 +230,8 @@ def test_single_file_still_uses_mastering_branch_not_set_ordering(tmp_path,monke
     # Dispatch is independent of executable discovery; resource probing has its
     # own real-backend coverage. Keep the fixture portable on Windows too.
     monkeypatch.setattr('superdj.resources.preflight',lambda *a,**kw:{
-        'jobs':1,'devices':[],'source_probes':[{'duration_seconds':.1,'sample_rate':8000}]})
+        'jobs':1,'cpu_jobs':1,'preparation_overlap':False,'devices':[],
+        'source_probes':[{'duration_seconds':.1,'sample_rate':8000}]})
     def prepare(records,*args,**kwargs):
         calls.append('prepare')
         return {records[0]['id']:{'path':str(source)}}

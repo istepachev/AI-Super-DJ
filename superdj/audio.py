@@ -139,14 +139,23 @@ def decoded_artifact(source, *, sample_rate=22050, channels=1, ffmpeg=None):
 
 def read_decoded(descriptor, *, sample_rate, channels):
     """Validate shared PCM before a model uses it; never silently resample it."""
-    from .execution import sha256
+    import hashlib
     if (descriptor.get('format') != DECODER_VERSION or descriptor.get('sample_rate') != sample_rate
             or descriptor.get('channels') != channels):
         raise ValueError('Shared PCM does not match the model input format')
     path = Path(descriptor['path'])
-    if path.stat().st_size != descriptor['frames'] * channels * 4 or sha256(path) != descriptor['sha256']:
-        raise ValueError('Shared PCM failed its integrity check')
-    audio = np.fromfile(path, dtype='<f4').reshape(-1, channels)
+    samples = descriptor['frames'] * channels
+    # Hash the very bytes the model will consume, rather than reading the same
+    # immutable input once for its digest and again for its array. Keep an owned
+    # writable array: inference must not retain a mapping or an open input file.
+    with path.open('rb') as stream:
+        if os.fstat(stream.fileno()).st_size != samples * 4:
+            raise ValueError('Shared PCM failed its integrity check')
+        audio = np.fromfile(stream, dtype='<f4', count=samples)
+        if (audio.size != samples or stream.read(1) or
+                hashlib.sha256(memoryview(audio).cast('B')).hexdigest() != descriptor['sha256']):
+            raise ValueError('Shared PCM failed its integrity check')
+    audio = audio.reshape(-1, channels)
     if not np.isfinite(audio).all():
         raise ValueError('Shared PCM contains nonfinite audio')
     return audio[:, 0].copy() if channels == 1 else audio

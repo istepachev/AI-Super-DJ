@@ -1547,7 +1547,7 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
     from contextlib import closing, nullcontext
     from .execution import current
     session = current()
-    rendered = session.imap(render_one, enumerate(order)) if session else map(render_one, enumerate(order))
+    rendered = session.cpu_imap(render_one, enumerate(order)) if session else map(render_one, enumerate(order))
     with closing(rendered) if session else nullcontext(rendered) as results:
         for position, identity, result in results:
             warnings.extend(result['warnings'])

@@ -67,7 +67,7 @@ def admit_master(frames, sample_rate, channels=2, *, memory=None):
             'available_memory_bytes':memory,'reservation':False}
 
 
-def preflight(files, *, output, scratch=None, cache=None, jobs=None, devices=(), ffprobe='ffprobe',
+def preflight(files, *, output, scratch=None, cache=None, jobs=None, cpu_jobs=None, devices=(), ffprobe='ffprobe',
               sample_rate=44100, target_play_seconds=240., machine=None, probe=None, disk=None):
     files = list(files)
     machine = hardware() if machine is None else machine
@@ -90,6 +90,7 @@ def preflight(files, *, output, scratch=None, cache=None, jobs=None, devices=(),
     memory = machine.get('available_memory_bytes')
     reserve = GIB
     requested = min(4, max(1, int(jobs))) if jobs is not None else min(2, max(1, machine['cpu_threads']//4))
+    requested_cpu = requested if cpu_jobs is None else min(4, max(1, int(cpu_jobs)))
     selected = requested
     if memory is not None:
         # A lower bound is a hard refusal; upper estimates cap concurrency and
@@ -116,6 +117,12 @@ def preflight(files, *, output, scratch=None, cache=None, jobs=None, devices=(),
         cuda_count = sum(device in gpu_rows for device in chosen)
         if cuda_count:
             selected = min(selected, cuda_count)
+    # CPU preparation/rendering has its own queue. Reserve the concurrently
+    # admitted analysis/model slots too, rather than multiplying the old RAM
+    # allowance by two independent settings. Unknown RAM permits serial phases.
+    capacity = max(1, int((memory-reserve)//task_peak)) if memory is not None else 1
+    cpu_selected = min(requested_cpu, max(1, machine['cpu_threads']//2), max(1, capacity-selected))
+    preparation_overlap = memory is not None and capacity >= selected+cpu_selected
     allocations = [(scratch or Path(tempfile.gettempdir())/'superdj-scratch', int(source_pcm*4+rendered_pcm*7)),
                    (output, int(rendered_pcm*2))]
     allocations.append((cache or tempfile.gettempdir(), int(source_pcm*4+(rendered_pcm*3 if cache else 0))))
@@ -129,7 +136,9 @@ def preflight(files, *, output, scratch=None, cache=None, jobs=None, devices=(),
         if entry['free_bytes'] < entry['required_bytes']:
             raise OSError(f"Insufficient temporary/output disk space at {entry['path']}: "
                 f"{entry['required_bytes']/GIB:.1f} GiB estimated, {entry['free_bytes']/GIB:.1f} GiB free")
-    return {'jobs': selected, 'requested_jobs': jobs, 'devices': chosen, 'hardware': machine,
+    return {'jobs': selected, 'requested_jobs': jobs, 'cpu_jobs': cpu_selected,
+            'requested_cpu_jobs': cpu_jobs, 'preparation_overlap': preparation_overlap,
+            'devices': chosen, 'hardware': machine,
             'source_probes': [{'path':str(path),'duration_seconds':duration,'sample_rate':rate}
                               for path,(duration,rate) in zip(files,rows)],
             'estimated_master_peak_bytes': master_peak, 'estimated_task_peak_bytes': task_peak,

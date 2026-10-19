@@ -9,8 +9,8 @@ import threading
 class PreparationPipeline:
     def __init__(self, args, session):
         self.args, self.session = args, session
-        self.pool = ThreadPoolExecutor(max_workers=session.jobs)
-        self.capacity = threading.Semaphore(2*session.jobs)
+        self.pool = ThreadPoolExecutor(max_workers=session.cpu_jobs)
+        self.capacity = threading.Semaphore(2*session.cpu_jobs)
         self.lock = threading.Lock()
         self.futures = {}
         self.failure = None
