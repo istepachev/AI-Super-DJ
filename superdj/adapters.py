@@ -92,6 +92,19 @@ def _worker(job: dict) -> dict:
         return {"path": job["output"], "provenance": {**job["checkout"], "executed": True, "bridge": "audamcp.audio_io.load/save", **report}}
     if job["action"] == "master":
         from tools.mastering import master_tracks as mastering_module
+        if job.get('memory',{}).get('mode')=='bounded':
+            from .stream_master import master
+            result,resources=master(job['input'],job['output'],mastering_module,
+                target_lufs=job['target_lufs'],ceiling_db=job['ceiling_db'],
+                limiter_lookahead_ms=job.get('limiter_lookahead_ms',5.),
+                block=job['memory']['block_frames'],scratch=job.get('scratch'),
+                # Sequential file windows avoid I/O/thread overhead measured
+                # in the bounded path; the in-memory adapter keeps its pool.
+                lra_jobs=1)
+            return {'path':job['output'],'provenance':{**job['checkout'],'executed':True,
+                'function':'superdj.stream_master.master; audited ordinary upstream preset',
+                'ceiling_db':job['ceiling_db'],'memory':job['memory'],'bounded_master':resources,
+                'upstream_measurements_before_encoded_QA':result}}
         master_track = mastering_module.master_track
         preset = {"target_lufs": job["target_lufs"], "compress_ratio": 1.0, "output_bits": 24,
                   "dither_bits": 24, "processing_oversample": 1, "limiter_lookahead_ms": job.get("limiter_lookahead_ms", 5),
@@ -141,6 +154,10 @@ def run_worker(job: dict, directory: str | Path, tag: str) -> dict:
         return result
     env = dict(os.environ)
     env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1])
+    if job.get('action')=='master':
+        threads=str(1 if job.get('memory',{}).get('constrained') else min(4,job.get('cpu_jobs',1)))
+        for name in ('OPENBLAS_NUM_THREADS','OMP_NUM_THREADS','MKL_NUM_THREADS'):
+            env[name]=threads
     result = subprocess.run([sys.executable, "-m", "superdj.adapters", str(job_file), str(result_file)], env=env, capture_output=True)
     (work / f"{tag}.log").write_bytes(result.stdout + result.stderr)
     if result.returncode:
@@ -210,9 +227,32 @@ def _prepare_tracks_uncached(records: list[dict], work_dir: str | Path, *, audam
 
 def master_set(input_path, output_path, work_dir, *, bitwize, git="git", target_lufs=-14.0, ceiling_db=-1.5,
                limiter_lookahead_ms=5.0):
+    from .execution import current
+    from .resources import admit_master,_disk,GIB
+    import soundfile as sf
+    session=current()
+    # Models and preparation interpreters are idle after the completed render.
+    # Release their actual allocations before choosing the mastering strategy.
+    if session: session.release_workers()
+    info=sf.info(input_path)
+    memory=admit_master(info.frames,info.samplerate,info.channels)
+    scratch=session.work if session else Path(work_dir)
+    _,scratch_volume,free=_disk(scratch)
+    _,output_volume,output_free=_disk(Path(output_path).parent)
+    required=memory['temporary_pcm_bytes_estimate']
+    output_bytes=info.frames*info.channels*3+GIB
+    if scratch_volume==output_volume:
+        required+=output_bytes
+    elif output_free<output_bytes:
+        raise OSError('Insufficient output disk space for the complete master')
+    if free<required:
+        raise OSError('Insufficient temporary disk space for the bounded complete master')
+    if session: session.metrics['master_admission']=memory
     return run_worker({"action": "master", "checkout": checkout_info(bitwize, "bitwize", git),
                        "input": str(input_path), "output": str(output_path), "target_lufs": target_lufs,
-                       "ceiling_db": ceiling_db, "limiter_lookahead_ms": limiter_lookahead_ms}, work_dir, "master")
+                       "ceiling_db": ceiling_db, "limiter_lookahead_ms": limiter_lookahead_ms,
+                       'memory':memory,'scratch':str(scratch),
+                       'cpu_jobs':session.cpu_jobs if session else 1}, work_dir, "master")
 
 
 def measure_prepared(records, prepared, work_dir, *, ffmpeg='ffmpeg', ffprobe='ffprobe'):

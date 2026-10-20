@@ -62,7 +62,7 @@ def finish_verified(reference, master, rendered, output, name, *, ffmpeg='ffmpeg
     from .integrity import verify_master_rhythm
     from .quality import export_audio
     from .execution import current, phase
-    from .resources import available_memory
+    from .resources import available_memory,memory_policy
     output = private_path(output)
     output.mkdir(parents=True, exist_ok=True)
     extensions = ('flac', 'mp3') if mp3 else ('flac',)
@@ -72,7 +72,9 @@ def finish_verified(reference, master, rendered, output, name, *, ffmpeg='ffmpeg
     memory = available_memory()
     longest = max((edge.get('overlap_frames', 0) for edge in rendered.get('transitions', [])), default=0)
     required = max(512*1024**2, (longest+2*rendered.get('sample_rate', 0))*2*8*6)
-    admitted = ((os.cpu_count() or 1) >= 2 and memory is not None and memory >= required
+    policy=memory_policy(memory=memory)
+    admitted = ((os.cpu_count() or 1) >= 2 and memory is not None and policy['buffer_budget_bytes'] >= required
+                and not policy['constrained']
                 and (session is None or session.cpu_jobs >= 2))
     parallel = admitted if parallel is None else bool(parallel) and admitted
     with tempfile.TemporaryDirectory(prefix='.superdj-export-', dir=output) as temporary:

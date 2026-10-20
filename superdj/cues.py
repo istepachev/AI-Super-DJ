@@ -73,9 +73,12 @@ def configuration() -> dict | None:
     }.items():
         if digest_file(model / name) != expected:
             raise ValueError("CUE-DETR configuration differs from audited content")
+    from .resources import memory_policy
+    policy=current().resource_policy if current() else memory_policy()
     return {"model": str(model), "sha256": digest,
             "python": os.environ.get("SUPERDJ_CUE_PYTHON") or runtime.get("cue_python") or sys.executable,
-            "device": runtime.get("cue_device", "auto")}
+            "device": runtime.get("cue_device", "auto"),
+            'cue_batch_size':1 if policy['constrained'] else 32}
 
 
 def infer(source: str | Path, cache: Path, config: dict) -> dict:
@@ -143,7 +146,7 @@ def _worker(job: dict) -> dict:
     positions, raw_scores = [], []
     # Whole-track normalization; bounded inference batches can differ slightly
     # from upstream's single batch. Keep the executed batch size in provenance.
-    batch_size = 32
+    batch_size = max(1,min(32,int(job.get('cue_batch_size',32))))
     with torch.inference_mode():
         for start in range(0, len(images), batch_size):
             batch = images[start:start + batch_size]

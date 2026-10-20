@@ -26,6 +26,8 @@ The audamcp and Bitwize licenses were checked in the actual pinned local checkou
 
 The sequence optimizer is an original, transparent implementation based on stated musical costs. DeckWave's harmonic-transition workflow and music-hearing's acoustic descriptors informed the design review; their code is not copied into this repository.
 
+The ordinary mastering preset also has an identified bounded-memory adaptation in `superdj.stream_master`. It validates the pinned upstream functions, carries the original float64 highpass/limiter state across blocks and retains polyphase context, whole-file gating and dither draw order. The installed pyloudnorm meter is inspected and adapted at runtime only after exact function checks: its gating/reductions remain in place while filtered window energies are streamed. External source checkouts are unchanged. Unsupported code stops bounded processing rather than allocating the full recording. Temporary DOUBLE PCM is removed after use. This adaptation covers the ordinary adapter preset, not arbitrary upstream genre processing.
+
 Music and personal playlists are local inputs. The project's software license grants no rights to publish those recordings. The public code repository excludes them by design.
 
 ## Neural cue and voice adapters (0.8)

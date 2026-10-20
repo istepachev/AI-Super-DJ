@@ -70,6 +70,7 @@ def _make(args):
     current().cpu_jobs = resources['cpu_jobs']
     current().preparation_overlap = resources['preparation_overlap']
     current().devices = tuple(resources['devices'])
+    current().resource_policy=resources.get('memory_policy',current().resource_policy)
     current().metrics['resources'] = resources
     short_exclusions=[]
     if folder_input:

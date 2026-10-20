@@ -144,6 +144,7 @@ def revise(args):
     with execution(cache,jobs=resources['jobs'],cpu_jobs=resources['cpu_jobs'],devices=resources['devices'],scratch_root=runtime.get('scratch_root'),
                    report=output/'performance.json') as session:
         session.metrics['resources'] = resources
+        session.resource_policy=resources.get('memory_policy',session.resource_policy)
         verified = validated_records(source_manifest,session,ffmpeg=runtime.get('ffmpeg','ffmpeg'))
         working = deepcopy(manifest)
         # Keep removed records only for order/id validation; they need no decoding.

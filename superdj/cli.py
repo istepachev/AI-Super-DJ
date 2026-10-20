@@ -719,6 +719,8 @@ def main(argv=None):
             with execution(jobs=resources['jobs'],cpu_jobs=resources['cpu_jobs'],devices=resources['devices'],scratch_root=runtime.get('scratch_root'),
                            report=Path(args.output)/'performance.json') as session:
                 session.metrics['resources'] = resources
+                session.resource_policy=resources.get('memory_policy',session.resource_policy)
+                session.preparation_overlap=resources['preparation_overlap']
                 render(args,records=records)
     elif args.command == "run":
         from .execution import execution, current
@@ -739,6 +741,7 @@ def main(argv=None):
                        report=Path(args.output) / 'performance.json', scratch_root=runtime.get('scratch_root')) as session:
             if resources:
                 session.metrics['resources'] = resources
+                session.resource_policy=resources.get('memory_policy',session.resource_policy)
                 session.preparation_overlap = resources['preparation_overlap']
             args.cache = str(session.root)
             from .pipeline import PreparationPipeline

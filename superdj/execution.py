@@ -285,6 +285,11 @@ class Session:
         self.jobs = max(1, min(int(jobs), 4))
         self.cpu_jobs = self.jobs if cpu_jobs is None else max(1, min(int(cpu_jobs), 4))
         self.preparation_overlap = True
+        from .resources import memory_policy
+        self.resource_policy=memory_policy()
+        if self.resource_policy['constrained']:
+            self.jobs=self.cpu_jobs=1
+            self.preparation_overlap=False
         if isinstance(devices, str) or any(not isinstance(d, str) or not (d == 'cpu' or d == 'cuda' or
                 (d.startswith('cuda:') and d[5:].isdigit())) for d in devices):
             raise ValueError('gpu_devices must be a list of available device names, for example cuda:0')
@@ -347,6 +352,7 @@ class Session:
             key = next((*family, slot) for slot in range(self.cpu_jobs)
                        if (*family, slot) not in self.audio_busy)
             self.audio_busy.add(key)
+        worker=None
         try:
             with self.lock:
                 worker = self.workers.get(key)
@@ -354,6 +360,10 @@ class Session:
                     self.workers[key] = worker = Worker(sys.executable, 'cpu', self, family='audio')
             return worker.run('audio', job)
         finally:
+            if self.resource_policy['constrained'] and worker is not None:
+                with self.lock:
+                    self.workers.pop(key,None)
+                worker.close()
             with self.audio_condition:
                 self.audio_busy.remove(key)
                 self.audio_condition.notify_all()
@@ -377,19 +387,24 @@ class Session:
                     self.thread_devices[thread] = devices[len(self.thread_devices) % len(devices)]
                 device = self.thread_devices[thread]
         key = (str(python), device)
-        with self.lock:
-            worker = self.workers.get(key)
-            if worker is None:
-                # Worker updates counts; avoid acquiring the same lock recursively.
-                self.workers[key] = worker = Worker(python, device, self)
         # CPU queue growth must not multiply concurrent model calls, including
         # configurations with different explicit devices/interpreters per model.
         with self.model_condition:
             self.model_condition.wait_for(lambda: self.model_running < self.jobs)
             self.model_running += 1
         try:
+            with self.lock:
+                worker=self.workers.get(key)
+                if worker is None:
+                    self.workers[key]=worker=Worker(python,device,self)
+            if self.resource_policy['constrained']:
+                job={**job,'cue_batch_size':1}
             return worker.run(kind, job)
         finally:
+            if self.resource_policy['constrained'] and 'worker' in locals():
+                with self.lock:
+                    self.workers.pop(key,None)
+                worker.close()
             with self.model_condition:
                 self.model_running -= 1
                 self.model_condition.notify_all()
@@ -502,11 +517,19 @@ class Session:
                     future.cancel()
             pool.shutdown(wait=True, cancel_futures=True)
 
+    def release_workers(self):
+        """Only at a completed phase boundary; never interrupt running work."""
+        with self.model_condition,self.audio_condition:
+            if self.model_running or self.audio_busy:
+                raise RuntimeError('Cannot release workers during an active audio/model operation')
+            workers=list(self.workers.values())
+            self.workers.clear()
+        for worker in workers: worker.close()
+
     def close(self):
         self.metrics['concurrency'] = {'model_jobs': self.jobs, 'cpu_jobs': self.cpu_jobs,
                                        'preparation_overlap': self.preparation_overlap}
-        for worker in self.workers.values():
-            worker.close()
+        self.release_workers()
         self.scratch.cleanup()
         self.metrics['wall_seconds'] = time.perf_counter() - self.started
 

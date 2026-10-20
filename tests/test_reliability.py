@@ -224,8 +224,8 @@ def test_resource_admission_caps_jobs_aggregates_shared_disk_and_refuses_shortag
         preflight(['a','b'],output=tmp_path,machine=machine(),probe=probe,disk=lambda p:(tmp_path,'one',GIB))
     with pytest.raises(MemoryError,match='RAM'):
         preflight(['a']*30,output=tmp_path,machine=machine(GIB),probe=probe,disk=disk)
-    with pytest.raises(ValueError,match='unavailable'):
-        preflight(['a'],output=tmp_path,devices=['cuda:1'],machine=machine(),probe=probe,disk=disk)
+    fallback=preflight(['a'],output=tmp_path,devices=['cuda:1'],machine=machine(),probe=probe,disk=disk)
+    assert fallback['devices']==['cpu'] and fallback['device_fallback']
 
 
 def test_unknown_memory_and_gpu_probe_do_not_claim_reservation(tmp_path):
@@ -234,10 +234,10 @@ def test_unknown_memory_and_gpu_probe_do_not_claim_reservation(tmp_path):
     assert report['jobs']==1 and not report['estimate_is_reservation']
 
 
-def test_actual_master_admission_refuses_large_set_before_allocation():
+def test_actual_master_admission_streams_large_set_before_allocation():
     from superdj.resources import admit_master
-    with pytest.raises(MemoryError,match='complete master'):
-        admit_master(44100*7200,44100,memory=8*GIB)
+    report=admit_master(44100*7200,44100,memory=8*GIB)
+    assert report['mode']=='bounded' and report['required_bytes_estimate']<GIB
     assert admit_master(44100*120,44100,memory=8*GIB)['reservation'] is False
 
 
