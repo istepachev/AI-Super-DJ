@@ -8,7 +8,7 @@ version = "0.21.0"
 description = "AI Super DJ: local music planning, DJ Zhilin mixing and verified audio export"
 requires-python = ">=3.12"
 license = {text = "MIT"}
-dependencies = ["numpy>=1.26,<3", "scipy>=1.14,<2", "soundfile>=0.13,<1", "librosa>=0.11,<2", "pyloudnorm>=0.1,<1", "PyYAML>=6,<7"]
+dependencies = ["numpy>=1.26,<3", "scipy>=1.14,<2", "soundfile>=0.13,<1", "librosa>=0.11,<2", "pyloudnorm==0.2.0", "PyYAML>=6,<7"]
 
 [project.optional-dependencies]
 grid = ["beat-this==1.1.0"]
