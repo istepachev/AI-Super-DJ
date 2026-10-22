@@ -20,7 +20,8 @@ def preserve_short_tracks(plan,records,prepared,directory):
         # not a user cue lock and cannot survive as an accidental new minimum.
         section['minimum_play_seconds']=60.
         section['preferred_short_play_seconds']=120.
-        played=float(section['predicted_play_seconds'])
+        chapter=section.get('duration_budget_basis')=='chapter interval'
+        played=float(section['predicted_chapter_seconds'] if chapter else section['predicted_play_seconds'])
         if played>=120:continue
         row=by_id[identity];item=files.get(identity)
         if not item or not item.get('path'):
@@ -38,7 +39,7 @@ def preserve_short_tracks(plan,records,prepared,directory):
             reviews.append(review)
             if played<60-1e-6:
                 raise RenderError(f'{identity}: selected playback is {played:.2f}s, below the one-minute floor; no supported loop, choose a longer source span or exclude this short source explicitly')
-            result.setdefault('section_warnings',[]).append(f'{identity}: retains {played:.2f}s full playback; optional phrase loop unavailable ({reason})')
+            result.setdefault('section_warnings',[]).append(f'{identity}: retains {played:.2f}s {"CUE chapter" if chapter else "full playback"}; optional phrase loop unavailable ({reason})')
             continue
         edit={'id':identity,'method':METHOD,**choice,
             'aligned_preparation_streams':streams,'original_source_duration_seconds':row['duration'],
@@ -73,7 +74,8 @@ def preserve_short_tracks(plan,records,prepared,directory):
         row['structure']=sorted([{**s,'time':s['time']+(added if s['time']>=insertion-1e-6 else 0)} for s in structure]
             +[{**s,'time':s['time']+length*j} for j in range(1,count+1) for s in loop_rows],key=lambda s:s['time'])
         section['end']+=added
-        for key in ('source_span_seconds','predicted_solo_seconds','predicted_play_seconds'):section[key]+=added
+        for key in ('source_span_seconds','predicted_solo_seconds','predicted_play_seconds','predicted_chapter_seconds'):
+            if key in section:section[key]+=added
         section['minimum_repeat']=edit
         if position<len(result['edges']):result['edges'][position]['cue_locks']['outgoing_end_seconds']+=added
         result.setdefault('section_warnings',[]).append(f'{identity}: optional smooth phrase loop adds {added:.2f}s; full playback {section["predicted_play_seconds"]:.2f}s')

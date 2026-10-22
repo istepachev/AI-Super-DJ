@@ -17,7 +17,7 @@ from superdj.planner import plan_tracks, transition_score
 def test_full_playback_defaults_require_an_explicit_long_request():
     from superdj.defaults import playback_defaults
     assert playback_defaults()=={'target_play_seconds':210.,'maximum_play_seconds':300.,
-        'target_play_range_seconds':[180.,240.],'allow_long_play':False}
+        'target_play_range_seconds':[180.,240.],'allow_long_play':False,'duration_budget_basis':'chapter interval','chapter_dominance':{'minimum_fraction':.8,'preferred_fraction':.9}}
     with pytest.raises(ValueError,match='--long-play'):playback_defaults(target_play_seconds=360)
     assert playback_defaults(long_play=True)['target_play_seconds']==360
     assert playback_defaults(long_play=True,target_play_seconds=600)['maximum_play_seconds']==660
@@ -96,7 +96,8 @@ def test_bare_plan_twenty_uses_mood_build_and_zhilin_sections(tmp_path,monkeypat
     assert result['order'][0]=='t00' and result['order'][-1]=='t19'
     assert len(result['order'])==len(set(result['order']))==20
     assert all(edge['overlap_bars']==32 for edge in result['edges'])
-    assert all(180<=section['predicted_play_seconds']<=240 for section in result['sections'].values())
+    assert all(180<=section['predicted_chapter_seconds']<=240 for section in result['sections'].values())
+    assert all(section['predicted_play_seconds']<=300 for section in result['sections'].values())
     assert all(section['predicted_solo_seconds']<=300 for section in result['sections'].values())
     assert 'packaged' in result['mixing_preferences']['curve_profile_status']
     assert result['workflow_preferences']['preference_sources']['style']=='portable default'

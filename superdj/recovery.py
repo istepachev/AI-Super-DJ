@@ -103,10 +103,13 @@ def alternative(plan, records, failure, excluded, attempt, *, sample_rate, ffmpe
         for key, value in candidate['sections'].items():
             for flag in ('locked_start','locked_end'):
                 value[flag] = sections[key].get(flag,False)
+        from .chapter_duration import retain_chapter_target
+        candidate,duration_recovery=retain_chapter_target(candidate,records,identity,
+            'head' if boundary=='start' else 'tail',sample_rate=sample_rate,ffmpeg=ffmpeg)
         excluded.setdefault(identity, []).append(previous)
         return candidate, {'changed_track':identity,'boundary':boundary,'previous_section':list(previous),
             'new_section':[candidate['sections'][identity]['start'],candidate['sections'][identity]['end']],
-            'order_preserved':True,'overlap_lengths_preserved':True}
+            'order_preserved':True,'overlap_lengths_preserved':True,'chapter_duration_recovery':duration_recovery}
     raise RenderError('No alternative window satisfies the same overlap, source, playback and lock constraints')
 
 

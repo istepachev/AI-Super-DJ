@@ -1,4 +1,4 @@
-"""Source-only SYNC selection with a full-deck playback duration budget."""
+"""Source-only SYNC with CUE chapter targets and a separate full-deck cap."""
 from __future__ import annotations
 
 from copy import deepcopy
@@ -16,7 +16,8 @@ def arrange_sync(plan, records, *, target_solo_seconds=None, maximum_solo_second
                  allow_long_play=False, excluded_sections=None, section_ranges=None):
     """Choose energetic cores and stable overlap windows without project timings.
 
-    Full playback includes both adjacent overlaps. Solo excludes them. Short sources
+    Factory plans target CUE chapters; explicit legacy plans retain full-deck
+    targets. Full playback includes both adjacent overlaps. Solo excludes them. Short sources
     retain as much usable content as possible. Insufficient evidence/source
     length is recorded, never hidden by silence, repetition or a hard cut.
     Explicit locks/overlap lengths remain mandatory.
@@ -25,6 +26,7 @@ def arrange_sync(plan, records, *, target_solo_seconds=None, maximum_solo_second
             or target_play_seconds < 180 or maximum_play_seconds < target_play_seconds
             or (not allow_long_play and (target_play_seconds > 240 or maximum_play_seconds > 300))):
         raise ValueError("Full playback target must be 180–240 seconds; maximum at most 300")
+    chapter_budget = (plan.get('mixing_preferences') or {}).get('duration_budget_basis') == 'chapter interval'
     play_low,play_high=(max(120.,target_play_seconds-30),target_play_seconds+30) if allow_long_play else (180.,240.)
     if maximum_solo_seconds is None:maximum_solo_seconds=maximum_play_seconds
     if target_solo_seconds is not None and not 180 <= target_solo_seconds <= 240:
@@ -94,6 +96,14 @@ def arrange_sync(plan, records, *, target_solo_seconds=None, maximum_solo_second
         explicit.append(requested is not None)
         natives.append(native_beats is not None)
 
+    from .playtime_policy import playback_intent
+    intents={identity:playback_intent(by_id[identity]) if chapter_budget else None for identity in order}
+    def duration_settings(position):
+        intent=intents[order[position]]
+        if intent and intent['kind']=='brief':return 120.,90.,150.
+        if intent and intent['kind']=='highlight':return 285.,270.,300.
+        return target_play_seconds,play_low,play_high
+
     selection_cache = {}
     def choose_section(position):
         cache_key = (position, counts[position - 1] if position else 0,
@@ -102,6 +112,8 @@ def arrange_sync(plan, records, *, target_solo_seconds=None, maximum_solo_second
             return selection_cache[cache_key]
         identity = order[position]
         row = by_id[identity]
+        desired,low,high=duration_settings(position)
+        intent=intents[identity]
         duration = float(row.get('duration', row.get('duration_seconds')))
         previous = result['edges'][position - 1] if position else {}
         following = result['edges'][position] if position < len(counts) else {}
@@ -140,6 +152,7 @@ def arrange_sync(plan, records, *, target_solo_seconds=None, maximum_solo_second
                       for c in row.get('cue_candidates', [])}
         in_duration = shared_clock(by_id[order[position - 1]]['bpm'], row['bpm'], round(counts[position - 1] * 4), sample_rate)['duration_seconds'] if position else 0.
         out_duration = shared_clock(row['bpm'], by_id[order[position + 1]]['bpm'], round(counts[position] * 4), sample_rate)['duration_seconds'] if position < len(counts) else 0.
+        full_cap=(300.+out_duration if intent and intent['kind']=='highlight' else maximum_play_seconds)
         protected = row.get('protected_ranges', [])
         # The late-head bass gap is independent of every possible tail.
         # Cache once per head to avoid repeatedly scanning the same profile
@@ -168,15 +181,16 @@ def arrange_sync(plan, records, *, target_solo_seconds=None, maximum_solo_second
                 if any(start > float(r[0]) or end < float(r[1]) for r in protected):
                     continue
                 played = solo + in_duration + out_duration
-                if played > maximum_play_seconds + 1e-6:
+                if played > full_cap + 1e-6:
                     continue
                 # Prioritise minimum total playback, then the full-deck target. A
                 # short radio edit is not extended artificially to hit a goal.
-                target_distance = abs(played - target_play_seconds)
+                budgeted = played - out_duration if chapter_budget else played
+                target_distance = abs(budgeted - desired)
                 if target_solo_seconds is not None:
                     target_distance = abs(solo - target_solo_seconds)
-                score = target_distance / 30 + 20 * max(0, minimum_play_seconds - played)
-                score += 5 * max(0, play_low-played, played-play_high) / 30
+                score = target_distance / 30 + 20 * max(0, minimum_play_seconds - budgeted)
+                score += 5 * max(0, low-budgeted, budgeted-high) / 30
                 score -= 4 * mean_between(cumulative, core_start, core_end)
                 score -= .5 * (cue_scores.get(round(start, 4), 0) + cue_scores.get(round(end, 4), 0))
                 score += .7 * (mean_between(activity_sum, start, core_start) + mean_between(activity_sum, core_end, end))
@@ -189,8 +203,15 @@ def arrange_sync(plan, records, *, target_solo_seconds=None, maximum_solo_second
                 # Avoid selecting only an intro when an energetic central core
                 # scores equally. This is not a claim of a known Cue ordinal.
                 score += .15 * abs((core_start + core_end) / 2 - duration / 2) / max(duration, 1)
-                choices.append((score, start, end, solo, played, head, tail))
-        selection_cache[cache_key] = min(choices, key=lambda c: (c[0], c[1])) if choices else None
+                choices.append((score, start, end, solo, played, head, tail, budgeted))
+        # An ordinary source with a supported 3-4 minute chapter must not be
+        # shortened merely because its energy/cue score is slightly better.
+        if chapter_budget:
+            rank = lambda c: (not low <= c[7] <= high,
+                              max(0., low-c[7], c[7]-high), c[0], c[1])
+        else:
+            rank = lambda c: (c[0], c[1])
+        selection_cache[cache_key] = min(choices, key=rank) if choices else None
         return selection_cache[cache_key]
 
     # A source can support each overlap separately but not both and a useful
@@ -199,11 +220,17 @@ def arrange_sync(plan, records, *, target_solo_seconds=None, maximum_solo_second
     def deficiency(position, selection):
         if selection is None:
             return 10000.
-        missing = max(0, minimum_play_seconds - selection[4]) * 20
+        missing = max(0, minimum_play_seconds - selection[7]) * 20
         duration = float(by_id[order[position]].get('duration', by_id[order[position]].get('duration_seconds')))
-        play_floor = min(play_low, duration)
-        missing += max(0, play_floor - selection[4])
-        missing += max(0, selection[4]-play_high)
+        if chapter_budget and position < len(counts):
+            edge = result['edges'][position]
+            out = shared_clock(by_id[edge['from']]['bpm'], by_id[edge['to']]['bpm'],
+                               round(counts[position]*4), sample_rate)['duration_seconds']
+            duration = max(0., duration-out)
+        _,low,high=duration_settings(position)
+        play_floor = min(low, duration)
+        missing += max(0, play_floor - selection[7])
+        missing += max(0, selection[7]-high)
         return missing
 
     for _ in range(len(counts) * 3 + 1):
@@ -258,24 +285,33 @@ def arrange_sync(plan, records, *, target_solo_seconds=None, maximum_solo_second
 
     sections, warnings = {}, []
     for position, (identity, selected) in enumerate(zip(order, selections)):
-        _, start, end, solo, played, head, tail = selected
+        _, start, end, solo, played, head, tail, budgeted = selected
+        desired,low,high=duration_settings(position)
+        intent=intents[identity]
+        full_cap=300.+played-budgeted if intent and intent['kind']=='highlight' else maximum_play_seconds
         sections[identity] = {'start': start, 'end': end, 'source_span_seconds': end - start,
             'predicted_solo_seconds': solo, 'predicted_play_seconds': played,
-            'target_solo_seconds': max(8., target_play_seconds-(played-solo)), 'maximum_solo_seconds': maximum_solo_seconds,
-            'target_play_seconds': target_play_seconds, 'maximum_play_seconds': maximum_play_seconds,
-            'target_play_range_seconds': [play_low,play_high], 'allow_long_play': bool(allow_long_play),
-            'duration_budget_basis': 'full deck including incoming and outgoing overlaps',
+            'target_solo_seconds': max(8., desired-(budgeted-solo)), 'maximum_solo_seconds': maximum_solo_seconds,
+            'target_play_seconds': desired, 'maximum_play_seconds': full_cap,
+            'target_play_range_seconds': [low,high], 'allow_long_play': bool(allow_long_play or intent and intent['kind']=='highlight'),
+            'playback_intent': intent,
+            'duration_budget_basis': 'chapter interval' if chapter_budget else 'full deck including incoming and outgoing overlaps',
+            'predicted_chapter_seconds': budgeted if chapter_budget else played-(shared_clock(by_id[identity]['bpm'], by_id[order[position+1]]['bpm'], round(counts[position]*4), sample_rate)['duration_seconds'] if position<len(counts) else 0.),
             'minimum_play_seconds': minimum_play_seconds,
             'selection': 'energetic source core; CUE-DETR/structure candidates and valid beat/bar windows; no project timing',
             'head_local_evidence': head[3], 'tail_local_evidence': tail[3],
             'incoming_posthandoff_weak_bass_maximum_seconds': weak_gap(profiles[identity], start + .55 * (head[1] - start), head[1]) if position else 0.,
             'locked_start': (result['edges'][position - 1].get('cue_locks') or {}).get('incoming_start_seconds') is not None if position else False,
             'locked_end': (result['edges'][position].get('cue_locks') or {}).get('outgoing_end_seconds') is not None if position < len(result['edges']) else False,
-            'duration_exception': not play_low <= played <= play_high}
+            'duration_exception': not play_low <= budgeted <= play_high,
+            'chapter_duration_exception_reason': (f"selected {intent['kind']}: {intent['reason']}" if intent else 'native source cannot cover a three-minute chapter and its outgoing overlap'
+                if chapter_budget and budgeted<play_low and float(by_id[identity].get('duration',by_id[identity].get('duration_seconds')))<play_low+(played-budgeted)
+                else 'no evidence-supported chapter in the target range under source, grid, locks and full-deck cap'
+                if chapter_budget and not play_low<=budgeted<=play_high else None)}
         if played < minimum_play_seconds:
             warnings.append(f"{identity}: source and stable grid permit only {played:.2f}s playback before minimum-playback preparation")
-        elif not play_low <= played <= play_high:
-            warnings.append(f"{identity}: source/grid/locks leave {played:.2f}s full playback outside the {play_low:g}–{play_high:g}s target; {solo:.2f}s solo")
+        elif not play_low <= budgeted <= play_high:
+            warnings.append(f"{identity}: source/grid/locks leave {budgeted:.2f}s {'chapter interval' if chapter_budget else 'full playback'} outside the {play_low:g}–{play_high:g}s target; {solo:.2f}s solo")
     for i, edge in enumerate(result['edges']):
         edge.update(transition_policy='sync')
         if not natives[i]:
@@ -283,6 +319,6 @@ def arrange_sync(plan, records, *, target_solo_seconds=None, maximum_solo_second
         edge.setdefault('cue_locks', {}).update(outgoing_end_seconds=sections[edge['from']]['end'],
                                                incoming_start_seconds=sections[edge['to']]['start'])
     result.update(sections=sections, section_warnings=warnings, rhythm_profiles=profiles, style='zhilin' if zhilin else 'default',
-        section_policy=f'shared-phase SYNC; target {play_low:g}–{play_high:g}s full playback including both overlaps, hard maximum {maximum_play_seconds:g}s; minimum {minimum_play_seconds:g}s; short-play loops are best effort',
+        section_policy=f"shared-phase SYNC; target {play_low:g}–{play_high:g}s {'chapter interval' if chapter_budget else 'full playback including both overlaps'}, hard maximum {maximum_play_seconds:g}s; minimum {minimum_play_seconds:g}s; short-play loops are best effort",
         long_play_explicit=bool(allow_long_play))
     return result

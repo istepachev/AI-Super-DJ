@@ -83,6 +83,8 @@ def assess_join(outgoing,preroll,sr,beat_seconds):
 
 def choose_repeat(plan,row,position,section,path,*,target_seconds=120.,maximum_added_seconds=60.):
     """Search actual stable bars, then assess a bounded number of PCM joins."""
+    played=float(section['predicted_chapter_seconds'] if section.get('duration_budget_basis')=='chapter interval' else section['predicted_play_seconds'])
+    maximum_added_seconds=min(maximum_added_seconds,max(0.,section.get('maximum_play_seconds',300.)-section['predicted_play_seconds']))
     grid=_grid(row,.75)
     if not grid[0] and not _local_validation_possible(row,grid):return None,'no supported native grid for an optional loop'
     if row.get('protected_ranges') or section.get('locked_start') or section.get('locked_end'):
@@ -113,12 +115,12 @@ def choose_repeat(plan,row,position,section,path,*,target_seconds=120.,maximum_a
             risks=[float(v['foreground_risk']) for v in voice if first-context<=v['time']<last and 'foreground_risk' in v]
             risk=float(np.mean(risks)) if risks else None
             if risk is not None and risk>.35:continue
-            repeat_count=min(4,max(1,round((target_seconds-section['predicted_play_seconds'])/length)))
+            repeat_count=min(4,max(1,round((target_seconds-played)/length)))
             repeat_count=min(repeat_count,int(maximum_added_seconds//length))
             if repeat_count<1:continue
             added=length*repeat_count
-            if section['predicted_play_seconds']+added<60-1e-6:continue
-            score=abs(section['predicted_play_seconds']+added-target_seconds)/30+.12*(repeat_count-1)+(risk or 0)*4
+            if played+added<60-1e-6:continue
+            score=abs(played+added-target_seconds)/30+.12*(repeat_count-1)+(risk or 0)*4
             choices.append((score,-bar_count,-last,first,last,period,context,repeat_count,risk))
     for _,neg_bars,_,first,last,period,context,repeats,risk in sorted(choices)[:24]:
         frames=round(context*sr);insert=round(last*sr);begin=round(first*sr)

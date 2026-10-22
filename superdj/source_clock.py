@@ -95,7 +95,7 @@ def calibrate_render_windows(records, prepared, order, head, tail, sections, tra
             if section:section[boundary]=float(calibrated[0 if role=='head' else -1])
         if original and section:
             body_delta=(float(tail[identity].times[0]-original['tail'][0]) if 'tail' in original else 0.)-(float(head[identity].times[-1]-original['head'][-1]) if 'head' in original else 0.)
-            for key in ('predicted_solo_seconds','predicted_play_seconds'):
+            for key in ('predicted_solo_seconds','predicted_play_seconds','predicted_chapter_seconds'):
                 if key in section:section[key]+=body_delta
             section['source_span_seconds']=section['end']-section['start']
             section['native_clock_calibration']=reports[identity]

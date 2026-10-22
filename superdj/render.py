@@ -1627,6 +1627,18 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                                                          "set_end_seconds": cursor / sample_rate})
                     body = clip["output_frames"] - incoming - outgoing
                     clip['solo_seconds'] = body / sample_rate
+                    clip['chapter_seconds'] = (clip['output_frames']-outgoing)/sample_rate
+                    section = sections.get(clip['id']) or {}
+                    if section.get('duration_budget_basis')=='chapter interval':
+                        predicted=section.get('predicted_chapter_seconds')
+                        if predicted is None or abs(clip['chapter_seconds']-predicted)>.05:
+                            raise RenderError(f"{clip['id']}: actual CUE chapter disagrees with its duration budget")
+                        if clip['chapter_seconds']<60-1/sample_rate:
+                            raise RenderError(f"{clip['id']}: actual CUE chapter is below the one-minute floor")
+                        clip['chapter_in_target_range']=180-.05<=clip['chapter_seconds']<=240+.05
+                        clip['chapter_duration_exception_reason']=section.get('chapter_duration_exception_reason')
+                        if not clip['chapter_in_target_range'] and not clip['chapter_duration_exception_reason'] and not section.get('allow_long_play'):
+                            raise RenderError(f"{clip['id']}: shortened CUE chapter has no source/constraint exception")
                     clip['solo_start_seconds'] = cursor / sample_rate
                     clip['solo_end_seconds'] = (cursor + body) / sample_rate
                     section = sections.get(clip['id']) or {}
@@ -1649,6 +1661,12 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
         measurements = _measure(temporary, witness=dest, regions=zip(transitions,overlap_files))
         if sf.info(temporary).frames != cursor:
             raise RenderError("Rendered length differs from the segment accounting")
+        from .playtime_policy import audit_playtime
+        try:
+            playtime_audit=audit_playtime(dict(plan,sections=sections),list(by_id.values()),
+                tracks=clips,total_frames=cursor,sample_rate=sample_rate)
+        except ValueError as error:
+            raise RenderError(str(error)) from error
         temporary.replace(output)
     except BaseException:
         temporary.unlink(missing_ok=True)
@@ -1668,6 +1686,7 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                 "subtype": "FLOAT", "duration_seconds": cursor / sample_rate, "total_frames": cursor,
                 "track_count": len(order), "all_tracks_once": True, "order": order,
                 "tracks": clips, "transitions": transitions, "measurements": measurements,
+                "playtime_audit": playtime_audit,
                 "assembly_verification":{'verified':True,'pcm_sha256':dest.digest.hexdigest(),
                     'overlaps_verified':sum(bool(v) for v in overlap_files),'frames':dest.frames},
                 "limits": {"max_musical_tempo_change": max_tempo_change,

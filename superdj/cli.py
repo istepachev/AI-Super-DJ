@@ -33,6 +33,9 @@ def analyze(args, on_analyzed=None):
         result = analyze_track(track["path"], track_id=track["id"], ffmpeg=args.ffmpeg,
             backend=args.backend, cache_dir=args.cache, checkpoint=args.checkpoint, device=args.device,
             grid=overrides.get(track["id"]), allow_model_download=args.download_model)
+        if track.get('playback_intent') is not None:
+            from .playtime_policy import playback_intent
+            result['playback_intent'] = playback_intent(track)
         if track.get("protected_ranges"):
             import math
             ranges = track["protected_ranges"]
@@ -104,13 +107,12 @@ def plan(args, records=None):
                     raise ValueError("transition_policy must be auto, sync or review")
                 edges[pair]["transition_policy"] = policy
             seen.add(pair)
-    # Automatic sets include both shared-phase overlaps in the full playback
-    # budget. Zhilin prefers compatible 32-bar overlaps within that budget.
+    # The target is time between actual CUE starts. Outgoing overlap continues
+    # into the next chapter; the separate full-deck cap still includes it.
     result['style'] = preferences['style']
     result['workflow_preferences'] = preferences
     result['mixing_preferences'] = dict(preferred_overlap_bars=32,
         **playback,
-        duration_budget_basis='full deck including incoming and outgoing overlaps',
         curve_profile_status=('configured DJ Zhilin reference; validated during mixing'
             if runtime.get('zhilin_profile') else 'packaged approved DJ Zhilin reference; validated during mixing')
             if preferences['style'] == 'zhilin' else 'ordinary SYNC band curves')
@@ -120,6 +122,9 @@ def plan(args, records=None):
             **{k:playback[k] for k in ['target_play_seconds','maximum_play_seconds','allow_long_play']})
     else:
         result['section_warnings'] = ['Order-only plan: audio analysis/grid required before compact SYNC rendering']
+    if result.get('sections'):
+        from .playtime_policy import audit_playtime
+        result['playtime_audit'] = audit_playtime(result,records)
     write_json(Path(args.work) / "plan.json", result)
     sync_count = sum(edge.get('transition_policy') == 'sync' for edge in result['edges'])
     print(f"Planned {len(result['order'])} tracks; {sync_count} shared-phase SYNC transitions; {result['method']}", flush=True)
@@ -550,8 +555,8 @@ def _planning(parser, seed=True):
 
 
 def _playback_options(parser):
-    parser.add_argument('--long-play',action='store_true',help='Explicitly request long track playback; default target 360s, including both overlaps')
-    parser.add_argument('--track-play-seconds',type=float,help='Full playback target including both overlaps: ordinary 180–240s; longer values require --long-play')
+    parser.add_argument('--long-play',action='store_true',help='Explicitly request long track playback; default CUE chapter target 360s, separate full-deck cap 420s')
+    parser.add_argument('--track-play-seconds',type=float,help='Time between CUE starts: ordinary 180–240s; longer values require --long-play; full deck separately capped')
 
 
 def _rendering(parser):

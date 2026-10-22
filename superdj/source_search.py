@@ -67,7 +67,14 @@ def fresh_arrangement_alternative(plan, records, error, excluded, attempt, *, sa
     for role,boundary in movable:
         assert abs(selected[boundary]-old[boundary]) >= 1/sample_rate
     excluded.setdefault(identity, []).append([old['start'],old['end']])
+    from .chapter_duration import retain_chapter_target
+    changed_role='head' if roles=={'head'} else 'tail'
+    duration_recovery=None
+    if len(movable)==1:
+        candidate,duration_recovery=retain_chapter_target(candidate,records,identity,changed_role,
+            sample_rate=sample_rate,ffmpeg=ffmpeg)
+    selected=candidate['sections'][identity]
     return candidate, {'changed_track':identity,'boundary':','.join(b for _,b in movable),
         'previous_section':[old['start'],old['end']], 'new_section':[selected['start'],selected['end']],
         'order_preserved':True,'overlap_lengths_preserved':True,'actual_user_locks_preserved':True,
-        'same_failed_boundary_cannot_be_retried':True}
+        'same_failed_boundary_cannot_be_retried':True,'chapter_duration_recovery':duration_recovery}

@@ -88,8 +88,8 @@ def native_plan(plan):
         if not edit:
             continue
         _, _, length, _=recipe(edit)
-        for key in ('end','source_span_seconds','predicted_solo_seconds','predicted_play_seconds'):
-            section[key]-=length
+        for key in ('end','source_span_seconds','predicted_solo_seconds','predicted_play_seconds','predicted_chapter_seconds'):
+            if key in section:section[key]-=length
         for edge in result.get('edges',[]):
             if edge['from']==identity:
                 edge['cue_locks']['outgoing_end_seconds']-=length
