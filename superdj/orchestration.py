@@ -1,5 +1,6 @@
 """Bounded gradual handoff placement on unchanged, independently timed decks."""
 from pathlib import Path
+import numpy as np
 from .mixing import blend,envelopes
 from .percussion import percussion_gains,verification_components,verify_blended_fronts
 from .transition_quality import TransitionFailure
@@ -58,5 +59,44 @@ def gradual_alternative(outgoing,incoming,sample_rate,outgoing_warp,incoming_war
             'bass_transfer_width_preserved':True,'middle_and_high_curves_preserved':True,
             'user_bass_position_and_width_locks_preserved':True,'timing_gate_relaxed':False,
             'pitch_or_timing_repair_performed':False}
+        return mixed,candidate
+    raise last_error
+
+
+@derived_scope()
+def whole_spectrum_alternative(outgoing,incoming,sample_rate,outgoing_warp,incoming_warp,
+                              transition,directory,*,style,beat_phase,initial_error,
+                              quality_check=None,ffmpeg='ffmpeg',allow_pitch_changing_residual=False):
+    """After existing routing fails, try two full-length transparent handoffs.
+
+    Native cuts, phase, overlap and pitch stay fixed. Approved separate-band
+    settings are locks here. This fallback never introduces a short rhythmic
+    switch, changes a working normal blend, or waives an acoustic/energy gate.
+    """
+    if transition.get('whole_spectrum_handoff') is not None or transition.get('handoff_windows') or transition.get('mid_handoff_bars') is not None or transition.get('bass_handoff_beats') is not None:
+        raise initial_error
+    beats=transition.get('beats',64);failures=[];last_error=initial_error
+    for number,bias in enumerate((3.,1.)):
+        spec={'start_beat':0.,'end_beat':float(beats),'bias':bias}
+        try:
+            mixed,frequency=blend(outgoing,incoming,sample_rate,beats=beats,style=style,
+                beat_phase=beat_phase,whole_spectrum_handoff=spec)
+            gains,_=envelopes(len(mixed),beats,style=style,beat_phase=beat_phase,whole_spectrum_handoff=spec)
+            components={'tail':(outgoing*gains['mid_out']).astype('float32'),'head':(incoming*gains['mid_in']).astype('float32')}
+            mixed,fronts=verify_blended_fronts(mixed,sample_rate,outgoing_warp,incoming_warp,gains,
+                Path(directory)/f'whole-{number}',ffmpeg=ffmpeg,components=components,
+                allow_pitch_changing_residual=allow_pitch_changing_residual)
+            candidate={**transition,'whole_spectrum_handoff':spec,'frequency_processing':frequency,
+                'percussion_ownership_policy':'shared','blended_front_audit':fronts,
+                'percussion_estimates_used_in_final_mix':False}
+            estimates=candidate.pop('percussion_estimates',None)
+            if estimates:candidate['previous_percussion_estimate_attempts']=estimates
+            if quality_check is not None:candidate['quality_gate']=quality_check(mixed,candidate)
+        except (ValueError,TransitionFailure) as error:
+            last_error=error;failures.append({'whole_spectrum_handoff':spec,'reason':str(error)});continue
+        candidate['whole_spectrum_recovery']={'executed':True,'initial_reason':str(initial_error),
+            'maximum_alternatives':2,'failed_alternatives':failures,'source_windows_clock_and_overlap_unchanged':True,
+            'frequency_filtering_or_percussion_subtraction':False,'timing_or_pitch_repair_performed':False,
+            'timing_gate_relaxed':False,'actual_10_90_shared_beats':frequency['actual_10_90_shared_beats']}
         return mixed,candidate
     raise last_error

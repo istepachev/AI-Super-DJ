@@ -77,3 +77,87 @@ Before constructing an ordinary shared-SYNC map, calibrate automatic native wind
 For an unrecognized interior control, infer absolute native time between recognized neighbours no more than four beats apart when a stable clock supports that inference or the coarse label error exceeds 35 ms. Extrapolate the established native clock across unobserved prefixes/suffixes instead of reintroducing noisy coarse intervals. These are inferred controls, never certified attack observations. Sample cuts already at the clip boundary cannot move during refinement. Advanced callers with untrimmed context may calibrate an interior window endpoint. Keep source figures at their native relative times.
 
 The final rate audit rejects a correction-rate range above 0.05 over a complete bar (at least two seconds, extended to four beats at the slowest shared tempo), including composed residual curves. This is a rejection bound, not a target modulation. Divide actual rates by the immutable intended musical curve first, so deliberate smooth BPM changes are preserved. Advanced callers without a declared shared clock use an explicitly inferred slow trend from coarse native observations; they do not acquire an exact musical-clock claim. Measure both sides of interval boundaries: subdividing a bad map must not hide a pulse. The existing per-interval bound remains separate. Coarse initial maps defer this additional check only until native-source refinement, before the first stretch; final and cached clip audits always apply it. Backend compensation may try smaller steps after a rejected edit, always restoring the safe map and retaining the same bounds and fresh full-deck PCM verification. If none passes, select another source window. Retain failed source roles and absolute native positions for recovery. These engineering bounds do not guarantee perceptual quality or retrospectively certify existing exports.
+
+
+## Native initial-front coverage and routed signal identity
+
+A selected bass band is a clock hint, not permission to skip a coherent earlier
+180–1200 Hz source family. Apply the same comparison in native-window calibration
+and deck refinement, with and without drum estimates. Require at least eight
+shared observations, 60% of the primary family and 75% of its index span before
+using an earlier family as the primary clock. Store partial-family uncertainty;
+do not quantize every native fill or cymbal onto quarter beats.
+
+Keep a second native-mixture template with the same 12 ms pre-context and only
+12 ms post-context, separately from the longer attack and bass-body templates.
+Before stretching, require native uniqueness (correlation at least 0.90,
+alternative margin at least 0.05, native delay within 3 ms). Fix up to eight
+strong, distributed support references using native data alone. Those references
+must remain recognized in the timed deck. Every recognized initial front,
+including observations outside the support set, enters the unchanged 3 ms maximum.
+Unknown output shapes stay explicit and cannot establish zero timing error.
+A bass-focused fragment alone does not establish an independent leading click.
+
+For an actual blend, short native templates require compatible signal identity.
+Independent bass/middle/high routing or estimated-drum subtraction can change a
+24 ms waveform. Do not call a correlation peak against that different waveform
+a proven initial-front displacement. Keep that view as an explicit coverage gap;
+retain its independent full-deck initial-front check and the existing primary,
+bass, recovered-hit, paired and combined-waveform gates. A whole-spectrum scalar
+handoff preserves the short reference identity and retains its support checks.
+An audible upper reference cannot be declared absent just because the bass fader
+is zero. Use the actual routed band and known own contribution; unknown nonquiet
+signatures remain uncertainty.
+
+Keep raw additive-interference evidence. When both exact known contributions
+reconstruct the actual PCM, independently unique native fronts from both sources
+can explain a shifted mixed correlation maximum. Require the original own front
+and the other native front within 3 ms, correlation at least 0.98 and margin at
+least 0.05. Actual neighbouring native references may bracket a missing other
+attack; do not invent an attack there. An eligible late own match can never be
+erased by this proof or by a fresh separation. These are identity checks, not
+an increased timing tolerance.
+
+## Optional whole-spectrum musical handoff
+
+The advanced per-edge `whole_spectrum_handoff` setting supplies `start_beat`,
+`end_beat` and `bias` on the existing shared beat phase. It uses complementary
+whole-spectrum gains, without filtering or estimated-percussion subtraction.
+For normalized progress p between the selected beats, incoming gain is
+`1 - (1 - smooth(p)) ** bias`. Bias 3 and 4 preserve the existing reviewed
+whole-window shapes; a bounded earlier handoff can reduce competing native
+figures without changing pitch, clock or source cues. No source identity or
+private cue position is packaged in the engine.
+
+Do not combine this setting with separate band/percussion overrides. Verify the
+actual 10–90% gain span: at least sixteen shared beats for Zhilin, eight for other
+ordinary styles, bounded by half the available beats for a short overlap.
+Report actual transfer time separately from the unchanged planning window;
+a 32-bar shared clock does not mean 32 bars of simultaneous audible music.
+The exact same gains feed vocal, continuity and combined-attack checks.
+
+The existing ordinary blend remains first. After its smooth percussion transfer
+and three same-width placement candidates fail, unlocked transitions may try
+at most two full-window whole-spectrum shapes. User band settings remain locks.
+No failed candidate authorizes a shorter window, abrupt cut, relaxed timing gate,
+attack-fragment copying or pitch-changing residual resampling.
+
+## Preserve working controls and preparation timelines
+
+Explicit per-source R2 short/crisp6 and R3 selections remain available. Defaults
+keep their original backend arguments; mixture and foreground use the same
+chosen backend. A supported-native-clock retry is attempted only after a real
+source timing failure, retaining actual observations, protected material and
+all rate bounds. Successful old timing maps stay on their existing path.
+
+Known phrase loops must rebind explicit kick evidence to the prepared edited
+drum timeline, with identical mixture/voice/drum geometry. Shift feature profiles
+by the same recorded edit exactly once. Rebinding to a new prepared artifact
+must update its path without applying the feature shift twice. Original files
+and records remain unchanged.
+
+Regression coverage includes a single 8 ms front displacement with an unchanged
+louder bass body, a late upper attack after bass gain reaches zero, native
+family coverage, strict additive identity, transparent handoff continuity,
+source-backend defaults, loop-timeline rebinding and the real resonant-kick
+crossover. Synthetic success does not replace source-music renders or listening.

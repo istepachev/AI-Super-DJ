@@ -26,7 +26,7 @@ def write_json(path: str | Path, value: Any) -> None:
     target = private_path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     import os, tempfile
-    fd, name = tempfile.mkstemp(prefix=target.name + '-', suffix='.partial', dir=target.parent)
+    fd, name = tempfile.mkstemp(prefix='', suffix='', dir=target.parent)
     os.close(fd)
     temporary = Path(name)
     try:

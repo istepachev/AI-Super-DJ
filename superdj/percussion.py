@@ -91,7 +91,43 @@ def verification_components(outgoing,incoming,sample_rate,gains,*,bass_hz=180.,d
     return result
 
 
-def _foreground_identity_ambiguities(audio,own,other,sample_rate,centres,raw,isolated,band):
+def _known_native_fronts(audio,sample_rate,references,coverage,side,band):
+    """Independent native identities in one exact known contribution."""
+    from .kick_grid import template_attack_rows
+    pad=round(.2*sample_rate);result={}
+    for role,centres,templates,reference_band,_ in references:
+        if role not in (side,side+':bass_body',side+':initial_front'):continue
+        if role==side+':bass_body' and list(band)!=[35,180]:continue
+        observable=coverage.get(role,set(centres))
+        rows=template_attack_rows(np.pad(audio,((pad,pad),(0,0))),sample_rate,
+            [t+.2 for t in centres],templates,attack_band_hz=reference_band,
+            minimum_correlation=.90 if list(reference_band)==[35,180] else .65)
+        for t,row in zip(centres,rows):
+            if t not in observable or not row['eligible']:continue
+            result.setdefault(round(t*sample_rate),[]).append({**row,'delay_seconds':row['time']-.2-t,
+                'native_reference_seconds':t,'native_attack_band_hz':list(reference_band)})
+    return result
+
+
+def _strengthened_own_rows(centres,direct,fresh):
+    """Confirm an already on-time native identity; never erase a late own hit."""
+    result=[dict(r) for r in direct];proof={}
+    for i,(t,a,b) in enumerate(zip(centres,direct,fresh)):
+        if (not a['eligible'] or abs(a['time']-.2-t)>.003
+                or a.get('template_correlation',0)<.90 or a.get('alternative_peak_margin',0)<.05
+                or not b['eligible'] or abs(b['time']-.2-t)>.003
+                or b.get('template_correlation',0)<.98 or b.get('alternative_peak_margin',0)<.05
+                or abs(a['time']-b['time'])>.0015):continue
+        result[i]=b
+        proof[i]={'own_actual_pcm_delay_seconds':a['time']-.2-t,
+            'own_actual_pcm_template_correlation':a['template_correlation'],
+            'own_fresh_confirmed_delay_seconds':b['time']-.2-t,
+            'own_fresh_confirmed_template_correlation':b['template_correlation'],
+            'eligible_late_own_reference_erased':False}
+    return result,proof
+
+
+def _foreground_identity_ambiguities(audio,own,other,sample_rate,centres,raw,isolated,band,other_fronts=None,neighbor_radius_seconds=None):
     """A matching dominant other deck cannot identify a quiet source's attack.
 
     The known contributions must already reconstruct the actual PCM. Only an
@@ -114,7 +150,39 @@ def _foreground_identity_ambiguities(audio,own,other,sample_rate,centres,raw,iso
         if min(powers)<=1e-20:continue
         similarity=float(np.dot(a,c)/np.sqrt(powers[0]*powers[2]))
         dominance=powers[2]/powers[1]
-        if similarity<.98 or dominance<4:continue
+        additive=False;certificate=None
+        if similarity<.98 or dominance<4:
+            b=isolated[i];frame=round(centres[i]*sample_rate)
+            available=(other_fronts or {}).get(frame,[]);bracket=None
+            # A native rhythm may deliberately have no attack on this beat.
+            # Certify its actual neighbouring fronts, without inventing the
+            # absent event or claiming a coincident pair measurement there.
+            if not available and neighbor_radius_seconds and len(other_fronts or {})>=8:
+                before=[k for k in other_fronts if k<frame]
+                after=[k for k in other_fronts if k>frame]
+                if before and after:
+                    left,right=max(before),min(after);radius=neighbor_radius_seconds*sample_rate
+                    if frame-left<=radius and right-frame<=radius:
+                        bracket=[other_fronts[left],other_fronts[right]]
+                        available=[r for side in bracket for r in side]
+            # A sum of different aligned waveforms need not peak at either
+            # native template's correlation maximum. Both exact contributions
+            # must independently identify their original native fronts. This
+            # never rescues an eligible late own match or an unknown source.
+            own_delay=b['time']-.2-centres[i]
+            if (not b['eligible'] or abs(own_delay)>.003
+                    or b.get('template_correlation',0)<.98
+                    or b.get('alternative_peak_margin',0)<.05
+                    or not available or any(abs(r['delay_seconds'])>.003 for r in available)):
+                continue
+            valid=lambda r: abs(r['delay_seconds'])<=.003 and r.get('template_correlation',0)>=.98 and r.get('alternative_peak_margin',0)>=.05
+            if bracket and not all(any(valid(r) for r in side) for side in bracket):continue
+            certificate=next((r for r in available if abs(r['delay_seconds'])<=.003
+                and abs(r['delay_seconds']-own_delay)<=.003
+                and r.get('template_correlation',0)>=.98
+                and r.get('alternative_peak_margin',0)>=.05),None)
+            if certificate is None or np.max(abs(audio-own-other))>2e-6:continue
+            additive=True
         result[i]={'seconds':centres[i],'raw_delay_seconds':raw[i]['time']-.2-centres[i],
             'raw_template_correlation':raw[i].get('template_correlation'),
             'own_delay_seconds':isolated[i]['time']-.2-centres[i] if isolated[i]['eligible'] else None,
@@ -123,6 +191,19 @@ def _foreground_identity_ambiguities(audio,own,other,sample_rate,centres,raw,iso
             'other_to_own_band_power_ratio':dominance,'raw_candidate_other_waveform_cosine':similarity,
             'classification':'raw peak is not uniquely attributable to this source; known other foreground explains it',
             'timing_view':'own native-template timing still required; raw contradiction retained'}
+        if additive:
+            result[i].update(classification='additive waveform interference; both known native fronts independently verified',
+                exact_mixture_reconstruction_verified=True,
+                other_native_delay_seconds=certificate['delay_seconds'] if bracket is None else None,
+                other_native_template_correlation=certificate['template_correlation'],
+                other_native_alternative_peak_margin=certificate['alternative_peak_margin'],
+                independently_verified_other_native_band_hz=certificate.get('native_attack_band_hz'),
+                independent_source_timing_budget_seconds=.003,
+                directly_verified_native_pair_error_seconds=abs(certificate['delay_seconds']-(isolated[i]['time']-.2-centres[i])) if bracket is None else None,
+                other_native_clock_bracketing_references=[{'seconds':r.get('native_reference_seconds'),
+                    'delay_seconds':r['delay_seconds'],'correlation':r['template_correlation']} for side in (bracket or []) for r in side if valid(r)],
+                missing_other_attack_invented=False,
+                raw_timing_contradiction_retained=True)
     return result
 
 
@@ -146,12 +227,75 @@ def _paired_front_audit(checks,sample_rate):
         'tolerance_seconds':.003,'scope':'worst recognized primary/bass difference across actual audible source contributions; prior coverage gates retained'}
 
 
+def _audible_band_reference_indices(components,role,sample_rate,centres,templates,band,gains,bass_audible,gaps=None,minimum=.90):
+    """Do not treat a silent bass fader as proof that an upper click is gone.
+
+    Band envelopes supply a conservative bound. Exact known own PCM can rule
+    out a genuinely quiet routed view, without using the other deck's energy.
+    Unknown nonquiet shapes remain coverage gaps, never invented observations.
+    """
+    side='out' if role=='tail' else 'in';low,high=band
+    keys=['drums_'+side]
+    if low<180:keys.append('bass_'+side)
+    if high>180 and low<3500:keys.append('mid_'+side)
+    if high>3500:keys.append('high_'+side)
+    curves=[np.asarray(gains[k])[:,0]for k in keys if k in gains]
+    if not curves:return list(bass_audible)
+    bound=np.maximum.reduce(curves);indices=[i for i,t in enumerate(centres)if 0<=round(t*sample_rate)<len(bound)and bound[round(t*sample_rate)]>=.05]
+    if not components or role not in components:return indices
+    from scipy.signal import butter,sosfiltfilt,resample_poly
+    import math
+    own=np.asarray(components[role]);divisor=math.gcd(sample_rate,8000)
+    signal=resample_poly(own.mean(axis=1),8000//divisor,sample_rate//divisor)
+    signal=sosfiltfilt(butter(3,band,btype='bandpass',fs=8000,output='sos'),signal)
+    result=[]
+    for i in indices:
+        center=round(centres[i]*8000);first=center-96;last=first+len(templates[i])
+        if first<0 or last>len(signal):continue
+        native=float(np.mean(np.square(templates[i],dtype='float64')))
+        actual=float(np.mean(np.square(signal[first:last],dtype='float64')))
+        if native>1e-20 and actual>=native*.05**2:result.append(i)
+    # The added post-bass views need an actual own-source identity. A weak
+    # match in the combined waveform alone can belong to the other track.
+    extra=[i for i in result if i not in set(bass_audible)]
+    if extra:
+        from .kick_grid import template_attack_rows
+        pad=round(.2*sample_rate)
+        rows=template_attack_rows(np.pad(own,((pad,pad),(0,0))),sample_rate,
+            [centres[i]+.2 for i in extra],templates[extra],minimum_correlation=minimum,attack_band_hz=band)
+        visible={i for i,row in zip(extra,rows) if row['eligible']}
+        if gaps is not None:
+            gaps.extend({'role':role,'seconds':centres[i],'band_hz':list(band),
+                'reason':'nonquiet routed contribution does not identify this native signature; not a timed source observation'}
+                for i,row in zip(extra,rows) if not row['eligible'])
+        result=[i for i in result if i in set(bass_audible) or i in visible]
+    return result
+
+
+def _unfiltered_reference_required(indices,centres,sample_rate,gains,side):
+    """A native short template is mandatory when routing preserves its shape.
+
+    Frequency/percussion subtraction changes the native mixture shape. Such
+    audible views retain maximum-error and coverage checks, with unresolved
+    templates explicit, while the unprocessed full-deck gate stays mandatory.
+    """
+    keys=[k+'_'+side for k in ('bass','mid','high','drums')if k+'_'+side in gains]
+    required=set()
+    for i in indices:
+        frame=round(centres[i]*sample_rate);values=[float(gains[k][frame,0])for k in keys]
+        if values and max(values)-min(values)<=1e-9:required.add(centres[i])
+    return required
+
+
 @derived_scope()
 def verify_blended_fronts(audio,sample_rate,outgoing_warp,incoming_warp,gains,directory,*,ffmpeg='ffmpeg',components=None,allow_pitch_changing_residual=False):
     """Check identified source fronts in the actual blend; bound local repair."""
     from .kick_grid import template_attack_rows
     from .source_observability import required_bass_views
-    references=[];source_coverage={};n=len(audio);pad=round(.2*sample_rate)
+    if components is not None:
+        if set(components)!={'head','tail'} or any(p.shape!=audio.shape or not np.isfinite(p).all() for p in components.values()):raise ValueError('Invalid final-deck verification components')
+        if np.max(abs(components['head']+components['tail']-audio))>2e-6:raise ValueError('Verification components do not reconstruct actual mixed PCM')
+    references=[];source_coverage={};audibility_gaps=[];n=len(audio);pad=round(.2*sample_rate)
     for warp,role,gain_key in ((outgoing_warp or {},'tail','bass_out'),(incoming_warp or {},'head','bass_in')):
         source=warp.get('source_kick_alignment',{}).get(role,{})
         if not source.get('attack_templates_path') or not source.get('events'):continue
@@ -159,31 +303,49 @@ def verify_blended_fronts(audio,sample_rate,outgoing_warp,incoming_warp,gains,di
         with np.load(source['attack_templates_path']) as f:templates=f['templates']
         side='out' if role=='tail' else 'in';audibility=gains.get('drums_'+side,gains[gain_key])
         audible=[i for i,t in enumerate(centres) if 0<=round(t*sample_rate)<n and audibility[round(t*sample_rate),0]>=.05]
-        if not audible:continue
-        references.append((role,[centres[i] for i in audible],templates[audible],source.get('attack_band_hz',[100,1400]),set()))
+        bass_audible=list(audible)
+        audible=_audible_band_reference_indices(components,role,sample_rate,centres,templates,source.get('attack_band_hz',[100,1400]),gains,bass_audible,audibility_gaps)
+        if not audible and not bass_audible:continue
+        if audible:references.append((role,[centres[i] for i in audible],templates[audible],source.get('attack_band_hz',[100,1400]),set()))
         contract=source.get('native_mixture_reference',{})
         required_views=required_bass_views(source)
+        if source.get('initial_front_attack_templates_path'):
+            with np.load(source['initial_front_attack_templates_path']) as archive:initial=archive['templates']
+            visible=set(contract.get('initial_front_visible_beats',[]))
+            initial_audible=_audible_band_reference_indices(components,role,sample_rate,centres,initial,source.get('attack_band_hz',[100,1400]),gains,bass_audible,audibility_gaps,minimum=.90)
+            # A 24 ms unfiltered native shape is not the same signal after
+            # separate-band routing or estimated-drum subtraction. Retain
+            # those as explicit uncertainty; never infer a timing displacement
+            # by correlating different short attack shapes. Full-deck initial
+            # checks and the existing primary/bass blend views still apply.
+            compatible=_unfiltered_reference_required(initial_audible,centres,sample_rate,gains,side)
+            for i in initial_audible:
+                if events[i]['beat'] in visible and centres[i] not in compatible:
+                    audibility_gaps.append({'role':role+':initial_front','seconds':centres[i],
+                        'status':'short native reference changed by spectral routing; independent full-deck initial-front and ordinary blend checks retained'})
+            selected=[i for i in initial_audible if events[i]['beat'] in visible and centres[i] in compatible]
+            if selected:
+                required={centres[i] for i in selected if events[i]['beat'] in set(contract.get('initial_front_required_beats',[]))}
+                references.append((role+':initial_front',[centres[i] for i in selected],initial[selected],source.get('attack_band_hz',[100,1400]),required))
+                source_coverage[role+':initial_front']={centres[i] for i in selected}
         if source.get('bass_attack_templates_path'):
             protected=warp.get('native_attack_preservation',{}).get('bass_mixture_attack_templates',{}).get(role)
             with np.load(protected or source['bass_attack_templates_path']) as f:low=f['templates']
-            required={centres[i] for i in audible if events[i]['beat'] in required_views['mixture']}
-            references.append((role+':bass_body',[centres[i] for i in audible],low[audible],[35,180],required))
+            required={centres[i] for i in bass_audible if events[i]['beat'] in required_views['mixture']}
+            references.append((role+':bass_body',[centres[i] for i in bass_audible],low[bass_audible],[35,180],required))
             if 'mixture_bass_visible_beats' in contract:
                 visible=set(contract['mixture_bass_visible_beats'])
-                source_coverage[role+':bass_body']={centres[i] for i in audible if events[i]['beat'] in visible}
+                source_coverage[role+':bass_body']={centres[i] for i in bass_audible if events[i]['beat'] in visible}
         for label,key,band in [('primary','attack_templates_path',source.get('attack_band_hz',[100,1400])),
                                ('bass','bass_attack_templates_path',[35,180])]:
             original=source.get('estimated_drum_'+key)
             visible=set(contract.get(label+'_visible_beats',[]))
-            selected=[i for i in audible if events[i]['beat'] in visible]
+            selected=[i for i in bass_audible if events[i]['beat'] in visible]
             if not original or not selected:continue
             with np.load(original) as archive:independent=archive['templates']
             required={centres[i] for i in selected if label=='bass' and events[i]['beat'] in required_views['estimate']}
             references.append((role+':estimated_'+label,[centres[i] for i in selected],independent[selected],band,required))
-    if not references:return audio,{'executed':False,'reason':'no audible recognized source attack family'}
-    if components is not None:
-        if set(components)!={'head','tail'} or any(p.shape!=audio.shape or not np.isfinite(p).all() for p in components.values()):raise ValueError('Invalid final-deck verification components')
-        if np.max(abs(components['head']+components['tail']-audio))>2e-6:raise ValueError('Verification components do not reconstruct actual mixed PCM')
+    if not references:return audio,{'executed':False,'reason':'no audible recognized source attack family','unverified_routed_source_signatures':audibility_gaps}
     original_components={k:v.copy() for k,v in (components or {}).items()}
     current_components={k:v.copy() for k,v in original_components.items()}
     original=audio.copy();corrected=audio.copy();refinements=[];checks=[]
@@ -201,17 +363,40 @@ def verify_blended_fronts(audio,sample_rate,outgoing_warp,incoming_warp,gains,di
                     if row['eligible']:unknown_candidates.append({'seconds':t,'candidate_delay_seconds':row['time']-.2-t,
                         'correlation':row.get('template_correlation'),'view':view,'status':'native source timing unverified'})
                     row['eligible']=False
-            minimum=.90 if band==[35,180] else .65
+            minimum=.90 if band==[35,180] or role.endswith(':initial_front') else .65
             rows=template_attack_rows(np.pad(corrected,((pad,pad),(0,0))),sample_rate,[t+.2 for t in centres],templates,attack_band_hz=band,minimum_correlation=minimum)
             raw_rows=[dict(r) for r in rows];component_used=[];identity_ambiguities={};own_fresh=None
             if current_components:
                 other='head' if role.startswith('tail') else 'tail'
                 isolated=corrected-current_components[other]
                 recovered=template_attack_rows(np.pad(isolated,((pad,pad),(0,0))),sample_rate,[t+.2 for t in centres],templates,attack_band_hz=band,minimum_correlation=minimum)
-                identity_ambiguities=_foreground_identity_ambiguities(corrected,isolated,current_components[other],sample_rate,centres,rows,recovered,band)
+                own_warp=outgoing_warp if role.startswith('tail') else incoming_warp
+                other_warp=incoming_warp if other=='head' else outgoing_warp
+                own_source=(own_warp or {}).get('source_kick_alignment',{}).get(role.split(':')[0],{})
+                other_source=(other_warp or {}).get('source_kick_alignment',{}).get(other,{})
+                other_fronts=None
+                neighbor_radius=None
+                if own_source.get('stable_native_primary_clock') and other_source.get('stable_native_primary_clock'):
+                    other_fronts=_known_native_fronts(current_components[other],sample_rate,references,source_coverage,other,band)
+                    clock=(other_warp or {}).get('input_output_beat_mapping',{}).get(other,[])
+                    if len(clock)>1:neighbor_radius=1.1*max(np.diff([r['output_seconds'] for r in clock]))
+                identity_ambiguities=_foreground_identity_ambiguities(corrected,isolated,current_components[other],sample_rate,centres,rows,recovered,band,other_fronts,neighbor_radius)
                 if any(not recovered[i]['eligible'] for i in identity_ambiguities):
                     own_estimate,_=final_drum_estimates(isolated,isolated,sample_rate,Path(directory)/f'own-view-{attempt}',ffmpeg=ffmpeg)
                     own_fresh=template_attack_rows(np.pad(own_estimate['drums_out'],((pad,pad),(0,0))),sample_rate,[t+.2 for t in centres],templates,attack_band_hz=band,minimum_correlation=minimum)
+                strengthen=other_fronts and any(a['eligible'] and abs(a['time']-.2-t)>.003
+                    and b['eligible'] and abs(b['time']-.2-t)<=.003
+                    and b.get('template_correlation',0)>=.90
+                    for t,a,b in zip(centres,rows,recovered))
+                if strengthen:
+                    if own_fresh is None:
+                        own_estimate,_=final_drum_estimates(isolated,isolated,sample_rate,Path(directory)/f'own-confirm-{attempt}',ffmpeg=ffmpeg)
+                        own_fresh=template_attack_rows(np.pad(own_estimate['drums_out'],((pad,pad),(0,0))),sample_rate,[t+.2 for t in centres],templates,attack_band_hz=band,minimum_correlation=minimum)
+                    strengthened,agreements=_strengthened_own_rows(centres,recovered,own_fresh)
+                    additional=_foreground_identity_ambiguities(corrected,isolated,current_components[other],sample_rate,centres,rows,strengthened,band,other_fronts,neighbor_radius)
+                    for i,explanation in additional.items():
+                        if i in agreements and i not in identity_ambiguities:
+                            identity_ambiguities[i]={**explanation,**agreements[i]}
                 for i,(old,new) in enumerate(zip(rows,recovered)):
                     if i in identity_ambiguities:
                         candidate=new if new['eligible'] else own_fresh[i]
@@ -237,7 +422,7 @@ def verify_blended_fronts(audio,sample_rate,outgoing_warp,incoming_warp,gains,di
                     if new['eligible'] and (not old['eligible'] or (abs(old['time']-.2-centres[i])>.003 and new['template_correlation']>old.get('template_correlation',0)+.08)):rows[i]=new
                 qualify_native(rows,'fresh estimated percussion')
             measured=[{'seconds':t,'delay_seconds':round(r['time']-.2-t,9),'correlation':r['template_correlation']} for t,r in zip(centres,rows) if r['eligible']]
-            if required-{r['seconds'] for r in measured}:raise ValueError('Recovered bass attacks remain unverified in the actual blend; review the source window')
+            if required-{r['seconds'] for r in measured}:raise ValueError('Known native initial fronts remain unverified in the actual blend; review the source window' if role.endswith(':initial_front') else 'Recovered bass attacks remain unverified in the actual blend; review the source window')
             verified_native={r['seconds'] for r in measured}&observable
             if len(verified_native)<minimum_count:raise ValueError('Combined percussion fronts remain unverified; review the source window')
             for row in measured:
@@ -275,4 +460,4 @@ def verify_blended_fronts(audio,sample_rate,outgoing_warp,incoming_warp,gains,di
             block=original[first:last];corrected[first:last]=np.column_stack([np.interp(indices,t,block[:,ch]) for ch in (0,1)]).astype('float32');refinements.append({**row,'start_frame':first,'end_frame':last,'context_seconds':2*support,'maximum_local_rate_change':rate_change})
             for key,value in original_components.items():current_components[key][first:last]=np.column_stack([np.interp(indices,t,value[first:last,ch]) for ch in (0,1)]).astype('float32')
     paired=_paired_front_audit(checks,sample_rate)
-    return corrected,{'executed':True,'recognized_fronts_only':True,'checks':checks,'paired_source_front_audit':paired,'local_combined_waveform_refinements':refinements,'other_pcm_retained':True,'measurement_limit_seconds':.003}
+    return corrected,{'executed':True,'recognized_fronts_only':True,'checks':checks,'paired_source_front_audit':paired,'local_combined_waveform_refinements':refinements,'other_pcm_retained':True,'measurement_limit_seconds':.003,'unverified_routed_source_signatures':audibility_gaps}

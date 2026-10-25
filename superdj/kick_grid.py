@@ -178,7 +178,7 @@ def refine_source_controls(path,warp,sample_rate,evidence=None):
                 accepted=[rows[r['index']] for r in native_family]
             if not accepted and stem and stem.get('allow_variable_attack_family'):
                 accepted=repeated_waveform_family(audio,rate,rows,attack_band_hz=band_hz)
-            if stem and 'attack_band_hz' not in stem and len(accepted)>=8:
+            if len(accepted)>=8:
                 # A bass-heavy 100-180 Hz body can win the old novelty search
                 # after the audible click has already happened. Independently
                 # locate a coherent upper attack family instead of calling
@@ -190,8 +190,10 @@ def refine_source_controls(path,warp,sample_rate,evidence=None):
                 by_index={r['index']:r for r in upper};pairs=[r['time']-by_index[r['index']]['time'] for r in accepted if r['index'] in by_index]
                 if len(pairs)>=8:
                     median=float(np.median(pairs));spread=float(np.percentile(pairs,90)-np.percentile(pairs,10))
-                    selected=.008<median<.085 and spread<.018
-                    comparison={'matched_source_events':len(pairs),'body_minus_upper_median_seconds':median,'body_minus_upper_10_90_spread_seconds':spread,'upper_front_selected':selected}
+                    from .front_family import family_coverage
+                    support=family_coverage(accepted,upper)
+                    selected=.008<median<.085 and spread<.018 and support['supported_for_primary_clock']
+                    comparison={'matched_source_events':len(pairs),'body_minus_upper_median_seconds':median,'body_minus_upper_10_90_spread_seconds':spread,'upper_front_selected':selected,'source_family_coverage':support}
                     if selected:band_hz=(180,1200);rows=upper_rows;accepted=upper
             phase_references=list(accepted)
             accepted=augment_source_attacks(audio,rate,centres,accepted,attack_band_hz=band_hz)
@@ -225,7 +227,16 @@ def refine_source_controls(path,warp,sample_rate,evidence=None):
         reports[role]['coarse_grid_consensus_recoveries']=[{'beat':r['index']+1,'source_seconds':base+r['time'],
             **r['coarse_grid_consensus_rescue']} for r in accepted if r.get('coarse_grid_consensus_rescue')]
         native_clock=_native_consensus(phase_references,float(np.median(np.diff(centres)))) if not isolated and not (stem or {}).get('allow_variable_attack_family') else None
+        stable_controls=bool((stem or {}).get('stable_clock_controls',False))
+        if stable_controls and native_clock is None:
+            raise SourceWindowFailure('Stable source controls require an established native audio clock',role=role)
         reports[role]['stable_native_primary_clock']=bool(native_clock is not None)
+        if stable_controls:
+            reports[role]['control_policy']='established native primary clock; all actual source attacks remain independent audit references'
+            reports[role]['native_control_observation_residuals']=[{'beat':r['index']+1,
+                'source_seconds':base+r['time'],
+                'native_clock_residual_seconds':float(r['time']-np.polyval(native_clock,r['index']))}
+                for r in accepted]
         reports[role]['unverified_native_bass_candidates']=unverified_bass
         if comparison:reports[role]['attack_front_comparison']=comparison
         reports[role]['low_frequency_gap_recovery']={'executed':bool(stem and not isolated),
@@ -254,7 +265,9 @@ def refine_source_controls(path,warp,sample_rate,evidence=None):
             actual=actual_by_index.get(index,point['source_seconds']+float(np.interp(index,known_indices,known_offsets)))
             # Infer physical source times, including missing boundary beats,
             # rather than adding offsets back onto erroneous coarse labels.
-            if index not in actual_by_index:
+            if stable_controls:
+                actual=float(base+np.polyval(native_clock,index-1))
+            elif index not in actual_by_index:
                 right=int(np.searchsorted(known_indices,index))
                 if 0<right<len(known_indices) and known_indices[right]-known_indices[right-1]<=4:
                     inferred=float(np.interp(index,known_indices,known_times))
@@ -427,6 +440,12 @@ def rendered_attack_audit(path,warp,sample_rate):
             with np.load(protected_bass or source['bass_attack_templates_path']) as saved:low_templates=saved['templates']
             views.append(('bass_body',template_attack_rows(audio,sample_rate,centres,low_templates,minimum_correlation=.90,attack_band_hz=(35,180))))
         contract=source.get('native_mixture_reference',{})
+        if source.get('initial_front_attack_templates_path'):
+            with np.load(source['initial_front_attack_templates_path']) as archive:initial=archive['templates']
+            initial_rows=template_attack_rows(audio,sample_rate,centres,initial,minimum_correlation=.90,attack_band_hz=source.get('attack_band_hz',(100,1400)))
+            visible=set(contract.get('initial_front_visible_beats',[]))
+            for row,event in zip(initial_rows,source['events']):row['eligible']=row['eligible'] and event['beat'] in visible
+            views.append(('initial_front',initial_rows))
         for label,key,band,minimum in [('primary','attack_templates_path',source.get('attack_band_hz',(100,1400)),.65),
                                       ('bass','bass_attack_templates_path',(35,180),.90)]:
             original=source.get('estimated_drum_'+key)
@@ -447,6 +466,8 @@ def rendered_attack_audit(path,warp,sample_rate):
                     'output_candidate_correlation':row.get('template_correlation'),
                     'native_source_timing_unverified':True})
                 continue
+            if view=='initial_front' and event['beat'] not in set(contract.get('initial_front_visible_beats',[])):
+                pending.append({'role':role,'beat':event['beat'],'view':view,'reason':'initial front not uniquely recognizable in native source','native_source_timing_unverified':True});continue
             if not row['eligible']:
                 pending.append({'role':role,'beat':event['beat'],'view':view,'reason':'output attack ambiguous'});continue
             actual=first/sample_rate+row['time'];target=event['output_seconds']
@@ -468,6 +489,9 @@ def validate_overlap_attacks(clips,transitions,tolerance_seconds=.003):
             audit=(clip.get('warp') or {}).get('post_render_transient_audit',{}).get('final',{})
             from .source_observability import required_bass_views
             source=(clip.get('warp') or {}).get('source_kick_alignment',{}).get(role,{})
+            initial_required=set(source.get('native_mixture_reference',{}).get('initial_front_required_beats',[]))
+            initial_observed={p['beat'] for p in audit.get('measured',[]) if p['role']==role and p.get('view')=='initial_front'}
+            if initial_required-initial_observed:raise ValueError(f"{clip['id']}: known native initial fronts remain unverified in rendered PCM")
             required=required_bass_views(source)
             observed_bass={p['beat'] for p in audit.get('measured',[]) if p['role']==role and p.get('view')=='bass_body'}
             if required['mixture']-observed_bass:

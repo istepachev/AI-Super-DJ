@@ -21,7 +21,7 @@ def split_bands(audio, sample_rate, bass_hz=180.0, high_hz=3500.0):
 
 
 def envelopes(n, beats, *, tonal_conflict=False, beat_phase=None, style='default', profile=None,
-              mid_handoff_bars=None, bass_handoff_beats=None,handoff_windows=None):
+              mid_handoff_bars=None, bass_handoff_beats=None,handoff_windows=None,whole_spectrum_handoff=None):
     """Complementary, gradual per-band transfer for every ordinary style.
 
     Both bass lines and dense mid parties are never held at full level at once.
@@ -36,6 +36,31 @@ def envelopes(n, beats, *, tonal_conflict=False, beat_phase=None, style='default
     p = p[:, None]
     if style not in ('default','zhilin'):
         raise ValueError('Unknown frequency mixing style')
+    if whole_spectrum_handoff is not None:
+        if not isinstance(whole_spectrum_handoff,dict) or set(whole_spectrum_handoff)-{'start_beat','end_beat','bias'}:
+            raise ValueError('Whole-spectrum handoff supports start_beat, end_beat and bias')
+        if mid_handoff_bars is not None or bass_handoff_beats is not None or handoff_windows:
+            raise ValueError('Choose a whole-spectrum handoff or separate band overrides')
+        first=whole_spectrum_handoff.get('start_beat',0.)
+        last=whole_spectrum_handoff.get('end_beat',float(beats))
+        bias=whole_spectrum_handoff.get('bias',1.)
+        if any(isinstance(x,bool) or not isinstance(x,(int,float)) or not np.isfinite(x) for x in (first,last,bias)) or not 0<=first<last<=beats or not 1<=bias<=32:
+            raise ValueError('Whole-spectrum handoff needs increasing shared beats and a finite bias from 1 to 32')
+        transfer=1-(1-smooth((p*beats-first)/(last-first)))**bias
+        span=[int(np.flatnonzero(transfer[:,0]>=value)[0]) for value in (.1,.9)]
+        actual=float((p[span[1],0]-p[span[0],0])*beats)
+        minimum=min(float(beats)*.5,16. if style=='zhilin' else 8.)
+        if actual+1e-5<minimum:
+            raise ValueError('Whole-spectrum handoff is too short for a smooth mix')
+        gains={band+'_'+side:value for band in ('bass','mid','high') for side,value in (('out',1-transfer),('in',transfer))}
+        return gains,{'style':style,'whole_spectrum_handoff':{'start_beat':first,'end_beat':last,'bias':bias},
+            'incoming_mid_opening_beats':actual,'incoming_initial_attenuation_db':0.,
+            'bass_handoff_beats':last-first,'bass_handoff_fraction':[first/beats,last/beats],
+            'mid_handoff_fraction':[first/beats,last/beats],'high_handoff_fraction':[first/beats,last/beats],
+            'mid_10_90_fraction':[float(p[i,0]) for i in span],
+            'actual_10_90_shared_beats':actual,'band_pair_gain_sum_maximum':{band:1. for band in ('bass','mid','high')},
+            'phase_source':'shared integrated clock' if beat_phase is not None else 'linear phase',
+            'frequency_filtering_performed':False,'automatic_recovery_shortened_overlap':False}
     for label,value,limit in (('mid_handoff_bars',mid_handoff_bars,beats/4),('bass_handoff_beats',bass_handoff_beats,beats)):
         if value is not None and (isinstance(value,bool) or not np.isfinite(value) or not 0<value<=limit):
             raise ValueError(f'{label} must be positive and within the overlap')
@@ -127,12 +152,24 @@ def envelopes(n, beats, *, tonal_conflict=False, beat_phase=None, style='default
 def blend(outgoing, incoming, sample_rate, *, bass_hz=180.0,
           beats=64, tonal_conflict=False, beat_phase=None, style='default', profile=None,
           mid_handoff_bars=None, bass_handoff_beats=None,drums_out=None,drums_in=None,percussion_policy='shared',handoff_windows=None,
-          allow_abrupt_percussion=False):
+          allow_abrupt_percussion=False,whole_spectrum_handoff=None):
     if outgoing.shape != incoming.shape or outgoing.ndim != 2 or outgoing.shape[1] != 2:
         raise ValueError("Frequency blend needs equally sized stereo blocks")
     if not np.isfinite(outgoing).all() or not np.isfinite(incoming).all():
         raise ValueError("Nonfinite overlap audio")
     n = len(incoming)
+    if whole_spectrum_handoff is not None:
+        if drums_out is not None or drums_in is not None or percussion_policy!='shared':
+            raise ValueError('Whole-spectrum handoff does not subtract percussion estimates')
+        gains,curves=envelopes(n,beats,tonal_conflict=tonal_conflict,beat_phase=beat_phase,style=style,
+            mid_handoff_bars=mid_handoff_bars,bass_handoff_beats=bass_handoff_beats,
+            handoff_windows=handoff_windows,whole_spectrum_handoff=whole_spectrum_handoff)
+        continuity=validate_handoff_continuity(gains,beat_phase,beats)
+        mixed=(outgoing*gains['mid_out']+incoming*gains['mid_in']).astype(np.float32)
+        return mixed,{'method':'complementary whole-spectrum faders on unchanged timed decks',
+            **curves,'musical_handoff_continuity':continuity,'tonal_conflict_risk':bool(tonal_conflict),
+            'percussion_processing':{'executed':False,'reason':'explicit whole-spectrum handoff'},
+            'endpoint_max_error':float(max(np.max(np.abs(mixed[0]-outgoing[0])),np.max(np.abs(mixed[-1]-incoming[-1]))))}
     if drums_out is not None or drums_in is not None:
         if drums_out is None or drums_in is None:raise ValueError('Both aligned drum estimates are required')
         if drums_out.shape!=outgoing.shape or drums_in.shape!=incoming.shape or not np.isfinite(drums_out).all() or not np.isfinite(drums_in).all():

@@ -35,13 +35,19 @@ def calibrate_window(path, times, *, source_origin=0., band=None, ffmpeg='ffmpeg
             accepted=repeated_attacks(observations)
             relative=repeated_attacks([{**r,'time':r['time']-r['centre']} for r in observations],tolerance_seconds=.0125)
             return [observations[r['index']] for r in relative] if len(relative)>len(accepted) else accepted
-        accepted=family(rows)
-        if band is None and len(accepted)>=8:
+        accepted=family(rows);front_comparison=None
+        if len(accepted)>=8:
             upper=family(attack_events(audio,sr,centres,attack_band_hz=(180,1200)))
             matched={r['index']:r for r in upper}
             offsets=[r['time']-matched[r['index']]['time'] for r in accepted if r['index'] in matched]
-            if len(offsets)>=8 and .008<np.median(offsets)<.085 and np.percentile(offsets,90)-np.percentile(offsets,10)<.018:
-                accepted=upper;chosen=(180,1200)
+            if len(offsets)>=8:
+                from .front_family import family_coverage
+                support=family_coverage(accepted,upper)
+                selected=.008<np.median(offsets)<.085 and np.percentile(offsets,90)-np.percentile(offsets,10)<.018 and support['supported_for_primary_clock']
+                front_comparison={'matched_source_events':len(offsets),'body_minus_upper_median_seconds':float(np.median(offsets)),
+                    'body_minus_upper_10_90_spread_seconds':float(np.percentile(offsets,90)-np.percentile(offsets,10)),
+                    'upper_front_selected':bool(selected),'source_family_coverage':support}
+                if selected:accepted=upper;chosen=(180,1200)
         clock=_native_consensus(accepted,float(np.median(np.diff(times))))
         if clock is None:return None
         calibrated=np.polyval(clock,np.arange(len(times))-1)+base
@@ -52,7 +58,7 @@ def calibrate_window(path, times, *, source_origin=0., band=None, ffmpeg='ffmpeg
         return {'times':calibrated.tolist(),'original_times':times.tolist(),
             'maximum_label_correction_seconds':float(np.max(abs(error))),
             'native_period_seconds':float(clock[0]),'reference_count':len(accepted),
-            'attack_band_hz':list(chosen),'attack_observations_inferred':False,
+            'attack_band_hz':list(chosen),'attack_observations_inferred':False,'attack_front_comparison':front_comparison,
             'method':'dominant native audio clock; coherent phase before sample cuts; original audio unchanged'}
 
 
@@ -75,7 +81,7 @@ def calibrate_render_windows(records, prepared, order, head, tail, sections, tra
             path=source.get('path') or item.get('drum_path') or stem.get('drums_path') or item['path']
             origin=source.get('source_start_seconds',stem.get('drum_source_start_seconds',0.) if path!=item['path'] else 0.)
             result=cached('native_clock',{'path':Path(path),'times':window.times,'origin':origin,
-                'band':source.get('attack_band_hz'),'ffmpeg':str(ffmpeg)},
+                'band':source.get('attack_band_hz'),'front_policy':'coherent-earlier-front-v2','ffmpeg':str(ffmpeg)},
                 lambda:{'calibration':calibrate_window(path,window.times,source_origin=origin,band=source.get('attack_band_hz'),ffmpeg=ffmpeg)},directory)['calibration']
             if result is None:continue
             locked=section.get('locked_'+boundary)

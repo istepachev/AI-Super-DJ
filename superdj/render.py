@@ -646,7 +646,7 @@ def _crossfade(outgoing: np.ndarray, incoming: np.ndarray, sample_rate: int,
 
 def _aligned_vocals(stem, directory, position, *, ffmpeg, rubberband, engine,
                     sample_rate, first_frame, source_frames, output_frames,
-                    gain, warp):
+                    gain, warp,backend_options=None):
     """Render a local estimate with the final deck map and identical gain."""
     decoded = directory / f"voice-{position + 1:02d}-decoded.wav"
     cut = directory / f"voice-{position + 1:02d}-input.wav"
@@ -662,7 +662,7 @@ def _aligned_vocals(stem, directory, position, *, ffmpeg, rubberband, engine,
     decoded.unlink()
     if warp:
         control = directory / f"track-{position + 1:02d}-timemap.txt"
-        options = ["--fast", "--detector-perc"] if engine == "r2" else ["--fine"]
+        options = list(backend_options) if backend_options is not None else (["--fast", "--detector-perc"] if engine == "r2" else ["--fine"])
         _run([rubberband, *options, "--centre-focus", "--ignore-clipping", "--quiet", "--time",
               f"{output_frames / source_frames:.12f}", "--timemap", control.name, cut.name, output.name], cwd=directory)
         difference = sf.info(output).frames - output_frames
@@ -758,7 +758,10 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
     bridge_overlap_beats = _finite(bridge_overlap_beats, "bridge overlap beats")
     if not 4 <= bridge_overlap_beats <= 32:
         raise RenderError("Echo bridge must span 4 to 32 incoming beats")
-    by_id = {str(r["id"]): r for r in (records.values() if isinstance(records, Mapping) else records)}
+    from .loop_evidence import render_records as records_on_prepared_timeline
+    runtime_records,timeline_evidence_redirects=records_on_prepared_timeline(
+        list(records.values()) if isinstance(records,Mapping) else records,prepared_files or {})
+    by_id = {str(r["id"]): r for r in runtime_records}
     order = [str(item) for item in plan.get("order", [])]
     if not order or len(set(order)) != len(order) or set(order) != set(by_id):
         raise RenderError("The plan must use every unique analysis record exactly once")
@@ -1024,7 +1027,7 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                                 "human_reviewed": bool((by_id[outgoing].get("grid") or {}).get("human_reviewed") and
                                                        (by_id[incoming].get("grid") or {}).get("human_reviewed"))})
     for transition,edge in zip(transitions,edges):
-        for key in ('mid_handoff_bars','bass_handoff_beats','handoff_windows'):
+        for key in ('mid_handoff_bars','bass_handoff_beats','handoff_windows','whole_spectrum_handoff'):
             if edge.get(key) is not None:transition[key]=edge[key]
     clips: list[dict[str, Any]] = []
     prepared_files = prepared_files or {}
@@ -1041,6 +1044,7 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
         {'plan', 'records', 'prepared_files', 'output_path', 'work_dir', 'progress'}}
     from .audio import ffmpeg_executable
     import shutil
+    render_controls['allow_supported_native_clock_recovery']=bool(plan.get('allow_supported_native_clock_recovery',True))
     render_controls['ffmpeg'] = ffmpeg_executable(ffmpeg)
     render_controls['rubberband'] = shutil.which(str(rubberband)) or str(rubberband)
     overlap_files = []
@@ -1053,6 +1057,10 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
         warning_start = 0
         clips = []
         record = by_id[identity]
+        from .stretch_backend import selected_backend,backend_arguments
+        track_engine=selected_backend(record,rubberband_engine)
+        track_profile=record.get('rubberband_profile_override')
+        engine_args=backend_arguments(track_engine,track_profile)
         source_path = Path(record["path"])
         prepared = prepared_files.get(identity, prepared_files.get(str(source_path), str(source_path)))
         preparation = prepared.get("provenance", {}) if isinstance(prepared, Mapping) else {}
@@ -1128,7 +1136,7 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                     raise RenderError("Next tempo automation intersects the native incoming overlap")
             map_path = directory / f"track-{position + 1:02d}-timemap.txt"
             if (head[identity] and head[identity].clock) or (tail[identity] and tail[identity].clock):
-                from .kick_grid import refine_source_controls
+                from .native_control_recovery import refine_with_native_clock_recovery
                 kick_evidence=record.get('kick_evidence')
                 if kick_evidence is None and (record.get('vocal_stem') or {}).get('drums_path'):
                     stem=record['vocal_stem']
@@ -1136,7 +1144,8 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                     if drum_path or not (preparation or {}).get('processors'):
                         kick_evidence={role:{'path':drum_path or stem['drums_path'],'source_start_seconds':stem.get('drum_source_start_seconds',0.)} for role in ('head','tail')}
                 from .timing_safety import SourceWindowFailure
-                try:refine_source_controls(clip_input,warp,sample_rate,kick_evidence)
+                try:refine_with_native_clock_recovery(clip_input,warp,sample_rate,kick_evidence,
+                    enabled=render_controls['allow_supported_native_clock_recovery'])
                 except SourceWindowFailure as error:
                     # Reject measured source impossibility before the first
                     # expensive stretch. Only this explicit failure type may
@@ -1158,7 +1167,8 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                 retain_mixture_references(clip_input,warp,sample_rate)
             map_path.write_text("".join(f"{item['source_frame']} {item['output_frame']}\n" for item in warp["anchors"]), encoding="ascii")
             ratio = warp["output_frames"] / source_frames
-            engine_args = ["--fast", "--detector-perc"] if rubberband_engine == "r2" else ["--fine"]
+            warp['rubberband_engine']=track_engine
+            warp['rubberband_options']=list(engine_args)
             _run([rubberband, *engine_args, "--centre-focus", "--ignore-clipping", "--quiet",
                   "--time", f"{ratio:.12f}", "--timemap", map_path.name,
                   clip_input.name, clip_output.name], cwd=directory)
@@ -1277,6 +1287,8 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                     protection_roles=[role for role,r in warp.get('source_kick_alignment',{}).items()
                         if len(r['events'])>=8 and (sum(e['role']==role for e in final_attack['measured'])<8
                         or max((abs(e['delay_seconds']) for e in final_attack['measured'] if e['role']==role),default=0)>.003
+                        or set(r.get('native_mixture_reference',{}).get('initial_front_required_beats',[]))-
+                           {e['beat'] for e in final_attack['measured'] if e['role']==role and e.get('view')=='initial_front'}
                         or required_bass_views(r)['mixture']-
                            {e['beat'] for e in final_attack['measured'] if e['role']==role and e.get('view')=='bass_body'}
                         or required_bass_views(r)['estimate']-
@@ -1343,7 +1355,7 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
             else:
                 vocal_source = {**record["vocal_stem"], "path": processed_voice or record["vocal_stem"]["path"]}
                 vocal_path = _aligned_vocals(vocal_source, directory, position, ffmpeg=ffmpeg,
-                    rubberband=rubberband, engine=rubberband_engine, sample_rate=sample_rate,
+                    rubberband=rubberband, engine=track_engine,backend_options=engine_args,sample_rate=sample_rate,
                     first_frame=first_frame, source_frames=source_frames,
                     output_frames=sf.info(clip_output).frames, gain=gain, warp=warp)
                 if warp and warp.get('fine_attack_timing'):
@@ -1357,6 +1369,7 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                         roles=warp['native_attack_preservation']['roles'],record_templates=False)
         clips.append({"id": identity, "audio_path": str(clip_output), "source_path": str(source_path),
                       "aligned_vocal_path": vocal_path,
+                      "rubberband_engine":track_engine if warp else None,"rubberband_options":list(engine_args) if warp else [],
                       "prepared_path": str(prepared_path), "preparation_provenance": preparation,
                       "source_duration_seconds": info.duration, "trim_start_seconds": first_frame / sample_rate,
                       "trim_end_seconds": end_frame / sample_rate,
@@ -1433,7 +1446,7 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                     beat_phase[-1] = 1.
                 from .percussion import needs_handoff,final_drum_estimates,ownership_policy,percussion_gains
                 percussion_args={}
-                if mode=='beatmapped_bass_swap' and needs_handoff(clips[position-1].get('warp'),clip.get('warp'),style=plan.get('style','default')):
+                if mode=='beatmapped_bass_swap' and transition.get('whole_spectrum_handoff') is None and needs_handoff(clips[position-1].get('warp'),clip.get('warp'),style=plan.get('style','default')):
                     percussion_args,percussion_report=final_drum_estimates(previous_tail,block,sample_rate,directory/f'percussion-{position:02}',ffmpeg=ffmpeg)
                     transition['percussion_estimates']=percussion_report
                     percussion_args['percussion_policy']=ownership_policy(clips[position-1].get('warp'),clip.get('warp'))
@@ -1443,18 +1456,19 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                     beats=transition.get("beats", 64), tonal_conflict=risk, beat_phase=beat_phase,
                     style=plan.get('style','default'),
                     mid_handoff_bars=transition.get('mid_handoff_bars'),
-                    bass_handoff_beats=transition.get('bass_handoff_beats'),handoff_windows=transition.get('handoff_windows'),**percussion_args)
+                    bass_handoff_beats=transition.get('bass_handoff_beats'),handoff_windows=transition.get('handoff_windows'),whole_spectrum_handoff=transition.get('whole_spectrum_handoff'),**percussion_args)
                 transition["frequency_processing"] = evidence
                 if mode == 'beatmapped_bass_swap' and transition.get('tempo_technique') == 'shared_phase_sync':
                     from .percussion import verify_blended_fronts,verification_components
                     from .mixing import envelopes
-                    gains,_=envelopes(incoming,transition.get('beats',64),beat_phase=beat_phase,style=plan.get('style','default'),tonal_conflict=risk,mid_handoff_bars=transition.get('mid_handoff_bars'),bass_handoff_beats=transition.get('bass_handoff_beats'),handoff_windows=transition.get('handoff_windows'))
+                    gains,_=envelopes(incoming,transition.get('beats',64),beat_phase=beat_phase,style=plan.get('style','default'),tonal_conflict=risk,mid_handoff_bars=transition.get('mid_handoff_bars'),bass_handoff_beats=transition.get('bass_handoff_beats'),handoff_windows=transition.get('handoff_windows'),whole_spectrum_handoff=transition.get('whole_spectrum_handoff'))
                     gains=percussion_gains(gains,beat_phase,transition.get('beats',64),percussion_args.get('percussion_policy','shared'))
                     components=verification_components(previous_tail,block,sample_rate,gains,bass_hz=bass_hz,**{k:v for k,v in percussion_args.items() if k!='percussion_policy'})
                     try:
                         mixed,front_report=verify_blended_fronts(mixed,sample_rate,clips[position-1].get('warp'),clip.get('warp'),gains,directory/f'percussion-fronts-{position:02}',ffmpeg=ffmpeg,components=components,
                             allow_pitch_changing_residual=allow_pitch_changing_residual)
                     except ValueError as error:
+                        if transition.get('whole_spectrum_handoff') is not None:raise
                         # Both timed decks already passed their independent
                         # clock audit. A conflicting combined figure requires
                         # another orchestration, never a relaxed timing gate.
@@ -1467,10 +1481,10 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                             'source_windows_clock_overlap_and_harmonic_curves_unchanged':True,'timing_gate_relaxed':False}
                         mixed,evidence=blend(previous_tail,block,sample_rate,bass_hz=bass_hz,beats=transition.get('beats',64),
                             tonal_conflict=risk,beat_phase=beat_phase,style=plan.get('style','default'),
-                            mid_handoff_bars=transition.get('mid_handoff_bars'),bass_handoff_beats=transition.get('bass_handoff_beats'),handoff_windows=transition.get('handoff_windows'),**percussion_args)
+                            mid_handoff_bars=transition.get('mid_handoff_bars'),bass_handoff_beats=transition.get('bass_handoff_beats'),handoff_windows=transition.get('handoff_windows'),whole_spectrum_handoff=transition.get('whole_spectrum_handoff'),**percussion_args)
                         transition['frequency_processing']=evidence
                         gains,_=envelopes(incoming,transition.get('beats',64),beat_phase=beat_phase,style=plan.get('style','default'),
-                            tonal_conflict=risk,mid_handoff_bars=transition.get('mid_handoff_bars'),bass_handoff_beats=transition.get('bass_handoff_beats'),handoff_windows=transition.get('handoff_windows'))
+                            tonal_conflict=risk,mid_handoff_bars=transition.get('mid_handoff_bars'),bass_handoff_beats=transition.get('bass_handoff_beats'),handoff_windows=transition.get('handoff_windows'),whole_spectrum_handoff=transition.get('whole_spectrum_handoff'))
                         gains=percussion_gains(gains,beat_phase,transition.get('beats',64),'smooth')
                         components=verification_components(previous_tail,block,sample_rate,gains,bass_hz=bass_hz,
                             **{k:v for k,v in percussion_args.items() if k!='percussion_policy'})
@@ -1480,17 +1494,26 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                                 allow_pitch_changing_residual=allow_pitch_changing_residual)
                         except ValueError as smooth_error:
                             from .orchestration import gradual_alternative
-                            from .transition_quality import verify_overlap
+                            from .transition_quality import verify_overlap,TransitionFailure
                             def quality_check(candidate,selected):
                                 return verify_overlap(previous_tail,block,candidate,sample_rate,
                                     clips[position-1:position+1],selected,vocal_out=previous_vocal,
                                     vocal_in=incoming_vocal,style=plan.get('style','default'),beat_phase=beat_phase)
-                            mixed,selected=gradual_alternative(previous_tail,block,sample_rate,
-                                clips[position-1].get('warp'),clip.get('warp'),transition,
-                                directory/f'percussion-fronts-{position:02}-orchestration',
-                                style=plan.get('style','default'),beat_phase=beat_phase,percussion_args=percussion_args,
-                                initial_error=smooth_error,ffmpeg=ffmpeg,bass_hz=bass_hz,tonal_conflict=risk,
-                                quality_check=quality_check,allow_pitch_changing_residual=allow_pitch_changing_residual)
+                            try:
+                                mixed,selected=gradual_alternative(previous_tail,block,sample_rate,
+                                    clips[position-1].get('warp'),clip.get('warp'),transition,
+                                    directory/f'percussion-fronts-{position:02}-orchestration',
+                                    style=plan.get('style','default'),beat_phase=beat_phase,percussion_args=percussion_args,
+                                    initial_error=smooth_error,ffmpeg=ffmpeg,bass_hz=bass_hz,tonal_conflict=risk,
+                                    quality_check=quality_check,allow_pitch_changing_residual=allow_pitch_changing_residual)
+                            except (ValueError,TransitionFailure) as routing_error:
+                                from .orchestration import whole_spectrum_alternative
+                                mixed,selected=whole_spectrum_alternative(previous_tail,block,sample_rate,
+                                    clips[position-1].get('warp'),clip.get('warp'),transition,
+                                    directory/f'percussion-fronts-{position:02}-whole-spectrum',
+                                    style=plan.get('style','default'),beat_phase=beat_phase,
+                                    initial_error=routing_error,quality_check=quality_check,ffmpeg=ffmpeg,
+                                    allow_pitch_changing_residual=allow_pitch_changing_residual)
                             transition.clear();transition.update(selected)
                             front_report=transition['blended_front_audit']
                     transition['blended_front_audit']=front_report
@@ -1704,6 +1727,7 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                            "strict_grid": strict_grid, "allow_unverified": allow_unverified,
                            "allow_hard_cut": allow_hard_cut, "tempo_conflict_policy": tempo_conflict_policy,
                            "bridge_overlap_beats": bridge_overlap_beats},
+                "timeline_evidence_redirects":timeline_evidence_redirects,
                 "processing": {"time_stretch": (f"external Rubber Band {rubberband_engine.upper()}, pitch preserved, explicit source→target frame map"
                                                 if warped else "none; outgoing playback-speed effects are reported separately" if creative_speed else "none; native sample timing preserved"),
                                "time_stretch_executed": warped,

@@ -6,6 +6,64 @@ import soundfile as sf
 from scipy.signal import butter,sosfiltfilt,resample_poly
 
 
+def retain_initial_front_references(path,audio,warp,role,source,sample_rate):
+    """Keep a natively observable short onset separate from its louder body.
+
+    The 12 ms leading context and 12 ms post-context identify the same source
+    event. Native-ambiguous short windows never become timing controls or
+    required output observations. Audio and the existing long templates stay intact.
+    """
+    from .kick_grid import template_attack_rows
+    original=source.get('attack_templates_path')
+    if not original or not source.get('events'):return
+    with np.load(original) as archive:templates=archive['templates']
+    if templates.ndim!=2 or templates.shape[1]<192:return
+    initial=templates[:,:192].copy()
+    centres=[e['source_seconds']-warp['trim_start_seconds'] for e in source['events']]
+    band=source.get('attack_band_hz',[100,1400])
+    if band[0]<100 and band[1]<1000:
+        # A 24 ms fragment of a bass-focused clock does not establish a
+        # distinct leading click. Coherent earlier fronts are selected before
+        # this stage; retain the bass views and explicit leading uncertainty.
+        contract=source.setdefault('native_mixture_reference',{})
+        contract['initial_front_visible_beats']=[]
+        contract['initial_front_required_beats']=[]
+        contract['initial_front_status']='no independently established leading family in the selected bass-focused band'
+        return
+    native=template_attack_rows(audio,sample_rate,centres,initial,minimum_correlation=.90,attack_band_hz=band)
+    visible=[e['beat'] for e,t,row in zip(source['events'],centres,native)
+        if row['eligible'] and abs(row['time']-t)<=.003 and row.get('alternative_peak_margin',0)>=.05]
+    target=Path(path).with_name(Path(path).stem+f'-{role}-initial-front.npz')
+    np.savez_compressed(target,templates=initial.astype('float32'))
+    source['initial_front_attack_templates_path']=str(target)
+    contract=source.setdefault('native_mixture_reference',{})
+    contract['initial_front_visible_beats']=visible
+    # Fix a distributed native support set before seeing any backend output.
+    # All recognized fronts, including those outside this set, still enter
+    # the maximum-error audit. Unrecognized output shapes remain explicit.
+    candidates=[i for i,e in enumerate(source['events'])if e['beat'] in set(visible)]
+    required=[]
+    if candidates:
+        times=np.asarray([source['events'][i]['source_seconds'] for i in candidates])
+        boundaries=np.linspace(float(times.min()),float(times.max())+1e-8,min(8,len(candidates))+1)
+        for first,last in zip(boundaries[:-1],boundaries[1:]):
+            group=[i for i in candidates if first<=source['events'][i]['source_seconds']<last]
+            if not group:continue
+            def strength(i):
+                short=float(np.mean(np.square(initial[i,96:],dtype='float64')))
+                full=float(np.mean(np.square(templates[i],dtype='float64')))
+                return short/max(full,1e-20)*native[i].get('alternative_peak_margin',0.)
+            chosen=max(group,key=strength);required.append(source['events'][chosen]['beat'])
+        if len(required)<min(8,len(candidates)):
+            remaining=sorted((i for i in candidates if source['events'][i]['beat'] not in required),key=lambda i:native[i].get('alternative_peak_margin',0.),reverse=True)
+            required.extend(source['events'][i]['beat']for i in remaining[:min(8,len(candidates))-len(required)])
+    contract['initial_front_required_beats']=sorted(required)
+    contract['initial_front_status']='native support set fixed before stretching; every recognized output front retains the unchanged timing bound'
+    contract['visibility']['initial_front']=[{'beat':e['beat'],'recognized_in_native_mixture':e['beat'] in visible,
+        'template_correlation':row.get('template_correlation'),'alternative_peak_margin':row.get('alternative_peak_margin'),
+        'native_reference_delay_seconds':row['time']-t}for e,t,row in zip(source['events'],centres,native)]
+
+
 def retain_mixture_references(path,warp,sample_rate):
     """Change measurement references only; never edit audio or attack positions.
 
@@ -40,6 +98,7 @@ def retain_mixture_references(path,warp,sample_rate):
                     'template_correlation':row.get('template_correlation'),'alternative_peak_margin':row.get('alternative_peak_margin'),
                     'native_reference_delay_seconds':row['time']-t} for p,t,row in zip(events,centres,native)]
             source['native_mixture_reference']=contract
+            retain_initial_front_references(path,audio,warp,role,source,sample_rate)
             continue
         for label,key,band,minimum in [('primary','attack_templates_path',source.get('attack_band_hz',[100,1400]),.65),
                                       ('bass','bass_attack_templates_path',[35,180],.90)]:
@@ -75,4 +134,5 @@ def retain_mixture_references(path,warp,sample_rate):
             source[key]=str(target)
         contract['unresolved_estimated_bass_beats']=[p['beat'] for p in events if p['beat'] not in contract['bass_visible_beats']]
         source['native_mixture_reference']=contract
+        retain_initial_front_references(path,audio,warp,role,source,sample_rate)
     return warp
