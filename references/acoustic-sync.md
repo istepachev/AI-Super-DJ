@@ -166,3 +166,15 @@ When a required initial front is missing or a recognized timing view is late,
 window recovery rejects its physical native-source timestamp alongside existing
 bass failures. Renumbering that event in a nearby window does not make it valid.
 Recognized on-time fronts do not exclude otherwise compatible windows.
+
+
+## Reviewed last-resort early transfer
+
+After both existing full-window transparent curves fail, an unlocked edge can
+try the reviewed early whole-spectrum curve. In a128-beat window it starts at
+beat4 and ends at beat36, bias1. Keep this last, not a replacement for successful
+ordinary or broad variants. Other windows retain at most32 beats of handoff,
+with lead-in bounded by available space; short windows retain their whole span.
+All original attack, paired, energy, vocal, duration, pitch and continuity gates
+remain mandatory. An explicit accepted edge can use it directly. No track IDs
+or native source-cue positions are part of this portable recipe.

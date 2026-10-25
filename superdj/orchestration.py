@@ -67,7 +67,7 @@ def gradual_alternative(outgoing,incoming,sample_rate,outgoing_warp,incoming_war
 def whole_spectrum_alternative(outgoing,incoming,sample_rate,outgoing_warp,incoming_warp,
                               transition,directory,*,style,beat_phase,initial_error,
                               quality_check=None,ffmpeg='ffmpeg',allow_pitch_changing_residual=False):
-    """After existing routing fails, try two full-length transparent handoffs.
+    """After existing routing fails, retain wide handoffs before the hard case.
 
     Native cuts, phase, overlap and pitch stay fixed. Approved separate-band
     settings are locks here. This fallback never introduces a short rhythmic
@@ -76,8 +76,13 @@ def whole_spectrum_alternative(outgoing,incoming,sample_rate,outgoing_warp,incom
     if transition.get('whole_spectrum_handoff') is not None or transition.get('handoff_windows') or transition.get('mid_handoff_bars') is not None or transition.get('bass_handoff_beats') is not None:
         raise initial_error
     beats=transition.get('beats',64);failures=[];last_error=initial_error
-    for number,bias in enumerate((3.,1.)):
-        spec={'start_beat':0.,'end_beat':float(beats),'bias':bias}
+    # Preserve the previously successful full-window options. The reviewed
+    # early whole-spectrum transfer is last, only when both wider routes fail.
+    lead=min(4.,max(0.,(float(beats)-32.)/2.))
+    recipes=[{'start_beat':0.,'end_beat':float(beats),'bias':bias}for bias in (3.,1.)]
+    hard_case={'start_beat':lead,'end_beat':min(float(beats),lead+32.),'bias':1.}
+    if hard_case not in recipes:recipes.append(hard_case)
+    for number,spec in enumerate(recipes):
         try:
             mixed,frequency=blend(outgoing,incoming,sample_rate,beats=beats,style=style,
                 beat_phase=beat_phase,whole_spectrum_handoff=spec)
@@ -95,7 +100,7 @@ def whole_spectrum_alternative(outgoing,incoming,sample_rate,outgoing_warp,incom
         except (ValueError,TransitionFailure) as error:
             last_error=error;failures.append({'whole_spectrum_handoff':spec,'reason':str(error)});continue
         candidate['whole_spectrum_recovery']={'executed':True,'initial_reason':str(initial_error),
-            'maximum_alternatives':2,'failed_alternatives':failures,'source_windows_clock_and_overlap_unchanged':True,
+            'maximum_alternatives':len(recipes),'selected_strategy':'early_whole_spectrum_hard_case' if number==2 else 'wide_whole_spectrum','failed_alternatives':failures,'source_windows_clock_and_overlap_unchanged':True,
             'frequency_filtering_or_percussion_subtraction':False,'timing_or_pitch_repair_performed':False,
             'timing_gate_relaxed':False,'actual_10_90_shared_beats':frequency['actual_10_90_shared_beats']}
         return mixed,candidate

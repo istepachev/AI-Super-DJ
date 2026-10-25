@@ -36,4 +36,28 @@ def test_transparent_recovery_does_not_waive_failed_attacks_or_quality(monkeypat
     def failure(*args,**kw):calls.append(1);raise ValueError('real late attack')
     monkeypatch.setattr(orchestration,'verify_blended_fronts',failure)
     with pytest.raises(ValueError,match='real late'):whole_spectrum_alternative(x,x,8000,{}, {},{'beats':128},tmp_path,style='zhilin',beat_phase=np.linspace(0,1,len(x)),initial_error=ValueError('old'))
-    assert len(calls)==2
+    assert len(calls)==3
+
+
+@pytest.mark.parametrize('beats',[16,24,32,64,128,160])
+def test_reviewed_early_handoff_is_last_and_retains_continuity(monkeypatch,tmp_path,beats):
+    x=np.ones((48000,2),dtype='float32')*.01;phase=np.linspace(0,1,len(x));seen=[]
+    original_blend=orchestration.blend
+    def observe(*args,**kwargs):
+        seen.append(dict(kwargs['whole_spectrum_handoff']))
+        return original_blend(*args,**kwargs)
+    monkeypatch.setattr(orchestration,'blend',observe)
+    def quality(audio,edge):
+        spec=edge['whole_spectrum_handoff']
+        if beats>32 and spec['end_beat']==float(beats):raise ValueError('wide overlap remains incompatible')
+        return {'passed':True}
+    monkeypatch.setattr(orchestration,'verify_blended_fronts',lambda audio,*a,**kw:(audio,{'executed':True}))
+    _,selected=whole_spectrum_alternative(x,x,8000,{}, {},{'beats':beats,'shared_clock':{'fixed':True}},tmp_path,
+        style='zhilin',beat_phase=phase,initial_error=ValueError('all ordinary routes failed'),quality_check=quality)
+    assert seen[:2]==[{'start_beat':0.,'end_beat':float(beats),'bias':3.},{'start_beat':0.,'end_beat':float(beats),'bias':1.}]
+    if beats>32:
+        assert selected['whole_spectrum_recovery']['selected_strategy']=='early_whole_spectrum_hard_case'
+        assert selected['whole_spectrum_handoff']['end_beat']-selected['whole_spectrum_handoff']['start_beat']==32
+    if beats==128:assert selected['whole_spectrum_handoff']=={'start_beat':4.,'end_beat':36.,'bias':1.}
+    assert selected['frequency_processing']['actual_10_90_shared_beats']>=min(16,beats/2)-.01
+    assert selected['shared_clock']=={'fixed':True}
