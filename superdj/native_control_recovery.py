@@ -18,23 +18,44 @@ def refine_with_native_clock_recovery(path, warp, sample_rate, evidence, *, enab
             not evidence[role].get('stable_clock_controls')]
         if not enabled or rejected.get('passed') is not False or not eligible:
             raise
-        candidate = deepcopy(warp)
         controls = deepcopy(evidence)
-        for role in eligible:
-            controls[role]['stable_clock_controls'] = True
-        try:
-            result = refine_source_controls(path, candidate, sample_rate, controls)
-        except SourceWindowFailure:
-            raise original
+        selected = []
+        rejections = [rejected]
+        # Retain the successful single-role route first. A head retry can expose
+        # a separate tail failure: cumulatively select that independently proven
+        # clock too, always restarting from the unchanged coarse map. At most
+        # one selection per observed role; no repeated edits or open-ended loop.
+        while eligible:
+            for role in eligible:
+                controls[role]['stable_clock_controls'] = True
+                selected.append(role)
+            candidate = deepcopy(warp)
+            try:
+                result = refine_source_controls(path, candidate, sample_rate, controls)
+                break
+            except SourceWindowFailure as subsequent:
+                audit = subsequent.evidence or {}
+                latest = candidate.get('source_kick_alignment', {})
+                roles = [subsequent.role] if subsequent.role else list(reports)
+                eligible = [role for role in roles if role not in selected and
+                    reports.get(role, {}).get('stable_native_primary_clock') and
+                    latest.get(role, {}).get('stable_native_primary_clock') and
+                    (controls or {}).get(role, {}).get('path') and
+                    not controls[role].get('stable_clock_controls')]
+                if audit.get('passed') is not False or not eligible:
+                    raise original
+                rejections.append(audit)
         for role in reports:
             for key in ('events', 'native_rhythm_observations'):
                 if reports[role].get(key) != result.get(role, {}).get(key):
                     raise original
         candidate['supported_native_control_recovery'] = {
-            'roles': eligible, 'rejected_source_rate_audit': rejected,
+            'roles': selected, 'rejected_source_rate_audit': rejected,
             'actual_source_references_preserved': True,
             'timing_gates_unchanged': True,
         }
+        if len(rejections) > 1:
+            candidate['supported_native_control_recovery']['rejected_source_rate_audits'] = rejections
         warp.clear()
         warp.update(candidate)
         return result

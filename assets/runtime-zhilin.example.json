@@ -18,5 +18,15 @@
   "stem_device": "cpu",
   "cache_mode": "temporary",
   "jobs": 1,
-  "model_cache": "C:/SuperDJ/superdj-work/cache"
+  "model_cache": "C:/SuperDJ/superdj-work/cache",
+  "cpu_jobs": 1,
+  "scratch_root": "C:/SuperDJ/superdj-work/scratch",
+  "resource_limits": {
+    "enabled": false,
+    "cpu_cores": 4,
+    "model_jobs": 1,
+    "cpu_jobs": 1,
+    "math_threads": 1,
+    "memory_headroom_gib": 4.0
+  }
 }

@@ -1,6 +1,7 @@
 """Local command-line workflow, with private inputs and explicit backends."""
 from __future__ import annotations
 import argparse
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 import random
@@ -595,6 +596,12 @@ def _rendering(parser):
 
 
 def main(argv=None):
+    from .resource_limits import cli_limit_scope
+    with cli_limit_scope(argv):
+        return _main(argv)
+
+
+def _main(argv=None):
     parser = argparse.ArgumentParser(prog="ai-super-dj", description="AI Super DJ: offline analysis, ordering, rendering and verified export")
     subs = parser.add_subparsers(dest="command", required=True)
     mp = subs.add_parser("make", help="One file to mastered FLAC; multiple files to mixed FLAC")
@@ -691,8 +698,13 @@ def main(argv=None):
     setup.add_argument("--components", required=True); setup.add_argument("--git", default="git")
     setup.add_argument("--download-model", action="store_true"); setup.add_argument("--cache"); setup.add_argument("--checkpoint", default="final0")
     setup.add_argument("--download-cue-model", action="store_true")
+    limits = subs.add_parser("resource-mode", help="Opt-in bounded background processing; settings affect future runs")
+    limits.add_argument("action", nargs="?", default="status", choices=("status", "on", "off", "restore"))
     args = parser.parse_args(argv)
-    if args.command == "make":
+    if args.command == "resource-mode":
+        from .resource_config import configure
+        print(json.dumps(configure(args.action), ensure_ascii=False, indent=2))
+    elif args.command == "make":
         from .make import make
         make(args)
     elif args.command == 'revise':

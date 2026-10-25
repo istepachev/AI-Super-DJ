@@ -345,7 +345,8 @@ def _beat_this(signal: np.ndarray, checkpoint: Path, device: str) -> tuple[np.nd
         raise RuntimeError("Install optional beat-this, torch and torchaudio dependencies to use the model backend") from error
     # A CPU profile should not spawn dozens of workers for a single track.
     if device == "cpu":
-        torch.set_num_threads(min(4, os.cpu_count() or 1))
+        from .resource_limits import math_thread_limit
+        torch.set_num_threads(math_thread_limit(min(4, os.cpu_count() or 1)))
     signature = (str(checkpoint), _sha256(checkpoint), device)
     if signature not in _TRACKERS:
         _TRACKERS[signature] = Audio2Frames(checkpoint_path=str(checkpoint), device=device, float16=False)

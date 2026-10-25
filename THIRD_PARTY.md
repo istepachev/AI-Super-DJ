@@ -4,6 +4,8 @@ SuperDJ's original orchestration and skill instructions use the MIT license in [
 
 ## Audited integration targets
 
+The optional background resource profile uses the separately installed `threadpoolctl>=3.5,<4` package to bound already loaded numerical-library pools. Its [upstream license](https://github.com/joblib/threadpoolctl/blob/3.6.0/LICENSE) is BSD-3-Clause; no package source is vendored. Native scheduling calls use the host OS, without a copied external watchdog.
+
 | Component | Upstream source and audited revision | License at that revision | Role and integration boundary |
 |---|---|---|---|
 | audamcp / dpf-audio-pro | [Dream-Pixels-Forge/audacity-mcp](https://github.com/Dream-Pixels-Forge/audacity-mcp), `9d812922e46f504f91cca48338ed68511f8d4243` | [MIT](https://github.com/Dream-Pixels-Forge/audacity-mcp/blob/9d812922e46f504f91cca48338ed68511f8d4243/LICENSE), copyright 2026 DREAM-PIXELS-FORGE | Optional external Python checkout/package; selective repair/EQ through `audamcp` array functions. The full Audacity/MCP installation is not required for a standalone array processor. |

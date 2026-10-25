@@ -242,6 +242,10 @@ class Worker:
         self.process = subprocess.Popen([python, '-u', '-m', 'superdj.model_worker'], stdin=subprocess.PIPE,
             stdout=subprocess.PIPE, stderr=self.log, text=True, encoding='utf8', env=env)
         self.device = device
+        if session.limit_settings.enabled:
+            from .native_limits import apply_owned_limits
+            self.native_resource_limits=apply_owned_limits(session.limit_settings,self.process)
+            session.metrics.setdefault('owned_worker_resource_limits',[]).append(self.native_resource_limits)
         session.count(family + '_process_starts')
 
     def run(self, kind, job):
@@ -252,6 +256,10 @@ class Worker:
             if not line:
                 raise RuntimeError('Neural worker terminated; inspect the runtime and available device memory')
             reply = json.loads(line)
+            if self.session.limit_settings.enabled and reply.get('resource_limits'):
+                actual=reply['resource_limits']
+                with self.session.lock:
+                    self.session.metrics.setdefault('actual_worker_resource_limits', {})[str(actual['pid'])]=actual['report']
             if 'error' in reply:
                 raise RuntimeError(reply['error'])
             self.session.count(self.family + '_tasks')
@@ -282,11 +290,16 @@ class Session:
     def __init__(self, root, *, jobs=1, cpu_jobs=None, devices=(), scratch_root=None):
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
-        self.jobs = max(1, min(int(jobs), 4))
-        self.cpu_jobs = self.jobs if cpu_jobs is None else max(1, min(int(cpu_jobs), 4))
-        self.preparation_overlap = True
+        from .resource_limits import current_settings,bounded_jobs
+        self.limit_settings=current_settings()
+        self.jobs,self.cpu_jobs=bounded_jobs(jobs,cpu_jobs,self.limit_settings)
+        self.preparation_overlap = not self.limit_settings.enabled
         from .resources import memory_policy
         self.resource_policy=memory_policy()
+        available=self.resource_policy['available_memory_bytes']
+        reserve=self.resource_policy['os_application_headroom_bytes']
+        if self.limit_settings.enabled and available is not None and available-reserve < 768*1024**2:
+            raise MemoryError('Insufficient available RAM beyond the configured headroom; no worker was started')
         if self.resource_policy['constrained']:
             self.jobs=self.cpu_jobs=1
             self.preparation_overlap=False
@@ -311,6 +324,10 @@ class Session:
         self.scratch = tempfile.TemporaryDirectory(prefix="run-", dir=scratch_root)
         self.work = Path(self.scratch.name)
         self.metrics = {'counts': {}, 'seconds': {}}
+        if self.limit_settings.enabled:
+            from .resource_limits import current_report
+            self.metrics['resource_limits']=current_report()
+            self.metrics['resource_limits_requested_queues']={'jobs':jobs,'cpu_jobs':cpu_jobs}
         self.started = time.perf_counter()
 
     def digest(self, path):
@@ -457,6 +474,12 @@ class Session:
         return self._imap(function, values, self.cpu_jobs)
 
     def _imap(self, function, values, jobs):
+        if self.limit_settings.enabled:
+            original_function=function
+            def function(value):
+                from .resource_limits import numba_thread_scope,current_report
+                with numba_thread_scope(current_report()):
+                    return original_function(value)
         if jobs == 1:
             yield from map(function, values)
             return
@@ -535,14 +558,19 @@ class Session:
 
 
 @contextmanager
-def execution(cache=None, *, jobs=1, cpu_jobs=None, devices=(), report=None, scratch_root=None):
+def _execution(cache=None, *, jobs=1, cpu_jobs=None, devices=(), report=None, scratch_root=None):
     if current() is not None:
         yield current()
         return
     from .storage import private_path, write_json
     temporary = tempfile.TemporaryDirectory(prefix='superdj-') if cache is None else None
     root = private_path(cache if cache is not None else temporary.name)
-    session = Session(root, jobs=jobs, cpu_jobs=cpu_jobs, devices=devices, scratch_root=scratch_root)
+    try:
+        session = Session(root, jobs=jobs, cpu_jobs=cpu_jobs, devices=devices, scratch_root=scratch_root)
+    except BaseException:
+        if temporary:
+            temporary.cleanup()
+        raise
     session.persistent = cache is not None
     session.metrics['cache_policy'] = 'persistent' if session.persistent else 'temporary'
     # Worker creation counts under this lock as well.
@@ -563,6 +591,18 @@ def execution(cache=None, *, jobs=1, cpu_jobs=None, devices=(), report=None, scr
             _current.reset(token)
             if temporary:
                 temporary.cleanup()
+
+
+@contextmanager
+def execution(cache=None, *, jobs=1, cpu_jobs=None, devices=(), report=None, scratch_root=None):
+    if current() is not None:
+        yield current()
+        return
+    from .resource_limits import limit_scope
+    with limit_scope():
+        with _execution(cache,jobs=jobs,cpu_jobs=cpu_jobs,devices=devices,
+                        report=report,scratch_root=scratch_root) as session:
+            yield session
 
 
 def cached(stage, dependencies, producer, owned):

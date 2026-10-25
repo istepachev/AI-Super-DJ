@@ -1,11 +1,12 @@
 """Private JSON-lines worker. Model objects stay alive until the run ends."""
 import contextlib
 import json
+import os
 import sys
 import traceback
 
 
-def main():
+def _work():
     output = sys.stdout
     for line in sys.stdin:
         try:
@@ -41,8 +42,22 @@ def main():
         except Exception as error:
             traceback.print_exc(file=sys.stderr)
             reply = {'error': f'{type(error).__name__}: {error}'}
+        from .resource_limits import current_report, current_settings
+        if current_settings().enabled:
+            # This is the actual interpreter, even when a venv launcher is its
+            # parent. No neural module is imported before its own native scope.
+            reply['resource_limits'] = {'pid': os.getpid(), 'report': current_report()}
         output.write(json.dumps(reply, allow_nan=False) + '\n')
         output.flush()
+
+
+
+
+def main():
+    from .resource_limits import current_settings,limit_scope
+    # The parent serializes only SuperDJ limits into its owned worker's env.
+    with limit_scope(current_settings(), native=True):
+        return _work()
 
 
 if __name__ == '__main__':

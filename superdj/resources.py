@@ -6,6 +6,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import sys
 
 GIB = 1024**3
 _AUTO=object()
@@ -36,6 +37,10 @@ def memory_policy(*, memory=_AUTO, total=_AUTO):
     total=total_memory() if total is _AUTO else total
     reserve=max(512*1024**2,min(2*GIB,int((total or 4*GIB)*.125)))
     if memory is not None: reserve=min(reserve,int(memory*.25))
+    from .resource_limits import current_settings
+    limits=current_settings()
+    if limits.enabled:
+        reserve=max(reserve,int(limits.memory_headroom_gib*GIB))
     budget=min(8*GIB,int(memory*.5),max(0,memory-reserve)) if memory is not None else 768*1024**2
     explicit=os.environ.get('SUPERDJ_MEMORY_BUDGET_MB')
     if explicit is not None:
@@ -50,8 +55,12 @@ def memory_policy(*, memory=_AUTO, total=_AUTO):
 
 def configure_math_threads():
     """Bound large native-library thread pools before importing audio libraries."""
+    from .resource_limits import bootstrap_math_threads
+    bootstrap_math_threads()
     if memory_policy()['constrained']:
         for name in ('OPENBLAS_NUM_THREADS','OMP_NUM_THREADS','MKL_NUM_THREADS','NUMBA_NUM_THREADS'):
+            if name=='NUMBA_NUM_THREADS' and 'numba' in sys.modules:
+                continue  # fixed launch capacity; execution scopes use the public thread mask
             os.environ[name]='1'
 
 
@@ -148,6 +157,9 @@ def preflight(files, *, output, scratch=None, cache=None, jobs=None, cpu_jobs=No
     reserve = policy['os_application_headroom_bytes']
     requested = min(4, max(1, int(jobs))) if jobs is not None else min(2, max(1, machine['cpu_threads']//4))
     requested_cpu = requested if cpu_jobs is None else min(4, max(1, int(cpu_jobs)))
+    from .resource_limits import bounded_jobs,current_settings
+    requested,requested_cpu=bounded_jobs(requested,requested_cpu)
+    limits=current_settings()
     selected = requested
     if memory is not None:
         # A lower bound is a hard refusal; upper estimates cap concurrency and
@@ -173,9 +185,11 @@ def preflight(files, *, output, scratch=None, cache=None, jobs=None, cpu_jobs=No
     # CPU preparation/rendering has its own queue. Reserve the concurrently
     # admitted analysis/model slots too, rather than multiplying the old RAM
     # allowance by two independent settings. Unknown RAM permits serial phases.
+    if limits.enabled and memory is not None and memory-reserve < task_peak:
+        raise MemoryError('Insufficient available RAM for the configured OS headroom and one full-quality audio task; retain checkpoints and retry when resources are available')
     capacity = max(1, int((memory-reserve)//task_peak)) if memory is not None else 1
     cpu_selected = min(requested_cpu, max(1, machine['cpu_threads']//2), max(1, capacity-selected))
-    preparation_overlap = memory is not None and capacity >= selected+cpu_selected
+    preparation_overlap = memory is not None and capacity >= selected+cpu_selected and not limits.enabled
     if policy['constrained']:
         selected=cpu_selected=1
         preparation_overlap=False

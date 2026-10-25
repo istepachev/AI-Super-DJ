@@ -48,3 +48,49 @@ def test_successful_retry_retains_observations_and_original_evidence(monkeypatch
     assert evidence=={'head':{'path':'drums'}}
     assert calls[1]['head']['stable_clock_controls']
     assert warp['supported_native_control_recovery']['timing_gates_unchanged']
+
+
+@pytest.mark.parametrize('second_failure', ['tail', 'head', 'unmeasured', 'unsupported', 'changed-reference'])
+def test_independent_second_role_recovery_is_bounded_and_transactional(monkeypatch, second_failure):
+    observations = {role: {'stable_native_primary_clock': True,
+        'events': [{'time': stamp}], 'native_rhythm_observations': [{'time': stamp + .1}]}
+        for role, stamp in [('head', 1), ('tail', 12)]}
+    if second_failure == 'unsupported':
+        observations['tail']['stable_native_primary_clock'] = False
+    first = SourceWindowFailure('head rate', role='head', evidence={'passed': False})
+    calls = []
+    def refine(path, candidate, rate, controls):
+        # A retry must not reapply a previous map edit.
+        assert candidate['anchors'] == [{'source_frame': 0}]
+        calls.append(deepcopy(controls))
+        candidate['source_kick_alignment'] = deepcopy(observations)
+        if len(calls) == 1:
+            raise first
+        if len(calls) == 2:
+            candidate['anchors'] = [{'source_frame': 456}]
+            raise SourceWindowFailure('second rate',
+                role='head' if second_failure == 'head' else 'tail',
+                evidence={} if second_failure == 'unmeasured' else {'passed': False})
+        candidate['anchors'] = [{'source_frame': 123}]
+        if second_failure == 'changed-reference':
+            candidate['source_kick_alignment']['tail']['events'] = []
+        return candidate['source_kick_alignment']
+    monkeypatch.setattr('superdj.kick_grid.refine_source_controls', refine)
+    warp = {'anchors': [{'source_frame': 0}]}
+    evidence = {role: {'path': 'actual-drums'} for role in observations}
+    if second_failure == 'tail':
+        result = refine_with_native_clock_recovery('source', warp, 44100, evidence, enabled=True)
+        assert result == observations and warp['anchors'] == [{'source_frame': 123}]
+        receipt = warp['supported_native_control_recovery']
+        assert receipt['roles'] == ['head', 'tail']
+        assert len(receipt['rejected_source_rate_audits']) == 2
+        assert receipt['actual_source_references_preserved'] and receipt['timing_gates_unchanged']
+    else:
+        with pytest.raises(SourceWindowFailure) as caught:
+            refine_with_native_clock_recovery('source', warp, 44100, evidence, enabled=True)
+        assert caught.value is first and warp['anchors'] == [{'source_frame': 0}]
+    assert len(calls) == (3 if second_failure in ('tail', 'changed-reference') else 2)
+    assert calls[1]['head']['stable_clock_controls']
+    if len(calls) == 3:
+        assert calls[2]['head']['stable_clock_controls'] and calls[2]['tail']['stable_clock_controls']
+    assert evidence == {role: {'path': 'actual-drums'} for role in observations}
