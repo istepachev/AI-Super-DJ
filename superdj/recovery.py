@@ -19,6 +19,9 @@ def unsupported_attack_events(evidence,role):
     observed={p['beat'] for p in points if p.get('view')=='bass_body'}
     independent={p['beat'] for p in points if p.get('view')=='estimated_bass'}
     failed=(required['mixture']-observed)|(required['estimate']-independent)
+    initial=set(source.get('native_mixture_reference',{}).get('initial_front_required_beats',[]))
+    initial_observed={p['beat'] for p in points if p.get('view')=='initial_front'}
+    failed.update(initial-initial_observed)
     failed.update(p['beat'] for p in points if abs(p.get('delay_seconds',0.))>.003)
     return list(dict.fromkeys([*[p['source_seconds'] for p in source.get('events',[]) if p['beat'] in failed],*rate_positions]))
 

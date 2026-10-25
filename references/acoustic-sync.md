@@ -161,3 +161,8 @@ louder bass body, a late upper attack after bass gain reaches zero, native
 family coverage, strict additive identity, transparent handoff continuity,
 source-backend defaults, loop-timeline rebinding and the real resonant-kick
 crossover. Synthetic success does not replace source-music renders or listening.
+
+When a required initial front is missing or a recognized timing view is late,
+window recovery rejects its physical native-source timestamp alongside existing
+bass failures. Renumbering that event in a nearby window does not make it valid.
+Recognized on-time fronts do not exclude otherwise compatible windows.
