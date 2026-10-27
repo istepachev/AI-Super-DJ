@@ -1545,12 +1545,14 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                         vocal_in=incoming_vocal, style=plan.get('style','default'), beat_phase=beat_phase)
                 except TransitionFailure as error:
                     if mode!='beatmapped_bass_swap':raise
-                    from .orchestration import legacy_mid_alternative
+                    from .orchestration import quality_alternative
                     try:
-                        mixed,selected=legacy_mid_alternative(previous_tail,block,sample_rate,
-                            clips[position-1].get('warp'),clip.get('warp'),transition,directory/f'middle-legacy-{position:02}',
+                        mixed,selected=quality_alternative(previous_tail,block,sample_rate,
+                            clips[position-1].get('warp'),clip.get('warp'),transition,directory/f'quality-recovery-{position:02}',
                             style=plan.get('style','default'),beat_phase=beat_phase,percussion_args=percussion_args,
                             initial_error=error,quality_check=quality_check,ffmpeg=ffmpeg,bass_hz=bass_hz,
+                            percussion_factory=lambda:final_drum_estimates(previous_tail,block,sample_rate,
+                                directory/f'quality-percussion-{position:02}',ffmpeg=ffmpeg),
                             mid_energy_args=mid_energy_args,allow_pitch_changing_residual=allow_pitch_changing_residual)
                     except (ValueError,TransitionFailure):raise error
                     transition.clear();transition.update(selected)

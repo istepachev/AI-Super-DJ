@@ -8,6 +8,61 @@ from .derived_audio import derived_scope
 
 
 @derived_scope()
+def quality_alternative(outgoing,incoming,sample_rate,outgoing_warp,incoming_warp,
+                        transition,directory,*,style,beat_phase,percussion_args,
+                        initial_error,quality_check,percussion_factory,
+                        ffmpeg='ffmpeg',bass_hz=180.,mid_energy_args=None,
+                        allow_pitch_changing_residual=False):
+    """A quality refusal gets the same strict soft routes as a front refusal.
+
+    Keep successful ordinary mixes untouched. Never move native cuts or the
+    shared clock to solve an energy hole, and never treat an unmeasured local
+    entry as certified merely because the end of the blend matches well.
+    """
+    try:
+        return legacy_mid_alternative(outgoing,incoming,sample_rate,outgoing_warp,incoming_warp,
+            transition,Path(directory)/'legacy-middle',style=style,beat_phase=beat_phase,
+            percussion_args=percussion_args,initial_error=initial_error,quality_check=quality_check,
+            ffmpeg=ffmpeg,bass_hz=bass_hz,mid_energy_args=mid_energy_args,
+            allow_pitch_changing_residual=allow_pitch_changing_residual)
+    except (ValueError,TransitionFailure):
+        pass
+    evidence=getattr(initial_error,'evidence',{})
+    eligible=(evidence.get('energy',{}).get('passed')is False
+              or evidence.get('local_rhythm_coverage',{}).get('passed')is False)
+    if (not eligible or not callable(quality_check)
+            or transition.get('whole_spectrum_handoff')is not None
+            or (transition.get('handoff_windows')or{}).get('bass')
+            or transition.get('bass_handoff_beats')is not None):
+        raise initial_error
+    candidate={**transition};args=dict(percussion_args)
+    if not all(args.get(k)is not None for k in ('drums_out','drums_in')):
+        args,report=percussion_factory()
+        args=dict(args)
+        if not all(args.get(k)is not None for k in ('drums_out','drums_in')):
+            raise ValueError('Quality recovery needs both exact final-deck drum estimates')
+        candidate['percussion_estimates']=report
+    try:
+        pcm,selected=gradual_alternative(outgoing,incoming,sample_rate,outgoing_warp,incoming_warp,
+            candidate,Path(directory)/'gradual-position',style=style,beat_phase=beat_phase,
+            percussion_args=args,initial_error=initial_error,quality_check=quality_check,
+            ffmpeg=ffmpeg,bass_hz=bass_hz,mid_energy_args=mid_energy_args,
+            tonal_conflict=transition.get('frequency_processing',{}).get('tonal_conflict_risk',False),
+            allow_pitch_changing_residual=allow_pitch_changing_residual)
+        strategy='existing_gradual_band_positions'
+    except (ValueError,TransitionFailure)as error:
+        pcm,selected=whole_spectrum_alternative(outgoing,incoming,sample_rate,outgoing_warp,incoming_warp,
+            candidate,Path(directory)/'whole-spectrum',style=style,beat_phase=beat_phase,
+            initial_error=error,quality_check=quality_check,ffmpeg=ffmpeg,
+            allow_pitch_changing_residual=allow_pitch_changing_residual)
+        strategy='existing_whole_spectrum_variants'
+    selected['quality_gate_recovery']={'executed':True,'initial_reason':str(initial_error),
+        'strategy':strategy,'source_windows_clock_and_overlap_unchanged':True,
+        'timing_or_pitch_repair_performed':False,'quality_and_front_gates_retained':True}
+    return pcm,selected
+
+
+@derived_scope()
 def legacy_mid_alternative(outgoing,incoming,sample_rate,outgoing_warp,incoming_warp,
                            transition,directory,*,style,beat_phase,percussion_args,
                            initial_error,quality_check,ffmpeg='ffmpeg',bass_hz=180.,

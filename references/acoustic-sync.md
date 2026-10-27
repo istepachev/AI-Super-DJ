@@ -50,6 +50,15 @@ A 100–1400 Hz novelty search can still follow a dominant delayed 100–180 Hz 
 
 ## Full-spectrum percussion ownership
 
+An actual energy or local-rhythm coverage failure uses the same bounded soft
+routing search as a combined-front failure, after checking the legacy middle
+curve. Preserve explicit bass positions/widths and whole-spectrum choices.
+Missing drum estimates come from the exact final timed and foreground-routed
+decks. Try existing gradual positions before the existing wider whole-spectrum
+routes and their last hard-case option. Every candidate reruns front, energy,
+vocal and local-coverage checks. If all fail, retain the refusal and choose a
+compatible source window; never certify it using only the accurate later beats.
+
 Every ordinary style validates actual bass, middle and routed percussion gain spans. Mood/Classic/Fuzzy only change ordering, never this smooth-mixing requirement. Factory full bass transfers span at least sixteen shared beats, thirty-two for Zhilin, within the available overlap. Validate the actual 10–90% bass and estimated-percussion spans independently: at least eight shared beats, sixteen for Zhilin, capped by the available half-window. Explicit reviewed widths remain reproducible with the separate reviewed continuity checks. Uncertain source evidence selects a gradual complementary percussion transfer, never an automatic sequential cut. A failed combined-wave check may retry gradual routing; unresolved contradictions require a different source window. Explicitly requested abrupt effects remain separate from ordinary mixing and its continuity claim.
 
 With broad DJ Zhilin mids, a departing kick's upper click may retain nearly half gain after its bass gain reaches zero. When a coherent earlier upper front was selected or a previously missed bass attack was recovered in the relevant source window, the ordinary renderer, in every style, automatically supplies two aligned drum estimates from the actual final deck PCM to `blend`; the same API supports a reviewed collision. Harmonic beds follow the approved bass/mid/high envelopes, while both entire drum estimates follow the bass handoff envelope. The default gradual eight-bar Zhilin handoff can coexist with 32-bar melodic accompaniment; its effective 10–90% span is checked separately. Record final-deck hashes and fresh estimate provenance; reject mismatched shapes, incomplete pairs and unverified fade fallbacks. Foreground processing must precede estimation or be routed identically. Never reuse estimates from a different stretch map.
