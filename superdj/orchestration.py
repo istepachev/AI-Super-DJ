@@ -1,17 +1,47 @@
 """Bounded gradual handoff placement on unchanged, independently timed decks."""
 from pathlib import Path
 import numpy as np
-from .mixing import blend,envelopes
+from .mixing import blend,envelopes,recorded_envelopes
 from .percussion import percussion_gains,verification_components,verify_blended_fronts
 from .transition_quality import TransitionFailure
 from .derived_audio import derived_scope
 
 
 @derived_scope()
+def legacy_mid_alternative(outgoing,incoming,sample_rate,outgoing_warp,incoming_warp,
+                           transition,directory,*,style,beat_phase,percussion_args,
+                           initial_error,quality_check,ffmpeg='ffmpeg',bass_hz=180.,
+                           mid_energy_args=None,allow_pitch_changing_residual=False):
+    """Retain a working ordinary route when new mid audibility is uncertain."""
+    if not transition.get('frequency_processing',{}).get('adaptive_mid_energy',{}).get('applied'):
+        raise initial_error
+    if not callable(quality_check):raise initial_error
+    controls={k:transition[k]for k in ('mid_handoff_bars','bass_handoff_beats','handoff_windows','whole_spectrum_handoff')if transition.get(k)is not None}
+    if controls.get('whole_spectrum_handoff')is not None:raise initial_error
+    voice={**(mid_energy_args or{}),'mid_energy_mode':'legacy'}
+    mixed,frequency=blend(outgoing,incoming,sample_rate,bass_hz=bass_hz,beats=transition.get('beats',64),
+        style=style,beat_phase=beat_phase,tonal_conflict=transition.get('frequency_processing',{}).get('tonal_conflict_risk',False),
+        **controls,**percussion_args,**voice)
+    candidate={**transition,'frequency_processing':frequency,'mid_energy_mode':'legacy'}
+    gains,_=recorded_envelopes(len(mixed),transition.get('beats',64),candidate,style=style,beat_phase=beat_phase)
+    gains=percussion_gains(gains,beat_phase,transition.get('beats',64),percussion_args.get('percussion_policy','shared'))
+    components=verification_components(outgoing,incoming,sample_rate,gains,bass_hz=bass_hz,
+        **{k:v for k,v in percussion_args.items()if k!='percussion_policy'})
+    mixed,fronts=verify_blended_fronts(mixed,sample_rate,outgoing_warp,incoming_warp,gains,directory,
+        ffmpeg=ffmpeg,components=components,allow_pitch_changing_residual=allow_pitch_changing_residual)
+    candidate['blended_front_audit']=fronts
+    candidate['quality_gate']=quality_check(mixed,candidate)
+    candidate['mid_energy_legacy_recovery']={'executed':True,'initial_reason':str(initial_error),
+        'source_clock_overlap_and_band_positions_unchanged':True,'timing_gate_relaxed':False,
+        'reason':'new audible mid contribution did not pass; retained ordinary curve passed every actual check'}
+    return mixed,candidate
+
+
+@derived_scope()
 def gradual_alternative(outgoing,incoming,sample_rate,outgoing_warp,incoming_warp,
                         transition,directory,*,style,beat_phase,percussion_args,
                         initial_error,ffmpeg='ffmpeg',bass_hz=180.,tonal_conflict=False,
-                        quality_check=None,allow_pitch_changing_residual=False):
+                        quality_check=None,allow_pitch_changing_residual=False,mid_energy_args=None):
     """Move a complete soft curve, never a deck, native attack, or user lock.
 
     Every candidate keeps the original overlap, clock, bass transfer width,
@@ -36,9 +66,8 @@ def gradual_alternative(outgoing,incoming,sample_rate,outgoing_warp,incoming_war
         selected={**controls,'handoff_windows':windows}
         mixed,frequency=blend(outgoing,incoming,sample_rate,bass_hz=bass_hz,beats=beats,
             style=style,beat_phase=beat_phase,tonal_conflict=tonal_conflict,
-            percussion_policy='smooth',**drum_args,**selected)
-        gains,_=envelopes(len(mixed),beats,style=style,beat_phase=beat_phase,
-            tonal_conflict=tonal_conflict,**selected)
+            percussion_policy='smooth',**drum_args,**selected,**(mid_energy_args or{}))
+        gains,_=recorded_envelopes(len(mixed),beats,{**transition,**selected,'frequency_processing':frequency},style=style,beat_phase=beat_phase)
         gains=percussion_gains(gains,beat_phase,beats,'smooth')
         components=verification_components(outgoing,incoming,sample_rate,gains,bass_hz=bass_hz,**drum_args)
         candidate={**transition,**selected,'percussion_ownership_policy':'smooth','frequency_processing':frequency}
@@ -49,9 +78,17 @@ def gradual_alternative(outgoing,incoming,sample_rate,outgoing_warp,incoming_war
             candidate['blended_front_audit']=fronts
             if quality_check is not None:candidate['quality_gate']=quality_check(mixed,candidate)
         except (ValueError,TransitionFailure) as error:
-            failures.append({'bass_shared_beats':[start,end],'reason':str(error)})
-            last_error=error
-            continue
+            try:
+                if quality_check is None:raise error
+                mixed,candidate=legacy_mid_alternative(outgoing,incoming,sample_rate,outgoing_warp,incoming_warp,candidate,
+                    Path(directory)/f'position-{position}-legacy-middle',style=style,beat_phase=beat_phase,
+                    percussion_args={**drum_args,'percussion_policy':'smooth'},initial_error=error,
+                    quality_check=quality_check,ffmpeg=ffmpeg,bass_hz=bass_hz,mid_energy_args=mid_energy_args,
+                    allow_pitch_changing_residual=allow_pitch_changing_residual)
+            except (ValueError,TransitionFailure):
+                failures.append({'bass_shared_beats':[start,end],'reason':str(error)})
+                last_error=error
+                continue
         candidate['gradual_orchestration_search']={'executed':True,'passed':True,
             'initial_reason':str(initial_error),'failed_alternatives':failures,
             'selected_bass_shared_beats':[start,end],'original_bass_shared_beats':[first*beats,last*beats],

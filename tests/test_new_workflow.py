@@ -161,8 +161,8 @@ def test_simple_input_collection_never_silently_drops_or_duplicates(tmp_path):
         collect([tmp_path, tmp_path / "a.flac"])
 
 
-@pytest.mark.parametrize("native_beats", [None, 51])
-def test_real_zhilin_long_render_preserves_three_minute_sections(tmp_path, native_beats):
+@pytest.mark.parametrize("native_beats,legacy_bass_width", [(None,None),(51,None),(51,16)])
+def test_real_zhilin_long_render_preserves_three_minute_sections(tmp_path, native_beats,legacy_bass_width):
     ffmpeg, rubberband = os.getenv("SUPERDJ_FFMPEG"), os.getenv("SUPERDJ_RUBBERBAND")
     if not ffmpeg or not rubberband:
         pytest.skip("Actual audio tools required")
@@ -187,6 +187,9 @@ def test_real_zhilin_long_render_preserves_three_minute_sections(tmp_path, nativ
             cue_locks={"outgoing_end_seconds": records[0]["beats"][485],
                        "incoming_start_seconds": records[1]["beats"][65]})
         edge.pop("section_overlap_bars", None)
+        if legacy_bass_width is not None:
+            edge['bass_handoff_beats']=legacy_bass_width
+            edge['mid_energy_mode']='legacy'
     result = render_plan(planned, records, {}, tmp_path / "set.wav", tmp_path / "render",
         ffmpeg=ffmpeg, rubberband=rubberband, sample_rate=sr)
     if native_beats:
@@ -197,8 +200,29 @@ def test_real_zhilin_long_render_preserves_three_minute_sections(tmp_path, nativ
         audit=transition['blended_front_audit']
         ambiguities=[a for c in audit['checks'] for a in c['raw_mixture_identity_ambiguities']]
         assert ambiguities and any(abs(a['raw_delay_seconds'])>.003 for a in ambiguities)
-        assert all(a['raw_candidate_other_waveform_cosine']>=.98
-                   and a['other_to_own_band_power_ratio']>=4 for a in ambiguities)
+        if legacy_bass_width is not None:
+            assert all(a['raw_candidate_other_waveform_cosine']>=.98 and a['other_to_own_band_power_ratio']>=4 for a in ambiguities)
+        for ambiguity in ambiguities:
+            if ambiguity['classification'].startswith('additive waveform interference'):
+                # A wider handoff also exercises the existing exact-additive
+                # identity path. It needs both independently verified native
+                # fronts, rather than pretending the other source dominates.
+                assert ambiguity['exact_mixture_reconstruction_verified']
+                assert abs(ambiguity['own_delay_seconds'])<=.003
+                assert ambiguity['own_template_correlation']>=.98
+                assert ambiguity['other_native_template_correlation']>=.98
+                assert ambiguity['other_native_alternative_peak_margin']>=.05
+                assert ambiguity['raw_timing_contradiction_retained']
+                assert ambiguity['missing_other_attack_invented']is False
+                if ambiguity['other_native_delay_seconds']is not None:
+                    assert abs(ambiguity['other_native_delay_seconds'])<=.003
+                    assert ambiguity['directly_verified_native_pair_error_seconds']<=.003
+                else:
+                    bracket=ambiguity['other_native_clock_bracketing_references']
+                    assert len(bracket)>=2 and all(abs(r['delay_seconds'])<=.003 and r['correlation']>=.98 for r in bracket)
+            else:
+                assert ambiguity['raw_candidate_other_waveform_cosine']>=.98
+                assert ambiguity['other_to_own_band_power_ratio']>=4
         assert not audit['local_combined_waveform_refinements']
         assert audit['paired_source_front_audit']['maximum_pair_error_seconds']<=.003
         assert transition['frequency_processing']['musical_handoff_continuity']['passed']

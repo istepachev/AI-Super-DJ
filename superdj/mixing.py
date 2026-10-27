@@ -82,7 +82,7 @@ def envelopes(n, beats, *, tonal_conflict=False, beat_phase=None, style='default
         if bass_handoff_beats is None and not (handoff_windows or {}).get('bass'):
             # Preserve the reference's long handoff while keeping shortened
             # source overlaps from scaling it down to a one-bar switch.
-            width=min(1.,max(end-start,16./beats))
+            width=min(1.,max(end-start,32./beats))
             center=(start+end)/2
             start=max(0.,min(center-width/2,1-width));end=start+width
         if bass_handoff_beats is not None:
@@ -124,7 +124,7 @@ def envelopes(n, beats, *, tonal_conflict=False, beat_phase=None, style='default
     mid_width = mid_beats / beats
     mid_start=max(0.,min(.43-mid_width/2,1-mid_width))
     mid = smooth((p - mid_start) / mid_width)
-    bass_beats = min(float(beats), max(8., beats / 8))
+    bass_beats = min(float(beats), max(16., beats / 8))
     bass_width=bass_beats/beats
     bass_start=max(0.,min(.55-bass_width/2,1-bass_width))
     if (handoff_windows or {}).get('bass'):
@@ -149,14 +149,35 @@ def envelopes(n, beats, *, tonal_conflict=False, beat_phase=None, style='default
     return gains, report
 
 
+def recorded_envelopes(n,beats,transition,*,style,beat_phase):
+    """Use recorded effective routing, including older default widths."""
+    frequency=transition.get('frequency_processing')or{}
+    controls={k:transition[k]for k in ('mid_handoff_bars','bass_handoff_beats','handoff_windows','whole_spectrum_handoff')if transition.get(k)is not None}
+    if controls.get('whole_spectrum_handoff')is None:
+        if not controls.get('handoff_windows')and frequency.get('handoff_windows_shared_beats'):
+            controls['handoff_windows']=frequency['handoff_windows_shared_beats']
+        if not(controls.get('handoff_windows')or{}).get('bass')and controls.get('bass_handoff_beats')is None and frequency.get('bass_handoff_beats')is not None:
+            if style=='zhilin':controls['bass_handoff_beats']=frequency['bass_handoff_beats']
+            elif frequency.get('bass_handoff_fraction'):
+                controls['handoff_windows']={**controls.get('handoff_windows',{}),'bass':[v*beats for v in frequency['bass_handoff_fraction']]}
+        if controls.get('mid_handoff_bars')is None and frequency.get('mid_handoff_bars_override')is not None:
+            controls['mid_handoff_bars']=frequency['mid_handoff_bars_override']
+    gains,curves=envelopes(n,beats,style=style,beat_phase=beat_phase,
+        tonal_conflict=frequency.get('tonal_conflict_risk',False),**controls)
+    from .mid_energy import apply_report
+    return apply_report(gains,frequency),curves
+
+
 def blend(outgoing, incoming, sample_rate, *, bass_hz=180.0,
           beats=64, tonal_conflict=False, beat_phase=None, style='default', profile=None,
           mid_handoff_bars=None, bass_handoff_beats=None,drums_out=None,drums_in=None,percussion_policy='shared',handoff_windows=None,
-          allow_abrupt_percussion=False,whole_spectrum_handoff=None):
+          allow_abrupt_percussion=False,whole_spectrum_handoff=None,
+          mid_energy_mode='auto',vocal_out=None,vocal_in=None,vocal_processing=None):
     if outgoing.shape != incoming.shape or outgoing.ndim != 2 or outgoing.shape[1] != 2:
         raise ValueError("Frequency blend needs equally sized stereo blocks")
     if not np.isfinite(outgoing).all() or not np.isfinite(incoming).all():
         raise ValueError("Nonfinite overlap audio")
+    if mid_energy_mode not in ('auto','legacy'):raise ValueError('Middle energy mode must be auto or legacy')
     n = len(incoming)
     if whole_spectrum_handoff is not None:
         if drums_out is not None or drums_in is not None or percussion_policy!='shared':
@@ -164,10 +185,12 @@ def blend(outgoing, incoming, sample_rate, *, bass_hz=180.0,
         gains,curves=envelopes(n,beats,tonal_conflict=tonal_conflict,beat_phase=beat_phase,style=style,
             mid_handoff_bars=mid_handoff_bars,bass_handoff_beats=bass_handoff_beats,
             handoff_windows=handoff_windows,whole_spectrum_handoff=whole_spectrum_handoff)
-        continuity=validate_handoff_continuity(gains,beat_phase,beats)
+        continuity=validate_handoff_continuity(gains,beat_phase,beats,style=style)
         mixed=(outgoing*gains['mid_out']+incoming*gains['mid_in']).astype(np.float32)
         return mixed,{'method':'complementary whole-spectrum faders on unchanged timed decks',
             **curves,'musical_handoff_continuity':continuity,'tonal_conflict_risk':bool(tonal_conflict),
+            'adaptive_mid_energy':{'mode':mid_energy_mode,'applied':False,'reason':'explicit whole-spectrum variant retained unchanged'},
+            'entry_gain_compensated':False,
             'percussion_processing':{'executed':False,'reason':'explicit whole-spectrum handoff'},
             'endpoint_max_error':float(max(np.max(np.abs(mixed[0]-outgoing[0])),np.max(np.abs(mixed[-1]-incoming[-1]))))}
     if drums_out is not None or drums_in is not None:
@@ -188,7 +211,21 @@ def blend(outgoing, incoming, sample_rate, *, bass_hz=180.0,
     if percussion_policy!='shared' and drums_out is None:raise ValueError('Percussion routing requires both final drum estimates')
     from .percussion import percussion_gains
     gains=percussion_gains(gains,beat_phase,beats,percussion_policy)
-    continuity=validate_handoff_continuity(gains,beat_phase,beats,allow_abrupt_percussion=allow_abrupt_percussion)
+    drum_bands_a=split_bands(drums_out,sample_rate,bass_hz)if drums_out is not None else None
+    drum_bands_b=split_bands(drums_in,sample_rate,bass_hz)if drums_in is not None else None
+    from .mid_energy import decide,apply_report
+    mid_energy=decide(mid_a-(drum_bands_a[1]if drum_bands_a is not None else 0),
+        mid_b-(drum_bands_b[1]if drum_bands_b is not None else 0),sample_rate,gains,
+        vocal_out=vocal_out,vocal_in=vocal_in,vocal_processing=vocal_processing,mode=mid_energy_mode)
+    gains=apply_report(gains,{'adaptive_mid_energy':mid_energy})
+    if mid_energy['applied']:
+        actual_phase=np.linspace(0,1,n)if beat_phase is None else np.asarray(beat_phase)
+        span=[float(actual_phase[np.flatnonzero(gains['mid_in'][:,0]>=value)[0]])for value in (.1,.9)]
+        mid_energy['base_mid_10_90_fraction']=curves.get('mid_10_90_fraction')
+        curves['mid_10_90_fraction']=span;curves['incoming_mid_opening_beats']=beats*(span[1]-span[0])
+    curves['band_pair_gain_sum_maximum']['mid']=float(np.max(gains['mid_out']+gains['mid_in']))
+    continuity=validate_handoff_continuity(gains,beat_phase,beats,allow_abrupt_percussion=allow_abrupt_percussion,
+        style=style,reviewed_band_override=bass_handoff_beats is not None or bool((handoff_windows or {}).get('bass')))
     mixed = low_a * gains['bass_out'] + low_b * gains['bass_in']
     mixed += mid_a * gains['mid_out'] + mid_b * gains['mid_in']
     mixed += high_a * gains['high_out'] + high_b * gains['high_in']
@@ -197,7 +234,7 @@ def blend(outgoing, incoming, sample_rate, *, bass_hz=180.0,
         # Keep wide accompaniment curves, but transfer the whole percussion
         # spectrum together. An old kick's upper attack must not remain at
         # the mid gain after its fundamental has been handed to the next deck.
-        for drum_a,drum_b,label in zip(split_bands(drums_out,sample_rate,bass_hz),split_bands(drums_in,sample_rate,bass_hz),('bass','mid','high')):
+        for drum_a,drum_b,label in zip(drum_bands_a,drum_bands_b,('bass','mid','high')):
             mixed+=drum_a*(gains.get('drums_out',gains['bass_out'])-gains[label+'_out'])+drum_b*(gains.get('drums_in',gains['bass_in'])-gains[label+'_in'])
         percussion_phase=np.linspace(0.,1.,n) if beat_phase is None else np.asarray(beat_phase)
         percussion={'executed':True,'method':'Transfer the full estimated percussion spectrum with the bass clock, while accompaniment retains its independent broad frequency curves',
@@ -215,13 +252,15 @@ def blend(outgoing, incoming, sample_rate, *, bass_hz=180.0,
               **curves, "incoming_mid_start_multiplier": 0.,
               "tonal_conflict_risk": bool(tonal_conflict), "vocal_overlap_certified_absent": False,
               "entry_gain_compensated": False,
+              "adaptive_mid_energy":mid_energy,
               "endpoint_max_error": float(max(np.max(np.abs(mixed[0] - outgoing[0])), np.max(np.abs(mixed[-1] - incoming[-1]))))}
+    if mid_energy['applied']:report['method']='independent band handoff with energy-preserving noncompeting middle beds'
     if percussion:report['percussion_processing']=percussion
     if continuity:report['musical_handoff_continuity']=continuity
     return mixed.astype(np.float32), report
 
 
-def validate_handoff_continuity(gains,beat_phase,beats,*,allow_abrupt_percussion=False):
+def validate_handoff_continuity(gains,beat_phase,beats,*,allow_abrupt_percussion=False,style=None,reviewed_band_override=False):
     """A sample-smooth envelope can still switch the musical core too quickly.
 
     Check effective accompaniment gains after routing. A short drum transfer
@@ -237,7 +276,9 @@ def validate_handoff_continuity(gains,beat_phase,beats,*,allow_abrupt_percussion
         if not len(first) or not len(last):raise ValueError('Incomplete accompaniment handoff')
         spans[band]=float((phase[last[0]]-phase[first[0]])*beats)
     required={'bass':min(2.,beats/4),'mid':min(4.,beats/4)}
+    if style is not None and not reviewed_band_override:required['bass']=min(16. if style=='zhilin'else 8.,beats/2)
     if 'percussion' in spans:required['percussion']=0. if allow_abrupt_percussion else min(2.,beats/4)
+    if 'percussion'in spans and style is not None and not reviewed_band_override and not allow_abrupt_percussion:required['percussion']=min(16. if style=='zhilin'else 8.,beats/2)
     if spans.get('percussion',float('inf'))+1e-5<required.get('percussion',0.):
         raise ValueError('Percussion handoff is too short for a smooth mix; select a gradual transfer or another source window')
     if any(spans[k]+1e-5<required[k] for k in spans):

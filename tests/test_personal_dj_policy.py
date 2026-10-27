@@ -57,7 +57,10 @@ def test_zhilin_broad_mids_retain_music_before_and_after_bass():
     gains,report=envelopes(len(p),128,beat_phase=p,style='zhilin')
     assert gains['mid_in'][int(.25*len(p)),0]>.2
     assert gains['mid_out'][int(.70*len(p)),0]>.1
-    assert report['bass_handoff_beats']==pytest.approx(16)
+    assert report['bass_handoff_beats']==pytest.approx(32)
+    legacy,legacy_report=envelopes(len(p),128,beat_phase=p,style='zhilin',bass_handoff_beats=16)
+    assert legacy_report['bass_handoff_beats']==pytest.approx(16)
+    for key in ('mid_in','mid_out','high_in','high_out'):np.testing.assert_array_equal(legacy[key],gains[key])
     for band in ('bass','mid','high'):
         np.testing.assert_allclose(gains[band+'_in']+gains[band+'_out'],1,atol=1e-12)
     assert gains['mid_in'][0,0]==0 and gains['mid_out'][-1,0]==0

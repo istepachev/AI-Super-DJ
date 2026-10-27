@@ -63,3 +63,15 @@ separately. Those comparisons calibrate our policy on this particular set;
 they are not held-out validation. On a new set, record decisions before user
 audition and check whether the new policy preserves groove while resolving
 voices/tones. Do not claim a trained reliable classifier from nineteen examples.
+
+## Preserve energy when the parts do not compete
+
+An amplitude-complementary 50/50 middle has half the energy of two unrelated equal-level parts before fading (about −3 dB). Ordinary frequency routing now checks the actual synchronized accompaniment beds, subtracting the final aligned drum estimates for this assessment where available. Stereo channel powers are retained separately; opposite channel polarity cannot masquerade as silence. Half-second log-frequency occupancy and aligned foreground estimates screen sustained shared content. These are conservative signal proxies, not a certified melody-compatibility classifier.
+
+When the evidence supports separate mid parts, the same monotonic handoff position becomes an equal-power cross: square-root outgoing/incoming energy shares. Each source mid gain remains at or below unity; their amplitude sum can reach sqrt(2), while bass, highs, drum ownership, source clocks and pitch stay unchanged. One fixed decision per overlap avoids a pumping gain follower. Native changes in the available musical material remain possible; the rule does not invent missing mids or certify an inaudible join.
+
+Shared or uncertain spectra, sustained simultaneous foreground estimates, or unavailable aligned voice estimates keep the previous complementary middle. The advanced per-edge `mid_energy_mode: "legacy"` retains it explicitly. Whole-spectrum collision variants retain their existing sound; this frequency-specific compensation does not silently filter them.
+
+`adaptive_mid_energy` records the exact law and geometry. Combined-front components, vocal/energy checks and local audible-rhythm coverage replay these actual gains. Older frequency reports retain their recorded effective bass widths rather than acquiring a new factory width during an audit. A changed gain law invalidates cached overlap approval.
+
+Factory bass/percussion transfer is also measured independently of the total overlap: at least eight effective 10–90% shared beats for ordinary SYNC and sixteen for DJ Zhilin, capped by the available half-window. The automatic Zhilin full transfer spans at least 32 beats where available; explicit reviewed band widths remain supported. Full shared-clock, recognized-attack, source-playback, master and complete-export checks still apply.

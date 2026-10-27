@@ -61,12 +61,10 @@ def audit_energy(outgoing, incoming, mixed, sample_rate):
 def audit_vocals(outgoing, incoming, mixed, sample_rate, vocal_out, vocal_in, transition, *, style, beat_phase):
     if vocal_out is None or vocal_in is None:
         return {'passed': True, 'status': 'unknown; both aligned estimates unavailable', 'absence_certified': False}
-    from .mixing import envelopes, smooth
+    from .mixing import recorded_envelopes, smooth
     divisor = max(1, sample_rate//4000)
     a, b = [resample_poly(x, 1, divisor, axis=0) for x in (vocal_out, vocal_in)]
-    gain, _ = envelopes(len(mixed), transition.get('beats', 64), style=style, beat_phase=beat_phase,
-        mid_handoff_bars=transition.get('mid_handoff_bars'), bass_handoff_beats=transition.get('bass_handoff_beats'),
-        handoff_windows=transition.get('handoff_windows'),whole_spectrum_handoff=transition.get('whole_spectrum_handoff'))
+    gain, _ = recorded_envelopes(len(mixed),transition.get('beats',64),transition,style=style,beat_phase=beat_phase)
     p = np.linspace(0, 1, len(mixed))
     keep_a = 1-smooth((p-.20)/.25) if transition.get('vocal_processing', {}).get('executed') else np.ones(len(p))
     keep_b = smooth((p-.55)/.25) if transition.get('vocal_processing', {}).get('executed') else np.ones(len(p))
@@ -109,7 +107,7 @@ def local_reliability(clips, transition, outgoing, incoming, sample_rate, *, sty
     """
     if transition.get('tempo_technique') != 'shared_phase_sync':
         return {'applicable':False,'passed':True}
-    from .mixing import envelopes
+    from .mixing import recorded_envelopes
     from .percussion import percussion_gains
     clock=transition.get('shared_clock') or {}
     count=clock.get('beats',transition.get('beats'))
@@ -121,12 +119,7 @@ def local_reliability(clips, transition, outgoing, incoming, sample_rate, *, sty
             or abs(frames[-1]-len(outgoing))>1 or beat_phase is None):
         raise ValueError('Local rhythm coverage requires the actual shared clock, phase and both timed decks')
     frequency=transition.get('frequency_processing') or {}
-    gains,curves=envelopes(len(outgoing),count,beat_phase=beat_phase,style=style,
-        tonal_conflict=frequency.get('tonal_conflict_risk',False),
-        mid_handoff_bars=transition.get('mid_handoff_bars'),
-        bass_handoff_beats=transition.get('bass_handoff_beats'),
-        handoff_windows=transition.get('handoff_windows'),
-        whole_spectrum_handoff=transition.get('whole_spectrum_handoff'))
+    gains,curves=recorded_envelopes(len(outgoing),count,transition,style=style,beat_phase=beat_phase)
     if frequency.get('profile_sha256') and curves.get('profile_sha256')!=frequency['profile_sha256']:
         raise ValueError('Local coverage profile differs from the actual overlap profile')
     if transition.get('whole_spectrum_handoff') is None:
