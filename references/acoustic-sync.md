@@ -1,5 +1,13 @@
 # Acoustic SYNC verification
 
+## Distributed local rhythm coverage
+
+Keep the existing whole-window recognition gate and add local checks for every ordinary shared-phase overlap, independent of Mood/Classic/Fuzzy ordering and transition style. Examine sixteen shared beats at a time, stepping four beats and including the final window. With at least four audible interior beat slots, require at least two recognized slots and at least 25% local coverage. More than eight consecutive audible slots without a recognized event rejects the window, even if its later part has enough good matches. Duplicate template views count as one beat; unknown events are not invented or moved onto the clock.
+
+Audibility uses the actual bass, middle, high and routed percussion envelopes, not only the bass fader. A zero drum estimate gain does not prove residual accompaniment is free of transients. Physically quiet aligned native input is excluded using its measured beat-window power; its silence is never registered as a verified hit. Short native fills and sufficiently distributed sparse figures retain their uncertainty. This is a conservative source-window eligibility gate, not proof that every unknown figure is a misplaced kick.
+
+Record the failed local intervals and retain the actual failed source/role for bounded cue recovery. Do not repair this failure by accelerating every transient, weakening the 3 ms timing checks, shortening the approved overlap or deleting working orchestration variants. Changing this guard invalidates overlap cache evidence through its transitive code fingerprint. A private excerpt can use full-deck budgeting for its missing outer neighbours; validate the complete candidate set's CUE pacing separately before claiming that it is ready for release.
+
 ## Gradual orchestration recovery
 
 Two independently aligned decks can still conflict during their combined bass/percussion crossover. Before selecting different native source windows, ordinary shared-phase styles can try at most three other placements of the same gradual transfer inside the unchanged overlap. Preserve its full width, the shared clock, native source bounds and all middle/high curves. An explicit bass position or width prevents this automatic relocation. The candidates must pass the same native-identity, required-attack, paired-front, 3 ms, actual energy, estimated foreground and recognition-coverage checks. Exhaustion retains a failure; it never authorizes a quick cut, pitch-changing correction or weaker thresholds. Store the chosen beat span and failed alternatives in `gradual_orchestration_search`. All verification components must use the actual tonal-conflict and band settings, including ordinary-style attenuation.

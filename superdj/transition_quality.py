@@ -99,16 +99,94 @@ def reliability(clips, transition):
         'scope': 'recognition coverage, not certification of unknown figures'}
 
 
+def local_reliability(clips, transition, outgoing, incoming, sample_rate, *, style, beat_phase):
+    """Late matches cannot certify an earlier audible part of a shared overlap.
+
+    Use the actual band routing, including residual accompaniment: a zero drum
+    fader does not silence every transient. Only physically quiet native input
+    or a genuinely inaudible route is excluded. Missing events remain unknown;
+    this gate never labels or moves them onto quarter notes.
+    """
+    if transition.get('tempo_technique') != 'shared_phase_sync':
+        return {'applicable':False,'passed':True}
+    from .mixing import envelopes
+    from .percussion import percussion_gains
+    clock=transition.get('shared_clock') or {}
+    count=clock.get('beats',transition.get('beats'))
+    frames=np.asarray(clock.get('beat_output_frames',[]),dtype=float)
+    if (len(clips)!=2 or not isinstance(count,(int,np.integer)) or count<4
+            or frames.shape!=(count+1,) or not np.isfinite(frames).all()
+            or frames[0]!=0 or np.any(np.diff(frames)<=0)
+            or outgoing.shape!=incoming.shape or len(outgoing)<2
+            or abs(frames[-1]-len(outgoing))>1 or beat_phase is None):
+        raise ValueError('Local rhythm coverage requires the actual shared clock, phase and both timed decks')
+    frequency=transition.get('frequency_processing') or {}
+    gains,curves=envelopes(len(outgoing),count,beat_phase=beat_phase,style=style,
+        tonal_conflict=frequency.get('tonal_conflict_risk',False),
+        mid_handoff_bars=transition.get('mid_handoff_bars'),
+        bass_handoff_beats=transition.get('bass_handoff_beats'),
+        handoff_windows=transition.get('handoff_windows'),
+        whole_spectrum_handoff=transition.get('whole_spectrum_handoff'))
+    if frequency.get('profile_sha256') and curves.get('profile_sha256')!=frequency['profile_sha256']:
+        raise ValueError('Local coverage profile differs from the actual overlap profile')
+    if transition.get('whole_spectrum_handoff') is None:
+        gains=percussion_gains(gains,beat_phase,count,transition.get('percussion_ownership_policy','shared'))
+    indices=np.clip(np.rint(frames).astype(int),0,len(outgoing)-1)
+    width=min(16,int(count));starts=sorted(set([*range(0,count-width+1,4),count-width]))
+    rows=[]
+    for clip,role,audio,side in zip(clips,('tail','head'),(outgoing,incoming),('out','in')):
+        final=(clip.get('warp') or {}).get('post_render_transient_audit',{}).get('final',{})
+        recognized={int(p['beat']) for p in final.get('measured',[]) if p.get('role')==role
+            and isinstance(p.get('beat'),(int,np.integer)) and 0<p['beat']<count
+            and isinstance(p.get('delay_seconds'),(int,float,np.integer,np.floating))
+            and np.isfinite(p['delay_seconds']) and abs(p['delay_seconds'])<=.003+1e-12}
+        audible_gain=np.maximum.reduce([gains[name+'_'+side][indices,0]
+            for name in ('bass','mid','high')]+([gains['drums_'+side][indices,0]] if 'drums_'+side in gains else []))
+        powers=[]
+        for first,last in zip(frames[:-1],frames[1:]):
+            block=audio[round(first):min(round(last),len(audio))]
+            powers.append(float(np.mean(block*block,dtype=np.float64)) if len(block) else 0.)
+        quiet_floor=max(1e-12,max(powers,default=0.)*1e-4)
+        audible={i for i in range(1,count) if audible_gain[i]>=.05 and powers[i]>quiet_floor}
+        unknown=audible-recognized;longest=run=0
+        for i in range(1,count):
+            run=run+1 if i in unknown else 0;longest=max(longest,run)
+        windows=[]
+        for first in starts:
+            active=audible.intersection(range(first,first+width))
+            if len(active)<4:continue
+            known=active & recognized;required=max(2,int(np.ceil(.25*len(active))))
+            windows.append({'start_beat':first,'end_beat':first+width,
+                'start_seconds':float(frames[first]/sample_rate),'end_seconds':float(frames[first+width]/sample_rate),
+                'audible_beats':len(active),'recognized_beats':len(known),'required_recognized_beats':required,
+                'passed':len(known)>=required})
+        passed=all(w['passed']for w in windows) and longest<=8 and (not audible or bool(audible & recognized))
+        rows.append({'id':clip['id'],'role':role,'sufficient_for_automatic_window':passed,
+            'audible_beats':len(audible),'recognized_audible_beats':len(audible & recognized),
+            'longest_unverified_audible_beats':longest,'maximum_unverified_audible_beats':8,
+            'quiet_input_beats':sum(p<=quiet_floor for p in powers),
+            'windows':windows,'unverified_audible_beat_indices':sorted(unknown)})
+    return {'applicable':True,'passed':all(r['sufficient_for_automatic_window'] for r in rows),'decks':rows,
+        'window_beats':width,'stride_beats':4,'minimum_local_fraction':.25,
+        'scope':'local recognized coverage of audible routes, including the beginning and handoff; silence is not a verified beat',
+        'limitations':'conservative window rejection; not a classifier of every musical figure or a guarantee of musical quality'}
+
+
 def coverage_failure_context(report, transition):
     """Attribute only an unambiguous failed coverage view, not other metrics."""
     coverage=report.get('reliability',{})
-    failed=[row for row in coverage.get('decks',[]) if row.get('sufficient_for_automatic_window') is False]
-    if coverage.get('passed') is not False or len(failed)!=1:
+    local=report.get('local_rhythm_coverage',{})
+    failed=[row for view in (coverage,local) if view.get('passed') is False
+        for row in view.get('decks',[]) if row.get('sufficient_for_automatic_window') is False]
+    if not failed:
         return {}
-    row=failed[0]
-    if (row.get('role'),row.get('id')) not in (('tail',transition['from']),('head',transition['to'])):
+    owners={(row.get('role'),row.get('id')) for row in failed}
+    if len(owners)!=1:
         return {}
-    return {'failed_track':row['id'],'failed_roles':[row['role']],
+    role,identity=next(iter(owners))
+    if (role,identity) not in (('tail',transition['from']),('head',transition['to'])):
+        return {}
+    return {'failed_track':identity,'failed_roles':[role],
         'failure_ownership_scope':'single failed rendered rhythm-coverage view; energy and vocal checks remain independent'}
 
 
@@ -118,11 +196,13 @@ def verify_overlap(outgoing, incoming, mixed, sample_rate, clips, transition, *,
     voice = audit_vocals(outgoing, incoming, mixed, sample_rate, vocal_out, vocal_in, transition,
         style=style, beat_phase=beat_phase)
     coverage = reliability(clips, transition)
-    report = {'passed': energy['passed'] and voice['passed'] and coverage['passed'],
-        'energy': energy, 'vocals': voice, 'reliability': coverage}
+    local=local_reliability(clips,transition,outgoing,incoming,sample_rate,style=style,beat_phase=beat_phase)
+    report = {'passed': energy['passed'] and voice['passed'] and coverage['passed'] and local['passed'],
+        'energy': energy, 'vocals': voice, 'reliability': coverage,'local_rhythm_coverage':local}
     if not report['passed']:
         report.update(coverage_failure_context(report,transition))
         reasons = [label for label, value in (('sustained energy loss', energy),
-            ('competing estimated foregrounds', voice), ('insufficient recognized rhythm coverage', coverage)) if not value['passed']]
+            ('competing estimated foregrounds', voice), ('insufficient recognized rhythm coverage', coverage),
+            ('insufficient local rhythm coverage',local)) if not value['passed']]
         raise TransitionFailure(transition['from'], transition['to'], '; '.join(reasons), report)
     return report
