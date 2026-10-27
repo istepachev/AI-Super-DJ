@@ -1632,7 +1632,7 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                     if isinstance(error,TransitionFailure):
                         raise
                     edge = transitions[position-1]
-                    raise TransitionFailure(edge['from'],edge['to'],str(error)) from error
+                    raise TransitionFailure(edge['from'],edge['to'],str(error),getattr(error,'evidence',{})) from error
     from .kick_grid import validate_overlap_attacks
     try:
         validate_overlap_attacks(clips,transitions)

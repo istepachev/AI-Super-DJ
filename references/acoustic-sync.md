@@ -83,6 +83,12 @@ After those source-identity checks, compare all recognized primary/bass errors f
 
 Master verification compares differences of second-valued timestamps. Ignore only floating-point subtraction roundoff bounded by eight float64 machine epsilons at the timestamp's scale; do not round measured errors or increase the acoustic tolerance. A value represented as 0.0030000000000006963 seconds at a 3 ms boundary is numerical roundoff; a real detector-sample excess remains a failure. Nonfinite or negative error inputs are invalid.
 
+Use that same bounded comparison for the two rendered decks, including their
+individual and sparse-coverage clock limits. Retain the exact measured maximum
+and roundoff bound in the pair report. A refused pair carries that report into
+window recovery; a formatted `3.00 ms` string is not sufficient diagnostic
+evidence and must not trigger repeated backend changes for arithmetic noise.
+
 Pairwise timing uses the largest difference across both primary and bass observations on the same shared beat. Two good primary observations must not hide bass observations displaced in opposite directions. Duplicate target times are grouped only when building correction controls; the independent verification evidence remains separate.
 
 ## Coarse-label errors and short speed pulses

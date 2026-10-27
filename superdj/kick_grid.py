@@ -481,10 +481,11 @@ def rendered_attack_audit(path,warp,sample_rate):
 
 def validate_overlap_attacks(clips,transitions,tolerance_seconds=.003):
     """Fail on any measured flam, not a mean, and never certify zero coverage."""
+    from .integrity import _timing_limit_exceeded
     reports=[]
     for index,edge in enumerate(transitions):
         if edge.get('tempo_technique')!='shared_phase_sync':continue
-        sides=[];observations=[]
+        sides=[];observations=[];timestamp_scales=[]
         for clip,role in ((clips[index],'tail'),(clips[index+1],'head')):
             audit=(clip.get('warp') or {}).get('post_render_transient_audit',{}).get('final',{})
             from .source_observability import required_bass_views
@@ -502,20 +503,22 @@ def validate_overlap_attacks(clips,transitions,tolerance_seconds=.003):
             # Legacy latency checks retained source offsets. Subtract the
             # actual shared grid here, so two individually accurate warps
             # cannot hide different original attack offsets.
-            side={};points={}
+            side={};points={};timestamp_scale=1.
             for p in audit.get('measured',[]):
                 if p['role']!=role:continue
+                timestamp_scale=max(timestamp_scale,abs(p['observed_seconds']),abs(p['grid_output_seconds']))
                 error=p['observed_seconds']-p['grid_output_seconds']
                 points.setdefault(p['beat'],[]).append(error)
                 if p['beat'] not in side or abs(error)>abs(side[p['beat']]):side[p['beat']]=error
             sides.append(side)
             observations.append(points)
+            timestamp_scales.append(timestamp_scale)
         common=sorted(set(sides[0])&set(sides[1]));beats=int(edge['beats'])
         side_maxima=[max((abs(v) for v in side.values()),default=None) for side in sides]
         sparse=len(common)<min(8,beats-1)
-        if sparse and (not common or min(map(len,sides))<8 or any(v is None or v>tolerance_seconds/2 for v in side_maxima)):
+        if sparse and (not common or min(map(len,sides))<8 or any(v is None or _timing_limit_exceeded(v,tolerance_seconds/2,reference_seconds=scale)for v,scale in zip(side_maxima,timestamp_scales))):
             raise ValueError(f"{edge['from']} → {edge['to']}: no adequate shared acoustic attack evidence")
-        if any(v is not None and v>tolerance_seconds for v in side_maxima):
+        if any(v is not None and _timing_limit_exceeded(v,tolerance_seconds,reference_seconds=scale)for v,scale in zip(side_maxima,timestamp_scales)):
             raise ValueError(f"{edge['from']} → {edge['to']}: an individual rendered attack misses the shared clock by {max(v for v in side_maxima if v is not None)*1000:.2f} ms")
         errors=[{'beat':k,'error_seconds':max((a-b for a in observations[0][k] for b in observations[1][k]),key=abs)} for k in common]
         maximum=max(abs(e['error_seconds']) for e in errors)
@@ -525,10 +528,15 @@ def validate_overlap_attacks(clips,transitions,tolerance_seconds=.003):
                 'verification_kind':'sparse direct coincidences plus individually verified shared-clock attacks' if sparse else 'direct paired attack coincidence',
                 'recognized_attacks_per_side':[len(s) for s in sides],
                 'maximum_individual_clock_error_seconds':side_maxima,
+                'timestamp_roundoff_bound_seconds':8*np.finfo(float).eps*max(timestamp_scales),
+                'acoustic_tolerance_increased':False,
                 'conservative_pair_error_bound_seconds':sum(side_maxima) if sparse else maximum,
                 'measurement':'rendered primary attack coincidence between decks; maximum over shared measured events'}
         edge['paired_attack_audit']=report;reports.append(report)
-        if maximum>tolerance_seconds:raise ValueError(f"{edge['from']} → {edge['to']}: rendered attacks differ by {maximum*1000:.2f} ms; cannot export as aligned")
+        if _timing_limit_exceeded(maximum,tolerance_seconds,reference_seconds=max(timestamp_scales)):
+            error=ValueError(f"{edge['from']} → {edge['to']}: rendered attacks differ by {maximum*1000:.2f} ms; cannot export as aligned")
+            error.evidence={'paired_attack_audit':report}
+            raise error
     return reports
 
 
