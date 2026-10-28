@@ -44,3 +44,32 @@ def test_two_failed_ends_cannot_hide_one_user_locked_failure():
     error=TransitionFailure('0','1','unresolved',{'failed_track':'1','failed_roles':['head','tail']})
     with pytest.raises(RenderError,match='locked'):
         fresh_section(plan,rows,error,{},1,sample_rate=48000,ffmpeg=None)
+
+
+def test_native_timing_refusal_survives_recovery_of_the_other_source_edge():
+    rows,plan=source_plan();before=deepcopy(plan);excluded={}
+    old_end=plan['sections']['1']['end'];points=[old_end-8.,old_end-6.]
+    error=TransitionFailure('1','2','native timing variation',{
+        'failed_track':'1','failed_role':'tail','stage':'source-only timing preflight',
+        'source_timing_evidence':{'short_term_timing_continuity':{
+            'passed':False,'worst_source_seconds':points}}})
+    changed,_=fresh_section(plan,rows,error,excluded,1,sample_rate=48000,ffmpeg=None)
+    assert changed['rejected_attack_window_events']['1']['tail']==points
+    head_error=TransitionFailure('0','1','local entry not recognized',{
+        'failed_track':'1','failed_roles':['head']})
+    updated,_=fresh_section(changed,rows,head_error,excluded,2,sample_rate=48000,ffmpeg=None)
+    assert plan==before
+    assert updated['rejected_attack_window_events']['1']['tail']==points
+    outgoing=next(e for e in updated['edges']if e['from']=='1')
+    period=60/rows[1]['bpm'];ending=updated['sections']['1']['end']
+    assert not any(ending-outgoing['overlap_bars']*4*period<=t<=ending for t in points)
+    assert updated['order']==plan['order']
+    assert [e['overlap_bars']for e in updated['edges']]==[e['overlap_bars']for e in plan['edges']]
+
+
+def test_native_timing_positions_belong_to_the_reported_role_only():
+    from superdj.recovery import unsupported_attack_events
+    evidence={'failed_role':'tail','source_timing_evidence':{
+        'short_term_timing_continuity':{'passed':False,'worst_source_seconds':[337.377,337.873]}}}
+    assert unsupported_attack_events(evidence,'tail')==[337.377,337.873]
+    assert unsupported_attack_events(evidence,'head')==[]
