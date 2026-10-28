@@ -51,6 +51,20 @@ def test_good_events_elsewhere_never_hide_an_audible_local_gap(role,missing):
     assert role in failed
 
 
+def test_reported_ten_beat_opening_gap_cannot_hide_behind_good_total_coverage():
+    # Anonymous beat indices from the reviewed incoming track 44. Many later
+    # matches must not certify ten consecutive unknown early attacks.
+    missing=set(range(5,15))|{31}
+    values=fixture(head=set(range(1,128))-missing)
+    clips,edge,*_=values
+    assert reliability(clips,edge)['passed']
+    report=audit(values)
+    head=next(d for d in report['decks']if d['role']=='head')
+    assert not report['passed']and not head['sufficient_for_automatic_window']
+    assert head['longest_unverified_audible_beats']==10
+    assert set(range(5,15))<=set(head['unverified_audible_beat_indices'])
+
+
 @pytest.mark.parametrize('style',['default','zhilin'])
 @pytest.mark.parametrize('method',['ordinary','positioned','wide','early'])
 def test_existing_gradual_routing_variants_remain_available_and_pass_distributed_evidence(style,method):
