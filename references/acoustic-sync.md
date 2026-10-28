@@ -194,13 +194,28 @@ Recognized on-time fronts do not exclude otherwise compatible windows.
 ## Reviewed last-resort early transfer
 
 After both existing full-window transparent curves fail, an unlocked edge can
-try the reviewed early whole-spectrum curve. In a128-beat window it starts at
-beat4 and ends at beat36, bias1. Keep this last, not a replacement for successful
+try the reviewed early whole-spectrum curve. In a 128-beat window it starts at
+beat 4 and ends at beat 36, bias 1. Keep this after the existing broad options and preserve successful
 ordinary or broad variants. Other windows retain at most32 beats of handoff,
 with lead-in bounded by available space; short windows retain their whole span.
 All original attack, paired, energy, vocal, duration, pitch and continuity gates
 remain mandatory. An explicit accepted edge can use it directly. No track IDs
 or native source-cue positions are part of this portable recipe.
+
+### Soft transfer after an uncertain incoming opening
+
+After those existing routes fail, the engine may place the same 32-beat curve
+later when only the incoming opening has insufficient local coverage and the
+outgoing foundation already passes. The eligible contiguous opening figure is
+9–32 unverified shared beats, starts within the first 16 and ends by beat 36;
+another long unverified figure makes it ineligible. The original overlap needs
+at least 64 beats, and the extra lead-in is bounded to 28. There are at most two
+gain placements, the second four beats later, without a change to source CUE, clock, pitch, overlap or curve
+width. Explicit band and whole-spectrum settings remain locks. Independent
+native timing refusals cannot use this route. Complete actual front, local
+coverage, energy, vocal and continuity checks remain mandatory; missing attacks
+are not reclassified as verified. A missing complete quality callback retains
+the original routes and refusal. Successful earlier variants return unchanged.
 
 
 ## Bounded source recovery without making short play the default

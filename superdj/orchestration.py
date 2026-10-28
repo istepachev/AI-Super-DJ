@@ -1,5 +1,6 @@
 """Bounded gradual handoff placement on unchanged, independently timed decks."""
 from pathlib import Path
+from copy import deepcopy
 import numpy as np
 from .mixing import blend,envelopes,recorded_envelopes
 from .percussion import percussion_gains,verification_components,verify_blended_fronts
@@ -168,12 +169,13 @@ def whole_spectrum_alternative(outgoing,incoming,sample_rate,outgoing_warp,incom
     if transition.get('whole_spectrum_handoff') is not None or transition.get('handoff_windows') or transition.get('mid_handoff_bars') is not None or transition.get('bass_handoff_beats') is not None:
         raise initial_error
     beats=transition.get('beats',64);failures=[];last_error=initial_error
-    # Preserve the previously successful full-window options. The reviewed
-    # early whole-spectrum transfer is last, only when both wider routes fail.
+    # Preserve the full-window and reviewed early options in their original
+    # order. A supported entry may then try two placements of the same curve.
     lead=min(4.,max(0.,(float(beats)-32.)/2.))
     recipes=[{'start_beat':0.,'end_beat':float(beats),'bias':bias}for bias in (3.,1.)]
     hard_case={'start_beat':lead,'end_beat':min(float(beats),lead+32.),'bias':1.}
     if hard_case not in recipes:recipes.append(hard_case)
+    original_count=len(recipes);entry_evidence=[deepcopy(getattr(initial_error,'evidence',{}))];entry_report=None
     for number,spec in enumerate(recipes):
         try:
             mixed,frequency=blend(outgoing,incoming,sample_rate,beats=beats,style=style,
@@ -190,10 +192,20 @@ def whole_spectrum_alternative(outgoing,incoming,sample_rate,outgoing_warp,incom
             if estimates:candidate['previous_percussion_estimate_attempts']=estimates
             if quality_check is not None:candidate['quality_gate']=quality_check(mixed,candidate)
         except (ValueError,TransitionFailure) as error:
-            last_error=error;failures.append({'whole_spectrum_handoff':spec,'reason':str(error)});continue
+            last_error=error;entry_evidence.append(deepcopy(getattr(error,'evidence',{})));failures.append({'whole_spectrum_handoff':spec,'reason':str(error)})
+            if number==original_count-1 and callable(quality_check):
+                from .entry_handoff import late_entry_recipe
+                entry=late_entry_recipe(transition,entry_evidence)
+                if entry and entry[0]not in recipes:
+                    recipes.append(entry[0]);entry_report=entry[1]
+                    shifted={**entry[0],'start_beat':entry[0]['start_beat']+4.,'end_beat':entry[0]['end_beat']+4.}
+                    if shifted['start_beat']<=28 and shifted['end_beat']<=beats:
+                        recipes.append(shifted)
+            continue
         candidate['whole_spectrum_recovery']={'executed':True,'initial_reason':str(initial_error),
-            'maximum_alternatives':len(recipes),'selected_strategy':'early_whole_spectrum_hard_case' if number==2 else 'wide_whole_spectrum','failed_alternatives':failures,'source_windows_clock_and_overlap_unchanged':True,
+            'maximum_alternatives':len(recipes),'selected_strategy':'late_whole_spectrum_entry'if number>=original_count else 'early_whole_spectrum_hard_case' if number==2 else 'wide_whole_spectrum','failed_alternatives':failures,'source_windows_clock_and_overlap_unchanged':True,
             'frequency_filtering_or_percussion_subtraction':False,'timing_or_pitch_repair_performed':False,
             'timing_gate_relaxed':False,'actual_10_90_shared_beats':frequency['actual_10_90_shared_beats']}
+        if number>=original_count:candidate['whole_spectrum_recovery']['entry_opening_review']=entry_report
         return mixed,candidate
     raise last_error
