@@ -221,7 +221,14 @@ def _paired_front_audit(checks,sample_rate):
         if not views.get('head') or not views.get('tail'):continue
         worst=max(abs(a-b) for a in views['tail'] for b in views['head'])
         if _timing_limit_exceeded(worst,.003,reference_seconds=frame/sample_rate):
-            raise ValueError('Combined paired percussion attacks miss the shared clock; review the rendered overlap')
+            refusal=ValueError('Combined paired percussion attacks miss the shared clock; review the rendered overlap')
+            refusal.evidence={'stage':'actual combined paired percussion fronts',
+                'coincident_output_seconds':frame/sample_rate,
+                'maximum_pair_error_seconds':float(worst),'tolerance_seconds':.003,
+                'observed_delays_by_deck':{side:[float(value)for value in values]for side,values in views.items()},
+                'source_failure_ownership_assigned':False,
+                'scope':'worst recognized primary/bass difference in the actual mix; no independent failed source is inferred'}
+            raise refusal
         pairs.append(worst)
     return {'coincident_source_beats':len(pairs),'maximum_pair_error_seconds':max(pairs) if pairs else None,
         'tolerance_seconds':.003,'scope':'worst recognized primary/bass difference across actual audible source contributions; prior coverage gates retained'}

@@ -38,3 +38,41 @@ def test_individual_and_sparse_boundary_use_the_same_numerical_rule():
     assert report['verified_common_beats']==4 and 'sparse'in report['verification_kind']
     clips,edge=pair(.0015+1/48000,0.,sparse=True)
     with pytest.raises(ValueError,match='no adequate'):validate_overlap_attacks(clips,[edge])
+
+
+def test_combined_pair_failure_preserves_worst_views_without_assigning_source_blame():
+    from copy import deepcopy
+    from superdj.percussion import _paired_front_audit
+    checks=[{'role':'tail:primary','recognized':[{'seconds':14.,'delay_seconds':-.000125}]},
+            {'role':'tail:bass','recognized':[{'seconds':14.,'delay_seconds':-.002375}]},
+            {'role':'head:primary','recognized':[{'seconds':14.,'delay_seconds':.001125}]},
+            {'role':'head:bass','recognized':[{'seconds':14.,'delay_seconds':.001375}]}]
+    before=deepcopy(checks)
+    with pytest.raises(ValueError,match='Combined paired percussion')as caught:
+        _paired_front_audit(checks,44100)
+    evidence=caught.value.evidence
+    assert evidence['maximum_pair_error_seconds']==pytest.approx(.00375)
+    assert evidence['coincident_output_seconds']==14.
+    assert evidence['observed_delays_by_deck']=={'tail':[-.000125,-.002375],'head':[.001125,.001375]}
+    assert evidence['tolerance_seconds']==.003
+    assert not evidence['source_failure_ownership_assigned']and 'failed_track'not in evidence
+    assert checks==before
+
+
+def test_combined_exact_boundary_retains_the_successful_report():
+    from superdj.percussion import _paired_front_audit
+    checks=[{'role':'tail:primary','recognized':[{'seconds':3600.,'delay_seconds':.00275}]},
+            {'role':'head:primary','recognized':[{'seconds':3600.,'delay_seconds':-.00025}]}]
+    report=_paired_front_audit(checks,44100)
+    assert report['coincident_source_beats']==1
+    assert report['maximum_pair_error_seconds']==pytest.approx(.003)
+    assert report['tolerance_seconds']==.003
+
+
+@pytest.mark.parametrize('sample_rate',[8000,44100,48000])
+def test_combined_one_sample_excess_is_still_refused_with_measured_evidence(sample_rate):
+    from superdj.percussion import _paired_front_audit
+    checks=[{'role':'tail:primary','recognized':[{'seconds':4.,'delay_seconds':.00275+1/sample_rate}]},
+            {'role':'head:primary','recognized':[{'seconds':4.,'delay_seconds':-.00025}]}]
+    with pytest.raises(ValueError)as caught:_paired_front_audit(checks,sample_rate)
+    assert caught.value.evidence['maximum_pair_error_seconds']>.003
