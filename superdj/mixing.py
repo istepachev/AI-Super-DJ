@@ -165,7 +165,10 @@ def recorded_envelopes(n,beats,transition,*,style,beat_phase):
     gains,curves=envelopes(n,beats,style=style,beat_phase=beat_phase,
         tonal_conflict=frequency.get('tonal_conflict_risk',False),**controls)
     from .mid_energy import apply_report
-    return apply_report(gains,frequency),curves
+    position=gains['mid_in']/np.maximum(gains['mid_in']+gains['mid_out'],1e-12)
+    gains=apply_report(gains,frequency)
+    from .selective_mid import apply_report as selective_report
+    return selective_report(gains,frequency,position=position,beat_phase=beat_phase),curves
 
 
 def blend(outgoing, incoming, sample_rate, *, bass_hz=180.0,
@@ -177,7 +180,7 @@ def blend(outgoing, incoming, sample_rate, *, bass_hz=180.0,
         raise ValueError("Frequency blend needs equally sized stereo blocks")
     if not np.isfinite(outgoing).all() or not np.isfinite(incoming).all():
         raise ValueError("Nonfinite overlap audio")
-    if mid_energy_mode not in ('auto','legacy'):raise ValueError('Middle energy mode must be auto or legacy')
+    if mid_energy_mode not in ('auto','legacy','power'):raise ValueError('Middle energy mode must be auto or legacy, or explicit power')
     n = len(incoming)
     if whole_spectrum_handoff is not None:
         if drums_out is not None or drums_in is not None or percussion_policy!='shared':
@@ -217,7 +220,13 @@ def blend(outgoing, incoming, sample_rate, *, bass_hz=180.0,
     mid_energy=decide(mid_a-(drum_bands_a[1]if drum_bands_a is not None else 0),
         mid_b-(drum_bands_b[1]if drum_bands_b is not None else 0),sample_rate,gains,
         vocal_out=vocal_out,vocal_in=vocal_in,vocal_processing=vocal_processing,mode=mid_energy_mode)
+    handoff_position=gains['mid_in']/np.maximum(gains['mid_in']+gains['mid_out'],1e-12)
     gains=apply_report(gains,{'adaptive_mid_energy':mid_energy})
+    from .selective_mid import decide as selective_decision,apply_report as selective_report,mixed_middle
+    selective=selective_decision(outgoing-(drums_out if drums_out is not None else 0),
+        incoming-(drums_in if drums_in is not None else 0),sample_rate,beat_phase=beat_phase,beats=beats,
+        enabled=mid_energy_mode=='auto'and drums_out is not None and mid_energy['applied'])
+    gains=selective_report(gains,{'selective_mid_energy':selective},position=handoff_position,beat_phase=beat_phase)
     if mid_energy['applied']:
         actual_phase=np.linspace(0,1,n)if beat_phase is None else np.asarray(beat_phase)
         span=[float(actual_phase[np.flatnonzero(gains['mid_in'][:,0]>=value)[0]])for value in (.1,.9)]
@@ -236,6 +245,12 @@ def blend(outgoing, incoming, sample_rate, *, bass_hz=180.0,
         # the mid gain after its fundamental has been handed to the next deck.
         for drum_a,drum_b,label in zip(drum_bands_a,drum_bands_b,('bass','mid','high')):
             mixed+=drum_a*(gains.get('drums_out',gains['bass_out'])-gains[label+'_out'])+drum_b*(gains.get('drums_in',gains['bass_in'])-gains[label+'_in'])
+        if selective['applied']:
+            # The generic middle envelope above is an audibility upper bound.
+            # Replace its accompaniment with the exact recorded cell curves;
+            # estimated percussion retains its separate whole-spectrum curve.
+            for side,pcm,drums,mid,drum_mid in (('out',outgoing,drums_out,mid_a,drum_bands_a[1]),('in',incoming,drums_in,mid_b,drum_bands_b[1])):
+                mixed+=mixed_middle(pcm-drums,sample_rate,gains,side)-(mid-drum_mid)*gains['mid_'+side]
         percussion_phase=np.linspace(0.,1.,n) if beat_phase is None else np.asarray(beat_phase)
         percussion={'executed':True,'method':'Transfer the full estimated percussion spectrum with the bass clock, while accompaniment retains its independent broad frequency curves',
                     'handoff_fraction':curves['bass_handoff_fraction'],'handoff_beats':curves['bass_handoff_beats'],'source':'time-aligned estimates of final rendered decks; not isolated ground truth',
@@ -253,6 +268,7 @@ def blend(outgoing, incoming, sample_rate, *, bass_hz=180.0,
               "tonal_conflict_risk": bool(tonal_conflict), "vocal_overlap_certified_absent": False,
               "entry_gain_compensated": False,
               "adaptive_mid_energy":mid_energy,
+              "selective_mid_energy":selective,
               "endpoint_max_error": float(max(np.max(np.abs(mixed[0] - outgoing[0])), np.max(np.abs(mixed[-1] - incoming[-1]))))}
     if mid_energy['applied']:report['method']='independent band handoff with energy-preserving noncompeting middle beds'
     if percussion:report['percussion_processing']=percussion

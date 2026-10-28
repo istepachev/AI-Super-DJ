@@ -1460,6 +1460,23 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                     style=plan.get('style','default'),
                     mid_handoff_bars=transition.get('mid_handoff_bars'),
                     bass_handoff_beats=transition.get('bass_handoff_beats'),handoff_windows=transition.get('handoff_windows'),whole_spectrum_handoff=transition.get('whole_spectrum_handoff'),**percussion_args,**mid_energy_args)
+                from .percussion import supported_mid_needs_drums
+                if (mode=='beatmapped_bass_swap'and supported_mid_needs_drums(evidence,
+                        mode=transition.get('mid_energy_mode','auto'),has_estimates=bool(percussion_args))):
+                    from .stems import configuration as stem_configuration
+                    if stem_configuration()is not None:
+                        percussion_args,percussion_report=final_drum_estimates(previous_tail,block,sample_rate,directory/f'percussion-{position:02}-mid-support',ffmpeg=ffmpeg)
+                        percussion_args['percussion_policy']='smooth'
+                        transition['percussion_estimates']=percussion_report
+                        transition['percussion_ownership_policy']='smooth'
+                        transition['mid_support_percussion_handoff']={'executed':True,
+                            'reason':'supported accompaniment must not leave the upper old kick at its middle gain',
+                            'source_windows_shared_clock_and_pitch_unchanged':True}
+                        mixed,evidence=blend(previous_tail,block,sample_rate,bass_hz=bass_hz,
+                            beats=transition.get('beats',64),tonal_conflict=risk,beat_phase=beat_phase,
+                            style=plan.get('style','default'),mid_handoff_bars=transition.get('mid_handoff_bars'),
+                            bass_handoff_beats=transition.get('bass_handoff_beats'),handoff_windows=transition.get('handoff_windows'),
+                            **percussion_args,**mid_energy_args)
                 transition["frequency_processing"] = evidence
                 if mode == 'beatmapped_bass_swap' and transition.get('tempo_technique') == 'shared_phase_sync':
                     from .percussion import verify_blended_fronts as verify_raw_fronts,verification_components

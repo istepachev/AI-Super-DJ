@@ -24,6 +24,12 @@ def ownership_policy(outgoing_warp,incoming_warp):
     uncertain=any(ambiguous_front(s) or s.get('native_rhythm_observations') or s.get('unverified_native_bass_candidates') for s in sources)
     return 'smooth' if uncertain else 'shared'
 
+
+def supported_mid_needs_drums(frequency,*,mode='auto',has_estimates=False):
+    """Newly supported upper kick energy needs a whole-percussion handoff."""
+    return bool(mode=='auto'and not has_estimates and not frequency.get('whole_spectrum_handoff')
+        and frequency.get('adaptive_mid_energy',{}).get('applied'))
+
 def percussion_gains(gains,beat_phase,beats,policy='shared'):
     if policy not in ('shared','smooth','sequential'):raise ValueError('Unknown percussion ownership policy')
     if policy=='shared':return gains
@@ -87,6 +93,12 @@ def verification_components(outgoing,incoming,sample_rate,gains,*,bass_hz=180.,d
         value=sum(band*gains[name+'_'+side] for name,band in zip(('bass','mid','high'),split_bands(pcm,sample_rate,bass_hz)))
         if drums is not None:
             value+=sum(band*(gains.get('drums_'+side,gains['bass_'+side])-gains[name+'_'+side]) for name,band in zip(('bass','mid','high'),split_bands(drums,sample_rate,bass_hz)))
+            if 'mid_cell_0_'+side in gains:
+                from .selective_mid import mixed_middle
+                middle=split_bands(pcm,sample_rate,bass_hz)[1]-split_bands(drums,sample_rate,bass_hz)[1]
+                value+=mixed_middle(pcm-drums,sample_rate,gains,side)-middle*gains['mid_'+side]
+        elif 'mid_cell_0_'+side in gains:
+            raise ValueError('Selective middle verification requires both final drum estimates')
         result[role]=value.astype('float32')
     return result
 
