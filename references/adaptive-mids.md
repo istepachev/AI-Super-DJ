@@ -84,4 +84,6 @@ With those exact estimates, split accompaniment into eight overlapping, compleme
 
 `selective_mid_energy` records cell cutoffs, phase knots and strengths. Actual PCM and independent known-source components replay the same cell gains. Voice and audible-rhythm checks conservatively use the largest actual cell gain of each source. Estimated percussion retains its own whole-spectrum gain. A more complete accompaniment can raise combined mid energy above the one-source independent-power reference; keep headroom with the declared constant master gain and inspect the musical result.
 
+The producer bounds its convex support estimates to [0, 1] after floating-point reduction; a saturated weighted mean can otherwise round one floating-point step beyond one. This numerical normalization does not change the strict saved-report reader: nonfinite, negative or above-unity supplied strengths are still rejected, including the next representable value above one. It does not widen any audio timing or energy limit.
+
 The explicit `mid_energy_mode: "power"` retains the previous v2 broad independent-power model. On a selective-route refusal, check that retained power route before the original `legacy` route; every alternative still passes the unchanged combined-front and actual quality checks. Whole-spectrum variants and saved v1/v2 reports remain reproducible.

@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 import numpy as np
 import pytest
 from scipy.signal import butter,sosfiltfilt
@@ -62,8 +63,18 @@ def test_known_component_with_a_real_late_hit_is_never_erased(tmp_path,monkeypat
     sr,(own,other),warps=fixture(tmp_path,side)
     gains={'bass_out':np.ones((len(own),1)),'bass_in':np.ones((len(own),1))}
     monkeypatch.setattr('superdj.percussion.final_drum_estimates',lambda a,b,*x,**k:({'drums_out':a,'drums_in':b},[]))
-    with pytest.raises(ValueError,match='misses the shared clock'):
-        verify_blended_fronts(own+other,sr,*warps,gains,tmp_path,components={'tail':own,'head':other})
+    mixed=own+other;before=mixed.copy()
+    with pytest.raises(ValueError,match='misses the shared clock')as caught:
+        verify_blended_fronts(mixed,sr,*warps,gains,tmp_path,components={'tail':own,'head':other})
+    evidence=caught.value.evidence
+    assert evidence['stage']=='actual combined individual percussion front'
+    assert evidence['role'].split(':')[0]in {'head','tail'}
+    assert abs(evidence['observed_delay_seconds'])>.003
+    assert evidence['observed_output_seconds']>=0 and evidence['template_correlation']>=.65
+    assert evidence['tolerance_seconds']==.003
+    assert not evidence['source_failure_ownership_assigned']and 'failed_track'not in evidence
+    json.dumps(evidence,allow_nan=False)
+    np.testing.assert_array_equal(mixed,before)
 
 
 def test_two_individually_small_errors_cannot_hide_a_large_blended_pair_error():

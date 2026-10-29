@@ -45,7 +45,11 @@ def decide(outgoing,incoming,sample_rate,*,beat_phase,beats,enabled):
             for point in knots:
                 distance=np.abs(centres-point)*beats
                 weights=np.maximum(0,1-distance/8)
-                values.append(float(np.dot(value,weights)/weights.sum())if weights.sum()else 0.)
+                # A convex mean stays in [0, 1]; floating reduction can round
+                # a saturated region one ulp above one. Canonicalize the
+                # producer's result without relaxing strict report replay.
+                support=np.dot(value,weights)/weights.sum()if weights.sum()else 0.
+                values.append(float(np.clip(support,0.,1.)))
             pair.append(values)
         strengths.append(pair)
     if max(np.max(x)for x in strengths)<.05:

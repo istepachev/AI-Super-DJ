@@ -446,7 +446,16 @@ def verify_blended_fronts(audio,sample_rate,outgoing_warp,incoming_warp,gains,di
             if len(verified_native)<minimum_count:raise ValueError('Combined percussion fronts remain unverified; review the source window')
             for row in measured:
                 if abs(row['delay_seconds'])>.003:
-                    if not allow_pitch_changing_residual or attempt or row['correlation']<.9 or abs(row['delay_seconds'])>.006:raise ValueError('Combined percussion attack misses the shared clock; review the rendered overlap')
+                    if not allow_pitch_changing_residual or attempt or row['correlation']<.9 or abs(row['delay_seconds'])>.006:
+                        refusal=ValueError('Combined percussion attack misses the shared clock; review the rendered overlap')
+                        refusal.evidence={'stage':'actual combined individual percussion front',
+                            'role':role,'observed_output_seconds':float(row['seconds']),
+                            'observed_delay_seconds':float(row['delay_seconds']),
+                            'template_correlation':float(row['correlation']),
+                            'attack_band_hz':list(band),'tolerance_seconds':.003,
+                            'source_failure_ownership_assigned':False,
+                            'scope':'recognized timing view in the actual mix; no independent failed source is inferred'}
+                        raise refusal
                     residuals.append(row)
             checks.append({'role':role,'audible_source_events':len(centres),'recognized':measured,'unverified_source_seconds':[t for t,r in zip(centres,rows) if not r['eligible']],'attack_band_hz':band,'fresh_percussion_view_used':fresh is not None,'known_other_deck_subtraction_seconds':component_used,'raw_mixture_unverified_seconds':[t for i,(t,r) in enumerate(zip(centres,raw_rows)) if not r['eligible'] or t not in observable or i in identity_ambiguities],
                 'raw_mixture_identity_ambiguities':list(identity_ambiguities.values()),
