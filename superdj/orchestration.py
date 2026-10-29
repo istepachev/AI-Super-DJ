@@ -77,15 +77,15 @@ def legacy_mid_alternative(outgoing,incoming,sample_rate,outgoing_warp,incoming_
     modes=('power','legacy')if transition.get('frequency_processing',{}).get('selective_mid_energy',{}).get('applied')else('legacy',)
     for mode in modes:
         voice={**(mid_energy_args or{}),'mid_energy_mode':mode}
-        mixed,frequency=blend(outgoing,incoming,sample_rate,bass_hz=bass_hz,beats=transition.get('beats',64),
-            style=style,beat_phase=beat_phase,tonal_conflict=transition.get('frequency_processing',{}).get('tonal_conflict_risk',False),
-            **controls,**percussion_args,**voice)
-        candidate={**transition,'frequency_processing':frequency,'mid_energy_mode':mode}
-        gains,_=recorded_envelopes(len(mixed),transition.get('beats',64),candidate,style=style,beat_phase=beat_phase)
-        gains=percussion_gains(gains,beat_phase,transition.get('beats',64),percussion_args.get('percussion_policy','shared'))
-        components=verification_components(outgoing,incoming,sample_rate,gains,bass_hz=bass_hz,
-            **{k:v for k,v in percussion_args.items()if k!='percussion_policy'})
         try:
+            mixed,frequency=blend(outgoing,incoming,sample_rate,bass_hz=bass_hz,beats=transition.get('beats',64),
+                style=style,beat_phase=beat_phase,tonal_conflict=transition.get('frequency_processing',{}).get('tonal_conflict_risk',False),
+                **controls,**percussion_args,**voice)
+            candidate={**transition,'frequency_processing':frequency,'mid_energy_mode':mode}
+            gains,_=recorded_envelopes(len(mixed),transition.get('beats',64),candidate,style=style,beat_phase=beat_phase)
+            gains=percussion_gains(gains,beat_phase,transition.get('beats',64),percussion_args.get('percussion_policy','shared'))
+            components=verification_components(outgoing,incoming,sample_rate,gains,bass_hz=bass_hz,
+                **{k:v for k,v in percussion_args.items()if k!='percussion_policy'})
             mixed,fronts=verify_blended_fronts(mixed,sample_rate,outgoing_warp,incoming_warp,gains,
                 Path(directory)/'retained-power'if mode=='power'else directory,
                 ffmpeg=ffmpeg,components=components,allow_pitch_changing_residual=allow_pitch_changing_residual)

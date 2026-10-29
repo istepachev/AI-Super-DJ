@@ -171,6 +171,10 @@ def recorded_envelopes(n,beats,transition,*,style,beat_phase):
     return selective_report(gains,frequency,position=position,beat_phase=beat_phase),curves
 
 
+from .blend_recovery import retain_middle_continuity
+
+
+@retain_middle_continuity
 def blend(outgoing, incoming, sample_rate, *, bass_hz=180.0,
           beats=64, tonal_conflict=False, beat_phase=None, style='default', profile=None,
           mid_handoff_bars=None, bass_handoff_beats=None,drums_out=None,drums_in=None,percussion_policy='shared',handoff_windows=None,
