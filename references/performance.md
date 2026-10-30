@@ -108,6 +108,16 @@ When a budget is exhausted, `RenderSearchBudgetExceeded.info` identifies the sou
 
 Atomic JSON snapshots retain their previous complete contents while a temporary replacement is pending. Transient permission refusals, such as a Windows reader briefly holding the previous snapshot, get at most five replacement attempts with 0.55 seconds of total backoff. Persistent failure still raises; it is an I/O problem, not a musical rejection or approval of unverified audio.
 
+## Automated folder batches
+
+For a new batch, select a private source manifest and use the current installed `make` with its integrated render index. A frozen engine remains appropriate for reproducing a saved programme; do not wrap a legacy index around a new engine's existing index. Preparing a small compatible unused reserve pool is useful; speculative analysis of the whole library is not required.
+
+Distinguish user-required recordings and counts from automatic proposals. After the stock bounded search refuses an optional recording, select a compatible reserve rather than adding an outer product of profiles, CUE positions and gain curves. Keep all supported working routes available. For an approximate duration, an optional slot may also be removed when the new duration remains suitable, rounded folder proportions and chapter limits still pass, and explicit user requirements are preserved. Do not hold the whole batch merely to retain its first estimated count. The skill coordinates this selection; `make` does not implement a requested total duration or count limit.
+
+First fit a replacement to already passing neighbouring source boundaries. Release those automatic boundaries only after this fails, then recheck affected audio. Do not invent a new whole-source confidence cutoff when the supported local-window checks accept the source. Actual source, stretched-deck and combined-waveform failures require their corresponding evidence; one kind of refusal does not justify repeating unrelated processing. Preserve every existing quality gate and verified output.
+
+Deliver the requested verified audio before a broad postmortem or optional refactor. Only a blocking repair belongs on that delivery path. Record analysis, ordering, preparation, fresh clip/overlap work, cache reuse, mastering and export separately, along with stopped intervals spent on diagnosis or operator decisions. Nested timers are not additive. A fast cached finishing pass does not establish the duration of a cold new set, and a fast key-order calculation does not replace rendered-audio checks.
+
 ## Optional background profile
 
 See [resource-mode.md](resource-mode.md) for an opt-in bounded background profile, safe field-only enable/disable/restore and the distinction between admission estimates and OS-enforced scheduling. It preserves the existing full-quality models, cache verification and musical routing.
