@@ -62,6 +62,58 @@ def test_backend_corrections_are_bounded_without_accepting_an_unverified_render(
     assert len(calls)==2
 
 
+@pytest.mark.parametrize('outcomes',[(False,False),(False,True),(True,False)])
+def test_rejected_map_proposals_do_not_consume_the_stretch_budget(tmp_path,outcomes):
+    path=tmp_path/'source';path.write_bytes(b'source');calls=[]
+    def correction(passed):
+        calls.append(passed)
+        if not passed:raise ValueError('backend rejected the proposed map')
+        return 'measured candidate'
+    with execution()as session:
+        enable(session,'failed corrections',max_backend_corrections=2)
+        def produce():
+            for passed in outcomes:
+                if passed:assert indexed_compensate(correction,True)=='measured candidate'
+                else:
+                    with pytest.raises(ValueError,match='backend rejected'):
+                        indexed_compensate(correction,False)
+            for _ in range(2-sum(outcomes)):
+                assert indexed_compensate(correction,True)=='measured candidate'
+            with pytest.raises(ValueError,match='budget exhausted'):
+                indexed_compensate(correction,True)
+            raise SourceWindowError('a',['head'],'actual audit still refuses',{'verified':False})
+        with pytest.raises(SourceWindowError,match='actual audit still refuses'):
+            cached('clip',deps(path),produce,session.work)
+    assert calls==[*outcomes,*([True]*(2-sum(outcomes)))]
+    # Leaving the failed indexed producer must restore the ordinary API context.
+    assert indexed_compensate(correction,True)=='measured candidate'
+    assert calls==[*outcomes,*([True]*(3-sum(outcomes)))]
+
+
+def test_changed_neighbour_does_not_exhaust_a_working_deck_but_shares_extra_budget(tmp_path):
+    path=tmp_path/'source';path.write_bytes(b'source');calls=[]
+    def item(clock):
+        value=deps(path);value['next']={'from':'a','to':'b','target_bpm':clock};return value
+    def produce():calls.append(1);return {'verified':True}
+    for identity,clock in [('old neighbour',120.),('new neighbour',121.)]:
+        with execution(tmp_path/'cache')as session:
+            enable(session,'neighbours',max_group_candidates=1,max_extra_candidates=1,
+                source_identities={'b':identity})
+            assert cached('clip',item(clock),produce,session.work)['verified']
+    assert len(calls)==2
+    with execution(tmp_path/'cache')as session:
+        enable(session,'neighbours',max_group_candidates=1,max_extra_candidates=1,
+            source_identities={'b':'new neighbour'})
+        with pytest.raises(RenderSearchBudgetExceeded):
+            cached('clip',item(122.),lambda:pytest.fail('Same-neighbour search stays bounded'),session.work)
+    with execution(tmp_path/'cache')as session:
+        enable(session,'neighbours',max_group_candidates=1,max_extra_candidates=1,
+            source_identities={'b':'third neighbour'})
+        with pytest.raises(RenderSearchBudgetExceeded):
+            cached('clip',item(123.),lambda:pytest.fail('Changing neighbours cannot bypass the programme budget'),session.work)
+    assert len(calls)==2
+
+
 def test_metadata_lru_eviction_during_artifact_check_is_safe(tmp_path,monkeypatch):
     import threading
     from concurrent.futures import ThreadPoolExecutor

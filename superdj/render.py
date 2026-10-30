@@ -762,6 +762,11 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
     runtime_records,timeline_evidence_redirects=records_on_prepared_timeline(
         list(records.values()) if isinstance(records,Mapping) else records,prepared_files or {})
     by_id = {str(r["id"]): r for r in runtime_records}
+    from .execution import current as current_execution
+    indexed_session=current_execution()
+    if indexed_session is not None and hasattr(indexed_session,'render_index'):
+        indexed_session.render_index.source_identities={identity:row.get('provenance',{}).get('source_sha256')or row.get('path',identity)
+            for identity,row in by_id.items()}
     order = [str(item) for item in plan.get("order", [])]
     if not order or len(set(order)) != len(order) or set(order) != set(by_id):
         raise RenderError("The plan must use every unique analysis record exactly once")

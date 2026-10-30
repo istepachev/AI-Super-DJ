@@ -45,13 +45,14 @@ def _packed(value):
 
 class RenderIndex:
     def __init__(self,session,scope,*,track_count=1,max_group_candidates=6,
-                 recovery_seconds=180.,max_extra_candidates=None,max_backend_corrections=3):
+                 recovery_seconds=180.,max_extra_candidates=None,max_backend_corrections=3,source_identities=None):
         if not isinstance(scope,str)or not scope:raise ValueError('Render index needs an explicit programme scope')
         if isinstance(max_group_candidates,bool)or not isinstance(max_group_candidates,int)or not 1<=max_group_candidates<=16:
             raise ValueError('Render candidate limit must be 1–16')
         if not 1<=recovery_seconds<=3600:raise ValueError('Invalid recovery time budget')
         self.session=session;self.scope=hashlib.sha256(scope.encode()).hexdigest()
         self.limit=max_group_candidates;self.seconds=float(recovery_seconds)
+        self.source_identities=dict(source_identities or {});self.baselines={}
         if isinstance(max_backend_corrections,bool)or not isinstance(max_backend_corrections,int)or not 0<=max_backend_corrections<=9:
             raise ValueError('Backend correction budget must be 0–9')
         self.backend_limit=max_backend_corrections
@@ -101,7 +102,16 @@ class RenderIndex:
             ids=[deps['transition']['from'],deps['transition']['to']]
             sources=[deps[k].get('source_path',deps[k].get('id',ids[i]))for i,k in enumerate(('outgoing','incoming'))]
         from .execution import key_for
-        return key_for({'stage':stage,'sources':sources,'engine':self.session.objects.engine_for(stage)}),ids
+        baseline=key_for({'stage':stage,'sources':sources,'engine':self.session.objects.engine_for(stage)})
+        neighbours={}
+        if stage=='clip':
+            for role,key in (('previous','from'),('next','to')):
+                edge=deps.get(role)
+                if edge:
+                    other=edge[key];neighbours[role]=self.source_identities.get(other,other)
+        group=key_for({'baseline':baseline,'neighbours':neighbours})if neighbours else baseline
+        self.baselines[group]=baseline
+        return group,ids
 
     @contextmanager
     def _budget_guard(self):
@@ -111,14 +121,19 @@ class RenderIndex:
 
     def _reserve(self,group,ids,stage):
         state=self._read('budget')or{'groups':{},'extra_candidates':0}
+        # A changed neighbour needs a fresh local budget, but it remains
+        # additional programme work. Seed older ledgers from their source groups.
+        baselines=state.setdefault('baseline_groups',list(state['groups']))
+        baseline=self.baselines.get(group,group)
         item=state['groups'].setdefault(group,{'attempts':0,'recovery_seconds':0.,'first_seconds':0.})
-        extra=item['attempts']>0
+        extra=baseline in baselines
         exhausted=(item['attempts']>=self.limit or(extra and(item['recovery_seconds']>=max(self.seconds,3*item['first_seconds'])or state['extra_candidates']>=self.extra_limit)))
         if exhausted:
             self.metrics['budget_refusals']+=1
             raise RenderSearchBudgetExceeded(dict(stage=stage,source_ids=ids,attempts=item['attempts'],
                 recovery_seconds=item['recovery_seconds'],limits={'candidates':self.limit,'programme_extra_candidates':self.extra_limit}))
         item['attempts']+=1
+        if baseline not in baselines:baselines.append(baseline)
         if extra:state['extra_candidates']+=1
         self._write('budget',state);return extra
 
