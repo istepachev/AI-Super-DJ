@@ -607,6 +607,14 @@ def execution(cache=None, *, jobs=1, cpu_jobs=None, devices=(), report=None, scr
 
 def cached(stage, dependencies, producer, owned):
     session = current()
+    index = getattr(session, 'render_index', None)
+    if index is not None:
+        return index.cached(_cached, stage, dependencies, producer, owned)
+    return _cached(stage, dependencies, producer, owned)
+
+
+def _cached(stage, dependencies, producer, owned):
+    session = current()
     if session is None:
         return producer()
     if not session.persistent:

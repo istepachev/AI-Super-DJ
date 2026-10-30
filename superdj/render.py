@@ -1145,7 +1145,8 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                     if drum_path or not (preparation or {}).get('processors'):
                         kick_evidence={role:{'path':drum_path or stem['drums_path'],'source_start_seconds':stem.get('drum_source_start_seconds',0.)} for role in ('head','tail')}
                 from .timing_safety import SourceWindowFailure
-                try:refine_with_native_clock_recovery(clip_input,warp,sample_rate,kick_evidence,
+                from .render_index import indexed_source_call
+                try:indexed_source_call('source_controls',refine_with_native_clock_recovery,clip_input,warp,sample_rate,kick_evidence,
                     enabled=render_controls['allow_supported_native_clock_recovery'])
                 except SourceWindowFailure as error:
                     # Reject measured source impossibility before the first
@@ -1165,7 +1166,7 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                         'failed_track':identity,'source_timing_evidence':error.evidence,
                         'stretch_not_started':True,'timing_gate_relaxed':False}) from error
                 from .attack_references import retain_mixture_references
-                retain_mixture_references(clip_input,warp,sample_rate)
+                indexed_source_call('source_references',retain_mixture_references,clip_input,warp,sample_rate)
             map_path.write_text("".join(f"{item['source_frame']} {item['output_frame']}\n" for item in warp["anchors"]), encoding="ascii")
             ratio = warp["output_frames"] / source_frames
             warp['rubberband_engine']=track_engine
@@ -1189,6 +1190,7 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                 fixed.replace(clip_output)
             if (head[identity] and head[identity].clock) or (tail[identity] and tail[identity].clock):
                 from .sync import transient_drift, compensate_backend_drift
+                from .render_index import indexed_compensate
                 from .kick_grid import rendered_attack_audit
                 from .correction_screen import CorrectionScreen
                 from copy import deepcopy
@@ -1264,7 +1266,7 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                     strength=1.0 if attempt<2 else .5
                     for fraction in (1.,.5,.25,.125):
                         try:
-                            compensate_backend_drift(warp,audit,sample_rate,strength=strength*fraction)
+                            indexed_compensate(compensate_backend_drift,warp,audit,sample_rate,strength=strength*fraction)
                             break
                         except ValueError as error:
                             warp.setdefault('acoustic_correction_rejections',[]).append(str(error))

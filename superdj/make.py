@@ -55,6 +55,8 @@ def _make(args):
         raise ValueError("Use a simple output filename stem")
     if (output / f"{name}.flac").exists():
         raise FileExistsError("Choose a new name: an existing master is never overwritten")
+    from .render_index import enable as enable_render_index
+    enable_render_index(current(),str(output/name),track_count=len(files))
     for key in ("audamcp", "bitwize"):
         if not runtime.get(key):
             raise ValueError("Run setup and configure private runtime.local.json with audited processor paths")

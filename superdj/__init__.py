@@ -1,5 +1,5 @@
 """SuperDJ: original planning and orchestration, external audio backends."""
-__version__ = "0.22.2"
+__version__ = "0.23.0"
 
 from .resources import configure_math_threads as _configure_math_threads
 _configure_math_threads()

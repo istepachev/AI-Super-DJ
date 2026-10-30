@@ -5,7 +5,8 @@ import numpy as np
 import soundfile as sf
 
 from .render import RenderError
-from .loops import choose_repeat, repeat_file
+from .loops import choose_repeat
+from .render_index import cached_phrase_repeat as repeat_file
 
 METHOD='verified phrase repeat with complementary-band join'
 
@@ -50,8 +51,8 @@ def preserve_short_tracks(plan,records,prepared,directory):
         for key in streams:
             destination=directory/(identity+'_loop_'+key+'.wav')
             context=directory/(identity+'_native_join_'+key+'.npy')
-            edit['native_join_contexts'][key]=repeat_file(item[key],destination,edit,context_path=context)
-            item[key]=str(destination)
+            repeated,edit['native_join_contexts'][key]=repeat_file(item[key],destination,edit,context_path=context)
+            item[key]=repeated
         item.setdefault('provenance',{})['timeline_edit']=edit
         row['timeline_edit']=edit;row.setdefault('grid',{})['timeline_edit']=edit
         row['original_duration_seconds']=row['duration']

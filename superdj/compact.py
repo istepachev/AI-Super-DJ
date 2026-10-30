@@ -48,9 +48,26 @@ def arrange_sync(plan, records, *, target_solo_seconds=None, maximum_solo_second
         if key in windows:
             return windows[key]
         row = by_id[identity]
+        from .execution import current,cached
+        session=current()
+        if session is not None and getattr(session,'render_index',None) is not None:
+            import hashlib,json
+            from pathlib import Path
+            try:metadata=hashlib.sha256(json.dumps(row,sort_keys=True,allow_nan=False,default=lambda x:x.tolist()).encode()).hexdigest()
+            except (ValueError,TypeError,AttributeError):metadata=None
+            if metadata is not None:
+                def produce():return _source_windows(row,count,native,sample_rate)
+                value=cached('sync_windows',{'metadata_sha256':metadata,'bars':count,'native':native,
+                    'sample_rate':sample_rate,'algorithm_sha256':hashlib.sha256(Path(__file__).read_bytes()).hexdigest()},produce,session.work)
+                windows[key]=value
+                return value
+        windows[key]=_source_windows(row,count,native,sample_rate)
+        return windows[key]
+
+    def _source_windows(row,count,native,sample_rate):
         grid = _grid(row, .75)
         if not grid[0] and not _local_validation_possible(row, grid):
-            raise RenderError(f"{identity}: compact SYNC requires a usable grid: {grid[1]}")
+            raise RenderError(f"{row['id']}: compact SYNC requires a usable grid: {grid[1]}")
         choices = []
         beat_count = round(count * 4)
         indices = range(len(grid[2]) - beat_count) if native else range(len(grid[3]) - count)
@@ -67,7 +84,6 @@ def arrange_sync(plan, records, *, target_solo_seconds=None, maximum_solo_second
                 choices.append((float(window.times[0]), float(window.times[-1]), i, evidence))
             except RenderError:
                 continue
-        windows[key] = choices
         return choices
 
     counts = []
@@ -122,6 +138,14 @@ def arrange_sync(plan, records, *, target_solo_seconds=None, maximum_solo_second
         endpoints = [float(t) for t in row['downbeats']]
         heads = candidates(identity, counts[position - 1], natives[position - 1]) if position else [(t, t, 0, {}) for t in [0.] + endpoints]
         tails = candidates(identity, counts[position], natives[position]) if position < len(counts) else [(t, t, 0, {}) for t in endpoints + [duration]]
+        # These independent bounds previously ran only inside every head/tail
+        # Cartesian pair. Apply the identical predicate before bass screening.
+        limits=(section_ranges or{}).get(identity,{})
+        def allowed(boundary,value):
+            low,high=limits.get(boundary,(-float('inf'),float('inf')))
+            return low<=value<=high and any(abs(value-c)<=1/sample_rate for c in limits.get(boundary+'_choices',[value]))
+        heads=[w for w in heads if allowed('start',w[0])]
+        tails=[w for w in tails if allowed('end',w[1])]
         rejected=(result.get('rejected_attack_window_events') or {}).get(identity,{})
         heads=[w for w in heads if not any(w[0]<=t<=w[1] for t in rejected.get('head',[]))]
         tails=[w for w in tails if not any(w[0]<=t<=w[1] for t in rejected.get('tail',[]))]
