@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import random
+import time
 from typing import Any
 
 from .audio import AUDIO_EXTENSIONS
@@ -31,7 +32,13 @@ def write_json(path: str | Path, value: Any) -> None:
     temporary = Path(name)
     try:
         temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2, allow_nan=False), encoding='utf8')
-        temporary.replace(target)
+        for delay in (0.,.025,.075,.15,.3):
+            if delay:time.sleep(delay)
+            try:
+                temporary.replace(target)
+                break
+            except PermissionError:
+                if delay==.3:raise
     finally:
         temporary.unlink(missing_ok=True)
 

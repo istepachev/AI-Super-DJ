@@ -108,7 +108,9 @@ class RenderIndex:
             for role,key in (('previous','from'),('next','to')):
                 edge=deps.get(role)
                 if edge:
-                    other=edge[key];neighbours[role]=self.source_identities.get(other,other)
+                    other=edge[key];side='outgoing'if role=='previous'else'incoming'
+                    neighbours[role]={'source':self.source_identities.get(other,other),
+                        'window':[edge.get(side+'_source_start'),edge.get(side+'_source_end')]}
         group=key_for({'baseline':baseline,'neighbours':neighbours})if neighbours else baseline
         self.baselines[group]=baseline
         return group,ids

@@ -101,6 +101,7 @@ def test_changed_neighbour_does_not_exhaust_a_working_deck_but_shares_extra_budg
                 source_identities={'b':identity})
             assert cached('clip',item(clock),produce,session.work)['verified']
     assert len(calls)==2
+
     with execution(tmp_path/'cache')as session:
         enable(session,'neighbours',max_group_candidates=1,max_extra_candidates=1,
             source_identities={'b':'new neighbour'})
@@ -111,6 +112,33 @@ def test_changed_neighbour_does_not_exhaust_a_working_deck_but_shares_extra_budg
             source_identities={'b':'third neighbour'})
         with pytest.raises(RenderSearchBudgetExceeded):
             cached('clip',item(123.),lambda:pytest.fail('Changing neighbours cannot bypass the programme budget'),session.work)
+    assert len(calls)==2
+
+
+@pytest.mark.parametrize('side',['previous','next'])
+def test_changed_neighbour_window_has_its_own_budget_but_own_window_does_not(tmp_path,side):
+    path=tmp_path/'source';path.write_bytes(b'source');calls=[]
+    def item(other_start,own_start=0.):
+        value=deps(path,start=own_start)
+        other_side='outgoing'if side=='previous'else'incoming'
+        own_side='incoming'if side=='previous'else'outgoing'
+        value[side]={'from':'b'if side=='previous'else'a','to':'a'if side=='previous'else'b',
+            other_side+'_source_start':other_start,other_side+'_source_end':other_start+30.,
+            own_side+'_source_start':own_start,own_side+'_source_end':own_start+30.}
+        return value
+    def produce():calls.append(1);return {'verified':True}
+    for other_start in (10.,20.):
+        with execution(tmp_path/'cache')as session:
+            enable(session,'window contexts',max_group_candidates=1,max_extra_candidates=1,
+                source_identities={'b':'same adjacent recording'})
+            assert cached('clip',item(other_start),produce,session.work)['verified']
+    with execution(tmp_path/'cache')as session:
+        enable(session,'window contexts',max_group_candidates=1,max_extra_candidates=1,
+            source_identities={'b':'same adjacent recording'})
+        with pytest.raises(RenderSearchBudgetExceeded):
+            cached('clip',item(20.,own_start=1.),lambda:pytest.fail('Own cue changes must remain bounded'),session.work)
+        with pytest.raises(RenderSearchBudgetExceeded):
+            cached('clip',item(30.),lambda:pytest.fail('New adjacent cues must not replenish the shared budget'),session.work)
     assert len(calls)==2
 
 
