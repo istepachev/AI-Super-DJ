@@ -33,6 +33,8 @@ If both overlap windows of an interior source fail, ordinary recovery uses the e
 
 If the local source-window radius has no valid candidate, use the existing wider native-boundary search inside that same CUE attempt. A 32-bar overlap may require moving its entrance beyond the 16-bar local radius to exclude a refused late hit. Keep neighbour boundaries, user locks, physical event rejections, shared compute limits and all audio checks; do not add an outer loop of CUEs or profiles.
 
+For an otherwise refused interior SYNC clip with complete native-required observations, a bounded whole-clip integer sample offset may correct a residual backend latency. Both edges must lie inside soft SYNC overlaps. Reaudit actual PCM against the unchanged 3 ms clock and retain every prior measured observation; missing mandatory evidence or variable drift remains a refusal. Shift the aligned vocal stream by the identical sample count. This changes no playback speed or pitch, interpolates no samples and copies no isolated attacks. Passing existing renders remain untouched.
+
 Within an indexed programme, a refused default R2 output may try the supported short transient window once on the same native core before changing cues. Preserve explicit source backend/profile choices; native-only timing failures use source-window recovery instead. Keep at most two CUE alternatives per source pair, alongside the existing shared fresh-work and per-context index limits. Different failed pairs do not share a three-attempt ceiling for the entire long set. An explicit single-attempt trial remains single; unindexed SDK calls retain their existing global attempt limit. Successful ordinary processing never enters this fallback.
 
 ## Audio input without per-format setup

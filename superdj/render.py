@@ -1292,9 +1292,17 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                     from .source_observability import required_bass_views
                     final_attack=finalize_attack_timing(clip_output,warp,sample_rate,
                         allow_pitch_changing_residual=allow_pitch_changing_residual)
+                    if head[identity] and tail[identity] and not allow_pitch_changing_residual:
+                        from .constant_phase import align_constant_phase
+                        final_attack=align_constant_phase(clip_output,warp,final_attack,sample_rate,
+                            auditor=rendered_attack_audit,soft_sync_boundaries=bool(position and position<len(transitions)
+                                and transitions[position-1]['mode']=='beatmapped_bass_swap'
+                                and transitions[position]['mode']=='beatmapped_bass_swap'))
+                    from .integrity import _timing_limit_exceeded
+                    clock_scale=max((abs(e['expected_seconds'])for e in final_attack['measured']),default=warp['output_frames']/sample_rate)
                     protection_roles=[role for role,r in warp.get('source_kick_alignment',{}).items()
                         if len(r['events'])>=8 and (sum(e['role']==role for e in final_attack['measured'])<8
-                        or max((abs(e['delay_seconds']) for e in final_attack['measured'] if e['role']==role),default=0)>.003
+                        or _timing_limit_exceeded(max((abs(e['delay_seconds']) for e in final_attack['measured'] if e['role']==role),default=0),.003,reference_seconds=clock_scale)
                         or set(r.get('native_mixture_reference',{}).get('initial_front_required_beats',[]))-
                            {e['beat'] for e in final_attack['measured'] if e['role']==role and e.get('view')=='initial_front'}
                         or required_bass_views(r)['mixture']-
@@ -1310,7 +1318,7 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                         warp['native_attack_preservation']['roles']=protection_roles
                         final_attack=rendered_attack_audit(clip_output,warp,sample_rate)
                 else:final_attack=best[2]
-                if final_attack['maximum_measured_drift_seconds'] is None or final_attack['maximum_measured_drift_seconds']>.003:
+                if final_attack['maximum_measured_drift_seconds'] is None or (use_kicks and _timing_limit_exceeded(final_attack['maximum_measured_drift_seconds'],.003,reference_seconds=clock_scale)) or (not use_kicks and final_attack['maximum_measured_drift_seconds']>.003):
                     roles=[role for role in ('head','tail') if warp.get('input_output_beat_mapping',{}).get(role)]
                     raise SourceWindowError(identity,roles,'acoustic attack alignment remains unresolved',
                         {'final_attack':final_attack,'warp':warp})
@@ -1371,6 +1379,9 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                     fine_voice=Path(vocal_path).with_name(Path(vocal_path).stem+'-fine.wav')
                     apply_fine_timing(vocal_path,fine_voice,warp,sample_rate)
                     fine_voice.replace(vocal_path)
+                if warp and warp.get('constant_output_phase',{}).get('applied'):
+                    from .constant_phase import apply_aligned_stream
+                    apply_aligned_stream(vocal_path,warp['constant_output_phase'])
                 if warp and warp.get('native_attack_preservation'):
                     from .kick_grid import preserve_rendered_attacks
                     preserve_rendered_attacks(vocal_path,vocal_source['path'],warp,sample_rate,gain=gain,
