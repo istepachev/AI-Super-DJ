@@ -122,6 +122,14 @@ def alternative(plan, records, failure, excluded, attempt, *, sample_rate, ffmpe
         return candidate, {'changed_track':identity,'boundary':boundary,'previous_section':list(previous),
             'new_section':[candidate['sections'][identity]['start'],candidate['sections'][identity]['end']],
             'order_preserved':True,'overlap_lengths_preserved':True,'chapter_duration_recovery':duration_recovery}
+    if failed_track and failed_roles:
+        # A refused event near the end of a 32-bar overlap may remain inside
+        # every window in the local 16-bar radius. Use the existing preserving
+        # native search in this same attempt, before declaring the source
+        # infeasible. This changes no outer/index budget or audio gate.
+        from .source_search import fresh_arrangement_alternative
+        return fresh_arrangement_alternative(plan,records,failure,excluded,attempt,
+            sample_rate=sample_rate,ffmpeg=ffmpeg)
     raise RenderError('No alternative window satisfies the same overlap, source, playback and lock constraints')
 
 

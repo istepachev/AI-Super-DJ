@@ -31,6 +31,8 @@ Ordinary `make` maintains a lightweight render index within its programme scope.
 
 If both overlap windows of an interior source fail, ordinary recovery uses the existing preserving joint-core search rather than holding one refused boundary while moving the other. Retain every other source boundary, explicit user locks, overlap lengths and the same outer attempt/index budgets. This selects another native core; it does not approve its audio. All normal source, render, blend, chapter and export checks still apply.
 
+If the local source-window radius has no valid candidate, use the existing wider native-boundary search inside that same CUE attempt. A 32-bar overlap may require moving its entrance beyond the 16-bar local radius to exclude a refused late hit. Keep neighbour boundaries, user locks, physical event rejections, shared compute limits and all audio checks; do not add an outer loop of CUEs or profiles.
+
 Within an indexed programme, a refused default R2 output may try the supported short transient window once on the same native core before changing cues. Preserve explicit source backend/profile choices; native-only timing failures use source-window recovery instead. Keep at most two CUE alternatives per source pair, alongside the existing shared fresh-work and per-context index limits. Different failed pairs do not share a three-attempt ceiling for the entire long set. An explicit single-attempt trial remains single; unindexed SDK calls retain their existing global attempt limit. Successful ordinary processing never enters this fallback.
 
 ## Audio input without per-format setup
