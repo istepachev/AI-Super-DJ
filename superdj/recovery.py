@@ -34,6 +34,15 @@ def alternative(plan, records, failure, excluded, attempt, *, sample_rate, ffmpe
     edge = next((item for item in plan['edges'] if (item['from'],item['to'])==pair), None)
     if edge is None or not sections:
         raise RenderError('No automatic source windows are available for recovery')
+    failed_track=failure.evidence.get('failed_track')
+    failed_roles=set(failure.evidence.get('failed_roles') or [])
+    if failed_track in plan['order'][1:-1] and {'head','tail'}<=failed_roles:
+        # Holding the other refused end cannot repair an interior source core.
+        # Reuse the existing preserving rebuild search within the same outer
+        # attempt budget; it retains other sources, locks and actual audio QA.
+        from .source_search import fresh_arrangement_alternative
+        return fresh_arrangement_alternative(plan,records,failure,excluded,attempt,
+            sample_rate=sample_rate,ffmpeg=ffmpeg)
     options = [(failure.incoming, 'start', 'locked_start'), (failure.outgoing, 'end', 'locked_end')]
     source_role=failure.evidence.get('failed_role') if failure.evidence.get('stage')=='source-only timing preflight' else None
     if source_role=='head':
@@ -116,6 +125,23 @@ def alternative(plan, records, failure, excluded, attempt, *, sample_rate, ffmpe
     raise RenderError('No alternative window satisfies the same overlap, source, playback and lock constraints')
 
 
+def _short_profile_candidate(records, failure):
+    """One supported transient profile after default R2 output was refused."""
+    evidence=failure.evidence
+    warp=evidence.get('warp',{})
+    identity=evidence.get('failed_track')
+    if evidence.get('stage')=='source-only timing preflight' or warp.get('rubberband_engine')!='r2':return None
+    if warp.get('rubberband_options')!=['--fast','--detector-perc']:return None
+    row=next((r for r in records if r['id']==identity),None)
+    if row is None or any(row.get(k)is not None for k in ('rubberband_engine_override','rubberband_profile_override')):return None
+    updated=deepcopy(records)
+    selected=next(r for r in updated if r['id']==identity)
+    selected['rubberband_profile_override']='short'
+    return updated,{'changed_track':identity,'boundary':'backend_profile','engine':'r2','profile':'short',
+        'source_windows_clock_and_overlap_unchanged':True,'explicit_source_profile_preserved':True,
+        'timing_or_pitch_threshold_changed':False}
+
+
 def render_with_recovery(plan, records, prepared, output, work, *, renderer=None, maximum_attempts=3, **controls):
     from .render import render_plan
     from .storage import write_json
@@ -123,21 +149,36 @@ def render_with_recovery(plan, records, prepared, output, work, *, renderer=None
     original = deepcopy(plan)
     candidate = deepcopy(plan)
     excluded, history = {}, []
+    from .execution import current
+    indexed=maximum_attempts==3 and current() is not None and hasattr(current(),'render_index')
+    # The index retains the existing shared fresh-work and per-context caps.
+    # Two local CUE alternatives do not constitute a three-failures-per-set cap.
+    limit=1+len(records)+2*max(0,len(records)-1) if indexed else maximum_attempts
+    window_counts={};working_records=records
     work = Path(work)
-    for attempt in range(maximum_attempts):
+    for attempt in range(limit):
         directory = work if attempt==0 else work/f'alternative-{attempt}'
         try:
-            rendered = renderer(candidate, records, prepared, output, directory, **controls)
+            rendered = renderer(candidate, working_records, prepared, output, directory, **controls)
         except TransitionFailure as error:
             history.append({'attempt':attempt+1,'from':error.outgoing,'to':error.incoming,
                 'reason':str(error),'evidence':error.evidence})
             write_json(work/'window_recovery.json', {'status':'searching','attempts':history})
-            if attempt+1>=maximum_attempts:
+            if attempt+1>=limit:
                 write_json(work/'window_recovery.json', {'status':'failed','attempts':history})
                 raise
             try:
-                candidate, selection = alternative(candidate, records, error, excluded, attempt+1,
-                    sample_rate=controls.get('sample_rate',44100), ffmpeg=controls.get('ffmpeg'))
+                profile=_short_profile_candidate(working_records,error) if indexed else None
+                if profile is not None:
+                    working_records,selection=profile
+                else:
+                    hashes={r['id']:r.get('provenance',{}).get('source_sha256') or r.get('path') for r in working_records}
+                    key=(error.outgoing,error.incoming,hashes.get(error.outgoing),hashes.get(error.incoming))
+                    used=window_counts.get(key,0)
+                    if indexed and used>=maximum_attempts-1:raise RenderError('Local source-window alternatives exhausted')
+                    candidate, selection = alternative(candidate, working_records, error, excluded,used+1 if indexed else attempt+1,
+                        sample_rate=controls.get('sample_rate',44100), ffmpeg=controls.get('ffmpeg'))
+                    window_counts[key]=used+1
             except RenderError:
                 write_json(work/'window_recovery.json', {'status':'failed','attempts':history})
                 raise error
@@ -146,6 +187,8 @@ def render_with_recovery(plan, records, prepared, output, work, *, renderer=None
         if candidate['order'] != original['order']:
             raise RuntimeError('Recovery changed track order')
         rendered['window_recovery'] = {'attempts':history,'alternatives_used':len(history),
-            'constraints_relaxed':False,'maximum_attempts':maximum_attempts}
+            'constraints_relaxed':False,'maximum_attempts':limit,
+            'maximum_window_alternatives_per_pair':maximum_attempts-1 if indexed else None,
+            'shared_render_index_budget_retained':indexed}
         return rendered, candidate
     raise RuntimeError('Unreachable recovery state')
