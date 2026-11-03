@@ -37,9 +37,10 @@ def apply_aligned_stream(path, phase):
     finally:candidate.unlink(missing_ok=True)
 
 
-def _coverage(audit,warp):
+def _coverage(audit,warp,*,final_endpoint=False):
     points=audit.get('measured',[])
-    if set(warp.get('source_kick_alignment',{}))!={'head','tail'}:return False
+    roles={'head'} if final_endpoint else {'head','tail'}
+    if set(warp.get('source_kick_alignment',{}))!=roles:return False
     for role,row in warp['source_kick_alignment'].items():
         seen=lambda view:{p['beat']for p in points if p['role']==role and p.get('view')==view}
         if len(row.get('events',[]))<8 or len(seen('primary'))<8:return False
@@ -49,17 +50,20 @@ def _coverage(audit,warp):
     return True
 
 
-def align_constant_phase(path,warp,audit,sample_rate,*,auditor,soft_sync_boundaries=False):
+def align_constant_phase(path,warp,audit,sample_rate,*,auditor,soft_sync_boundaries=False,
+                         final_endpoint=False):
     """Accept only a fully reaudited translation of an otherwise refused clip.
 
-    Both edges must be covered by soft SYNC overlaps. Missing observations,
+    Interior edges must both have soft SYNC overlaps. A proven final deck
+    instead requires its complete incoming head; no outgoing edge exists.
+    Missing observations,
     varying drift that cannot fit the same 3 ms clock, and unbounded offsets
     remain refusals. Passing old renders are byte-identical and never enter.
     """
     if (warp.get('constant_output_phase',{}).get('applied')or warp.get('fine_attack_timing')
             or warp.get('native_attack_preservation')):return audit
     points=audit.get('measured',[])
-    if not soft_sync_boundaries or not points or not _coverage(audit,warp):return audit
+    if not soft_sync_boundaries or not points or not _coverage(audit,warp,final_endpoint=final_endpoint):return audit
     delays=[p['delay_seconds']for p in points]
     scale=max(abs(p.get('expected_seconds',0.))for p in points)
     if not np.isfinite(delays).all():raise ValueError('Nonfinite phase observations')
@@ -69,7 +73,13 @@ def align_constant_phase(path,warp,audit,sample_rate,*,auditor,soft_sync_boundar
     margin=1/8000
     lower=max(delays)-tolerance+margin;upper=min(delays)+tolerance-margin
     if lower>upper:return audit
-    frames=math.ceil(lower*sample_rate)if lower>0 else math.floor(upper*sample_rate)if upper<0 else 0
+    if final_endpoint:
+        low=math.ceil(lower*sample_rate);high=math.floor(upper*sample_rate)
+        if low>high:return audit
+        frames=round((low+high)/2)
+    else:
+        # Preserve the already approved interior-deck selection exactly.
+        frames=math.ceil(lower*sample_rate)if lower>0 else math.floor(upper*sample_rate)if upper<0 else 0
     if not frames or abs(frames)>math.floor(.010*sample_rate):return audit
     path=Path(path);candidate=path.with_name(path.stem+'-phase-'+uuid4().hex+'.wav')
     keys=lambda a:{(p['role'],p['beat'],p.get('view'))for p in a['measured']}
@@ -80,14 +90,15 @@ def align_constant_phase(path,warp,audit,sample_rate,*,auditor,soft_sync_boundar
         checked=auditor(candidate,warp,sample_rate)
         after=checked.get('maximum_measured_drift_seconds')
         if (after is None or _timing_limit_exceeded(after,tolerance,reference_seconds=scale)
-                or not keys(audit)<=keys(checked)or not _coverage(checked,warp)):
+                or not keys(audit)<=keys(checked)or not _coverage(checked,warp,final_endpoint=final_endpoint)):
             return audit
         if sf.info(candidate).frames!=info.frames:raise ValueError('Phase correction changed duration')
         candidate.replace(path)
         warp['constant_output_phase']={'applied':True,'advance_frames':int(frames),'sample_rate':sample_rate,
             'maximum_before_seconds':maximum,'maximum_after_seconds':after,'tolerance_seconds':tolerance,
             'all_measured_observations_retained':True,'mandatory_views_rechecked':True,
-            'boundary_scope':'both edges inside mandatory soft SYNC overlaps',
+            'boundary_scope':('final endpoint: sole incoming mandatory soft SYNC overlap'
+                              if final_endpoint else 'both edges inside mandatory soft SYNC overlaps'),
             'padded_edge_frames':abs(int(frames)),'playback_rate':1.,'pitch_changed':False,
             'resampling':False,'isolated_attacks_copied':False,
             'method':'one whole-clip integer sample translation; actual PCM reaudited on the unchanged shared clock'}

@@ -65,6 +65,8 @@ class RenderIndex:
         namespace=hashlib.sha256((self.token+self.scope+policy).encode()).hexdigest()[:20]
         self.root=session.root/'ri1'/namespace if session.persistent else None
         self.results=OrderedDict();self.result_bytes=0;self.result_limit=32*1024**2
+        self.signal_identities=OrderedDict()
+        self.signal_lock=threading.RLock()
         self.metrics=session.metrics.setdefault('render_index',{'fresh_candidates':0,'replayed_rejections':0,'accepted_lookups':0,'producer_seconds':0.,'budget_refusals':0})
 
     def _read(self,key):
@@ -158,7 +160,11 @@ class RenderIndex:
                 value=original(stage,dependencies,producer,owned);self._remember(key,value,metadata_only=stage=='sync_windows');return value
         if stage not in('clip','overlap'):return original(stage,dependencies,producer,owned)
         deps=clip_dependencies(dependencies)if stage=='clip'else dependencies
-        key=key_for({'engine':self.session.objects.engine_for(stage),'stage':stage,'dependencies':deps})
+        canonical=deps
+        if stage=='overlap'and deps.get('transition',{}).get('mode')=='beatmapped_bass_swap':
+            from .overlap_identity import dependencies as overlap_dependencies
+            with self.signal_lock:canonical=overlap_dependencies(deps,self.session,self.signal_identities)
+        key=key_for({'engine':self.session.objects.engine_for(stage),'stage':stage,'dependencies':canonical})
         group,ids=self._group(stage,deps)
         from contextlib import nullcontext
         guard=object_lock(self.root/(key+'.lock'))if self.root else nullcontext()
@@ -175,6 +181,12 @@ class RenderIndex:
                 self.metrics['replayed_rejections']+=1
                 if value['kind']=='source':raise SourceWindowError(value['identity'],value['roles'],value['reason'],evidence)
                 raise TransitionFailure(value['outgoing'],value['incoming'],value['reason'],evidence)
+            if self.session.persistent and saved and saved.get('state')=='accepted'and saved.get('cache_key'):
+                value=self.session.objects.get(stage,saved['cache_key'])
+                if value is not None:
+                    self.metrics['accepted_lookups']+=1
+                    self.session.count('overlap_signal_identity_hits')
+                    return value
             def produce():
                 with self._budget_guard():extra=self._reserve(group,ids,stage)
                 began=time.monotonic()
@@ -200,7 +212,9 @@ class RenderIndex:
             # An accepted index entry alone never approves or returns audio.
             value=original(stage,deps,produce,owned)
             if not self.session.persistent:self._remember(key,value)
-            if not saved or saved.get('state')!='accepted':self._write(key,dict(state='accepted',stage=stage,source_ids=ids))
+            accepted=dict(state='accepted',stage=stage,source_ids=ids,
+                          **({'cache_key':key_for(deps)}if stage=='overlap'and canonical is not deps else {}))
+            if saved!=accepted:self._write(key,accepted)
             self.metrics['accepted_lookups']+=1
             return value
 

@@ -1,5 +1,9 @@
 # Acoustic SYNC verification
 
+## Final endpoint constant phase
+
+The bounded constant-phase route also accepts the final deck's single incoming boundary. This scope is available only at the actual last programme position with an incoming shared clock and no outgoing overlap. Every mandatory head timing view, bass view and initial-front observation must remain present; the interior two-boundary route is unchanged. One balanced integer-sample translation within the existing limit is tried, then the complete source audit runs again with the original 3 ms tolerance and no lost observations. Already passing audio is untouched. The same translation follows aligned voice; the final fade ends before any advance padding. No rate, pitch or per-beat warp is introduced. Actual adjacent-blend, complete-master and decoded-export checks remain mandatory. Missing native evidence cannot use this correction.
+
 ## Distributed local rhythm coverage
 
 Keep the existing whole-window recognition gate and add local checks for every ordinary shared-phase overlap, independent of Mood/Classic/Fuzzy ordering and transition style. Examine sixteen shared beats at a time, stepping four beats and including the final window. With at least four audible interior beat slots, require at least two recognized slots and at least 25% local coverage. More than eight consecutive audible slots without a recognized event rejects the window, even if its later part has enough good matches. Duplicate template views count as one beat; unknown events are not invented or moved onto the clock.

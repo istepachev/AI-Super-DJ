@@ -616,10 +616,14 @@ def _measure(path: Path, block: int = 262144, *, witness=None, regions=()) -> di
 
 
 def _copy_region(source: sf.SoundFile, target: sf.SoundFile, frames: int,
-                 gain: float = 1.0, *, fade_in: bool = False, fade_out: bool = False) -> None:
+                 gain: float = 1.0, *, fade_in: bool = False, fade_out: bool = False,
+                 trailing_silence_frames: int = 0) -> None:
     original = frames
     written = 0
-    fade_frames = min(round(source.samplerate * 0.005), max(1, frames // 2))
+    if (isinstance(trailing_silence_frames,bool)or not isinstance(trailing_silence_frames,int)
+            or trailing_silence_frames<0 or trailing_silence_frames>=max(1,frames)):
+        raise ValueError('Trailing phase padding must fit the copied body')
+    fade_frames = min(round(source.samplerate * 0.005), max(1, (frames-trailing_silence_frames) // 2))
     while frames:
         audio = source.read(min(frames, 262144), dtype="float32", always_2d=True)
         if not len(audio):
@@ -629,7 +633,9 @@ def _copy_region(source: sf.SoundFile, target: sf.SoundFile, frames: int,
         if fade_in:
             audio *= np.minimum(1.0, indices / fade_frames)[:, None]
         if fade_out:
-            audio *= np.minimum(1.0, (original - 1 - indices) / fade_frames)[:, None]
+            envelope=np.minimum(1.0, (original-trailing_silence_frames-1-indices) / fade_frames)
+            if trailing_silence_frames:envelope=np.maximum(0.,envelope)
+            audio *= envelope[:, None]
         target.write(audio)
         written += len(audio)
         frames -= len(audio)
@@ -1292,12 +1298,15 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                     from .source_observability import required_bass_views
                     final_attack=finalize_attack_timing(clip_output,warp,sample_rate,
                         allow_pitch_changing_residual=allow_pitch_changing_residual)
-                    if head[identity] and tail[identity] and not allow_pitch_changing_residual:
+                    final_endpoint=bool(position==len(order)-1 and head[identity] and not tail[identity])
+                    if head[identity] and (tail[identity] or final_endpoint) and not allow_pitch_changing_residual:
                         from .constant_phase import align_constant_phase
+                        phase_options={'final_endpoint':True} if final_endpoint else {}
+                        soft_boundaries=bool(position and transitions[position-1]['mode']=='beatmapped_bass_swap'
+                            and (head[identity].clock is not None if final_endpoint else
+                                 position<len(transitions) and transitions[position]['mode']=='beatmapped_bass_swap'))
                         final_attack=align_constant_phase(clip_output,warp,final_attack,sample_rate,
-                            auditor=rendered_attack_audit,soft_sync_boundaries=bool(position and position<len(transitions)
-                                and transitions[position-1]['mode']=='beatmapped_bass_swap'
-                                and transitions[position]['mode']=='beatmapped_bass_swap'))
+                            auditor=rendered_attack_audit,soft_sync_boundaries=soft_boundaries,**phase_options)
                     from .integrity import _timing_limit_exceeded
                     clock_scale=max((abs(e['expected_seconds'])for e in final_attack['measured']),default=warp['output_frames']/sample_rate)
                     protection_roles=[role for role,r in warp.get('source_kick_alignment',{}).items()
@@ -1740,7 +1749,11 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                         raise RenderError(f"{clip['id']}: rendered solo disagrees with the section budget")
                     fade_in = not incoming
                     fade_out = not outgoing
-                    _copy_region(original, dest, body, fade_in=fade_in, fade_out=fade_out)
+                    phase=(clip.get('warp')or{}).get('constant_output_phase')or{}
+                    padding=max(0,int(phase.get('advance_frames',0))) if fade_out and phase.get('applied') else 0
+                    edge_options={'trailing_silence_frames':padding} if padding else {}
+                    _copy_region(original, dest, body, fade_in=fade_in, fade_out=fade_out,
+                                 **edge_options)
                     if outgoing:
                         previous_tail = original.read(outgoing, dtype="float32", always_2d=True)
                         if clip.get("aligned_vocal_path"):

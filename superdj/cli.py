@@ -733,6 +733,8 @@ def _main(argv=None):
             records = _records(args.records)
             resources = preflight([row['path'] for row in records],output=args.output,scratch=args.work,
                 jobs=runtime.get('jobs'),cpu_jobs=runtime.get('cpu_jobs'),devices=runtime.get('gpu_devices',()),ffprobe=args.ffprobe,sample_rate=args.sample_rate)
+            from .reporting import archive_existing_report
+            archive_existing_report(Path(args.output)/'performance.json')
             with execution(jobs=resources['jobs'],cpu_jobs=resources['cpu_jobs'],devices=resources['devices'],scratch_root=runtime.get('scratch_root'),
                            report=Path(args.output)/'performance.json') as session:
                 session.metrics['resources'] = resources
@@ -752,6 +754,8 @@ def _main(argv=None):
                 cpu_jobs=runtime.get('cpu_jobs'),
                 devices=runtime.get('gpu_devices',()), ffprobe=args.ffprobe, sample_rate=args.sample_rate,
                 target_play_seconds=playback_defaults(long_play=args.long_play,target_play_seconds=args.track_play_seconds)['target_play_range_seconds'][1])
+        from .reporting import archive_existing_report
+        archive_existing_report(Path(args.output)/'performance.json')
         with execution(args.cache, jobs=resources['jobs'] if resources else 1,
                        cpu_jobs=resources['cpu_jobs'] if resources else None,
                        devices=resources['devices'] if resources else (),

@@ -149,7 +149,7 @@ def _folder_short_sources(files,probes):
 
 def make(args):
     from .execution import execution
-    from .storage import write_json
+    from .reporting import write_performance
     runtime = runtime_config()
     explicit_cache = getattr(args, 'cache', None)
     cache = None if getattr(args, 'no_cache', False) else (explicit_cache or
@@ -163,4 +163,4 @@ def make(args):
     finally:
         report_root = getattr(args, '_performance_output', None) or args.output or runtime.get('private_output_root') or runtime.get('output_root')
         if report_root and session is not None:
-            write_json(Path(report_root) / 'performance.json', session.metrics)
+            write_performance(Path(report_root) / 'performance.json', session.metrics)
