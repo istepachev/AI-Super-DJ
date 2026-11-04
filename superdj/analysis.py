@@ -46,6 +46,8 @@ def _cache_directory(path: str | Path | None) -> Path:
     repository = Path(__file__).resolve().parents[1]
     if directory == repository or repository in directory.parents:
         raise ValueError("Analysis caches and audio must be outside the SuperDJ repository")
+    from .storage_budget import validate_storage_path
+    validate_storage_path(directory)
     directory.mkdir(parents=True, exist_ok=True)
     return directory
 

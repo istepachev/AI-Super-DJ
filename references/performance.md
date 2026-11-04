@@ -137,3 +137,6 @@ Deliver the requested verified audio before a broad postmortem or optional refac
 ## Optional background profile
 
 See [resource-mode.md](resource-mode.md) for an opt-in bounded background profile, safe field-only enable/disable/restore and the distinction between admission estimates and OS-enforced scheduling. It preserves the existing full-quality models, cache verification and musical routing.
+
+
+Storage is bounded independently of RAM/concurrency. See [storage settings and cleanup](storage.md). Persistent audio cache is opt-in (50 GiB default when enabled), and all generated data share a configurable overall folder budget, 64 GB by default. Ordinary work is temporary; active cache leases prevent eviction during a build.

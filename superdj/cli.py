@@ -140,6 +140,8 @@ def render(args, records=None, planned=None, prepared_data=None):
     work = private_path(args.work)
     directory = private_path(args.output)
     work.mkdir(parents=True, exist_ok=True)
+    from .execution import current
+    if current(): current().watch_work(work)
     directory.mkdir(parents=True, exist_ok=True)
     if not args.name or Path(args.name).name != args.name or any(c in args.name for c in '/\\:'):
         raise ValueError("Use a simple output filename stem")
@@ -618,6 +620,11 @@ def _main(argv=None):
     mp.add_argument("--work", help=argparse.SUPPRESS)
     mp.add_argument("--cache", help="Opt in to a persistent content cache outside the repository")
     mp.add_argument("--no-cache", action="store_true", help="Use temporary scratch only; remove it after the run")
+    mp.add_argument('--cache-max-gib', type=float, help='Maximum persistent cache size; default 50 GiB, no unlimited mode')
+    mp.add_argument('--scratch-root', help='Temporary working folder, preferably outside cloud sync')
+    mp.add_argument('--scratch-max-gib', type=float, help='Maximum temporary working storage; default 64 GiB')
+    mp.add_argument('--storage-setup', action='store_true', help='Choose storage folders and limits before starting')
+    mp.add_argument('--keep-work', action='store_true', help='Explicit debug retention of --work; still subject to its size limit')
     mp.add_argument("--jobs", type=int, choices=range(1,5), help="Bound independent track tasks (1-4)")
     mp.add_argument("--cpu-jobs", type=int, choices=range(1,5), help="Separate CPU preparation/render limit (1-4); resource checks may reduce it")
     revision = subs.add_parser('revise', help='Repair a transition or remove tracks and replan the remaining suffix')
@@ -698,10 +705,29 @@ def _main(argv=None):
     setup.add_argument("--components", required=True); setup.add_argument("--git", default="git")
     setup.add_argument("--download-model", action="store_true"); setup.add_argument("--cache"); setup.add_argument("--checkpoint", default="final0")
     setup.add_argument("--download-cue-model", action="store_true")
+    store = subs.add_parser('storage', help='Configure cache location/size and temporary working-storage limit')
+    store.add_argument('action', nargs='?', default='status', choices=('status', 'configure', 'off', 'setup'))
+    store.add_argument('--cache-root')
+    store.add_argument('--cache-max-gib', type=float)
+    store.add_argument('--scratch-root')
+    store.add_argument('--scratch-max-gib', type=float)
+    store.add_argument('--storage-root', help='One folder for generated cache, work and reports')
+    store.add_argument('--storage-max-gb',type=float,help='Overall folder budget in decimal GB; default 64')
     limits = subs.add_parser("resource-mode", help="Opt-in bounded background processing; settings affect future runs")
     limits.add_argument("action", nargs="?", default="status", choices=("status", "on", "off", "restore"))
     args = parser.parse_args(argv)
-    if args.command == "resource-mode":
+    if args.command == 'storage':
+        from .storage_budget import configure, setup
+        if args.action == 'setup':
+            import sys
+            if not sys.stdin.isatty():
+                raise ValueError('Interactive setup needs a terminal; use storage configure/off with explicit folder and size options')
+            print(json.dumps(setup(), ensure_ascii=False, indent=2))
+            return
+        print(json.dumps(configure(args.action, cache_root=args.cache_root, cache_max_gib=args.cache_max_gib,
+                                   scratch_root=args.scratch_root, scratch_max_gib=args.scratch_max_gib,
+                                   storage_root=args.storage_root,storage_max_gb=args.storage_max_gb), ensure_ascii=False, indent=2))
+    elif args.command == "resource-mode":
         from .resource_config import configure
         print(json.dumps(configure(args.action), ensure_ascii=False, indent=2))
     elif args.command == "make":

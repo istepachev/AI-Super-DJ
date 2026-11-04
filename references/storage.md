@@ -1,0 +1,17 @@
+# Bounded audio storage
+
+The default is no persistent audio cache. Temporary engine files are still necessary: the ordinary build removes them after success or failure. A later start removes only marked orphan engine directories whose owner process has exited. It does not recursively delete unmarked user folders.
+
+`superdj storage setup` asks whether to retain processed audio, the working folder, and its overall maximum size; optional cache and scratch sublimits fit inside that total. Enter keeps persistent caching off. Without an interactive terminal, use explicit `storage off` or `storage configure` options, or let the assistant collect the same choices. `storage status` shows saved settings. Per-build flags override them without editing unrelated workstation preferences.
+
+The whole configured working folder defaults to **64 GB (64,000,000,000 bytes)**, counting cache, temporary audio, reports and any other files already in it. The optional persistent cache defaults to at most **50 GiB within that same total**. Per-category limits do not add extra capacity. Both limits must be positive and finite; there is no unlimited mode. Set folders outside OneDrive, Yandex.Disk and other synchronization trees unless cloud storage is explicitly intended. Models and history use their existing separate locations.
+
+Cache admission counts the complete object, manifest and metadata before copying. It evicts least-recently-used complete objects only when no live run leases them. If the object or protected working set cannot fit, the result remains in temporary work storage and is not cached. Original music and unrelated folder contents cannot become eviction targets. Checksums, model precision, sample format and audio quality gates are unchanged.
+
+Temporary limits are checked in advance against workflow/master estimates and at stage boundaries against actual files. This is an application limit, not an operating-system disk quota: an individual external operation may write between checks. It must not be described as a byte-exact filesystem reservation. A refusal asks for a larger explicit limit or a smaller programme, never lower audio precision. The limit includes retained files in a selected work parent; old unmarked data are not silently deleted.
+
+Use `session.work` in SDK orchestration. `execution(..., cache_max_bytes=..., work_max_bytes=...)` provides the same finite limits. Ordinary `make --work` selects a parent for an owned temporary child; use `--keep-work` only for deliberately retained debugging. Advanced retained work is subject to the same checks. Keep compact manifests and reports after delivery rather than dated copies of every decode, stem and retry.
+
+For existing data, first identify completed output, input music, model folders, history and running jobs. Deleting inside cloud sync deletes the cloud copy too; a local-only space release is a different operation. Preserve code, originals, models, required reports and active jobs. Use a reviewed list of generated files, verify absolute targets remain within the intended directory, and retain the cleanup result. Never rename a multi-terabyte tree as a purported cleanup or create an equally large backup just to discard reproducible cache.
+
+Saved `storage_root` and `storage_max_gb` apply to later builds. Workstation `forbidden_storage_roots` prevent accidental writes through old SDK scripts. An already running legacy job outside the new root retains its existing execution context; do not interrupt it to apply settings.

@@ -289,3 +289,15 @@ superdj make "../music-folder" --harmonic-mode fuzzy --output "../result-fuzzy"
 | [Экономный режим](references/resource-mode.md) | Включение, фактические ограничения и откат |
 | [Проектные архивы](references/project-archive.md) | Аудит и сохранение метаданных проектов |
 | [THIRD_PARTY.md](THIRD_PARTY.md) | Сторонние компоненты и лицензии |
+
+
+### Storage limits
+
+Persistent audio caching is off by default. Before the first build, choose the working folder and a shared total limit (64 GB by default) with `superdj storage setup`. The same settings are available non-interactively:
+
+```powershell
+superdj storage off --storage-root D:/SuperDJ --storage-max-gb 64
+superdj storage configure --storage-root D:/SuperDJ --storage-max-gb 64 --cache-root D:/SuperDJ/cache --cache-max-gib 16
+```
+
+A build can override these with `--no-cache`, `--cache`, `--cache-max-gib`, `--scratch-root` and `--scratch-max-gib`. Prefer folders outside cloud sync. Old unused cache objects are evicted within the limit; active objects, originals and models are protected. See [storage policy](references/storage.md).

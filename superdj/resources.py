@@ -123,6 +123,10 @@ def admit_master(frames, sample_rate, channels=2, *, memory=None):
     if policy['buffer_budget_bytes']<required:
         raise MemoryError('Insufficient safe RAM for even the bounded complete master; '
                           'retain the verified premix and retry when memory is available')
+    from .execution import current
+    active=current()
+    if active is not None and bounded:
+        active.work_budget.check(additional=int(frames*2*8*3+GIB))
     return {'frames':frames,'sample_rate':sample_rate,'required_bytes_estimate':required,
             'legacy_required_bytes_estimate':legacy,'mode':'bounded' if bounded else 'upstream',
             'block_frames':block,'temporary_pcm_bytes_estimate':int(frames*2*8*3+GIB) if bounded else 0,
@@ -193,6 +197,12 @@ def preflight(files, *, output, scratch=None, cache=None, jobs=None, cpu_jobs=No
     if policy['constrained']:
         selected=cpu_selected=1
         preparation_overlap=False
+    from .execution import current
+    active = current()
+    estimate = int(source_pcm*4+rendered_pcm*10)
+    if active is not None and estimate > active.work_budget.maximum:
+        from .storage_budget import StorageLimitError
+        raise StorageLimitError(f'Working-storage estimate {estimate/GIB:.1f} GiB exceeds the selected {active.work_budget.maximum/GIB:g} GiB limit; choose a larger --scratch-max-gib or a smaller set')
     allocations = [(scratch or Path(tempfile.gettempdir())/'superdj-scratch', int(source_pcm*4+rendered_pcm*10)),
                    (output, int(rendered_pcm*2))]
     allocations.append((cache or tempfile.gettempdir(), int(source_pcm*4+(rendered_pcm*3 if cache else 0))))

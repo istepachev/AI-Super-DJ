@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar, copy_context
 from pathlib import Path
 import hashlib
@@ -154,8 +154,9 @@ def object_lock(path):
 
 class Objects:
     """Immutable stage results: manifest committed only after all copies complete."""
-    def __init__(self, root):
+    def __init__(self, root, budget=None):
         self.root = Path(root)
+        self.budget = budget
         self.engines = {}
 
     def location(self, stage, key):
@@ -167,6 +168,13 @@ class Objects:
         return self.engines[stage]
 
     def get(self, stage, key):
+        with self.budget.locked() if self.budget else nullcontext():
+            result = self._get_unlocked(stage, key)
+            if result is not None and self.budget:
+                self.budget.pin(self.location(stage, key))
+            return result
+
+    def _get_unlocked(self, stage, key):
         directory = self.location(stage, key)
         try:
             manifest = json.loads((directory / 'manifest.json').read_text(encoding='utf8'))
@@ -191,45 +199,52 @@ class Objects:
 
     def put(self, stage, key, result, owned):
         directory = self.location(stage, key)
-        directory.parent.mkdir(parents=True, exist_ok=True)
-        scratch = Path(tempfile.mkdtemp(prefix=f'pending-{key}-', dir=directory.parent))
-        files, copied = {}, {}
         owned = Path(owned).resolve()
-        def pack(v):
-            if isinstance(v, dict):
-                return {k: pack(x) for k, x in v.items()}
-            if isinstance(v, (list, tuple)):
-                return [pack(x) for x in v]
-            if isinstance(v, (str, Path)):
+        sources = {}
+        def pack(value):
+            if isinstance(value, dict):
+                return {k: pack(v) for k, v in value.items()}
+            if isinstance(value, (list, tuple)):
+                return [pack(v) for v in value]
+            if isinstance(value, (str, Path)):
                 try:
-                    p = Path(v).resolve()
-                    if p.is_file() and p.is_relative_to(owned):
-                        if str(p) not in copied:
-                            name = f'{len(files):04d}{p.suffix}'
-                            shutil.copyfile(p, scratch / name)
-                            files[name] = sha256(scratch / name)
-                            copied[str(p)] = name
-                        return {'$artifact': copied[str(p)]}
+                    path = Path(value).resolve()
+                    if path.is_file() and path.is_relative_to(owned):
+                        if path not in sources:
+                            sources[path] = f'{len(sources):04d}{path.suffix}'
+                        return {'$artifact': sources[path]}
                 except (OSError, ValueError):
                     pass
-                return str(v)
-            return v
-        try:
-            packed = pack(result)
-            checksum = hashlib.sha256(json.dumps(packed, sort_keys=True).encode()).hexdigest()
-            (scratch / 'manifest.json').write_text(json.dumps({'files': files, 'result': packed, 'result_sha256': checksum}, allow_nan=False), encoding='utf8')
-            # Concurrent identical jobs may win the commit. Never replace valid objects.
-            if directory.exists():
-                if self.get(stage, key) is not None:
-                    return
-                shutil.rmtree(directory)
+                return str(value)
+            return value
+        packed = pack(result)
+        checksum = hashlib.sha256(json.dumps(packed, sort_keys=True).encode()).hexdigest()
+        placeholder = {'files': {name: '0'*64 for name in sources.values()}, 'result': packed, 'result_sha256': checksum}
+        required = sum(path.stat().st_size for path in sources) + len(json.dumps(placeholder).encode()) + 1024
+        with self.budget.admit(required) if self.budget else nullcontext(True) as admitted:
+            if not admitted:
+                return False
+            directory.parent.mkdir(parents=True, exist_ok=True)
+            scratch = Path(tempfile.mkdtemp(prefix=f'pending-{key}-', dir=directory.parent))
             try:
+                files = {}
+                for path, name in sources.items():
+                    shutil.copyfile(path, scratch/name)
+                    files[name] = sha256(scratch/name)
+                (scratch/'manifest.json').write_text(json.dumps({'files': files, 'result': packed, 'result_sha256': checksum}, allow_nan=False), encoding='utf8')
+                if directory.exists():
+                    if self._get_unlocked(stage, key) is not None:
+                        return True
+                    from .storage_budget import _remove
+                    _remove(self.root, directory)
                 scratch.rename(directory)
-            except FileExistsError:
-                pass
-        finally:
-            if scratch.exists():
-                shutil.rmtree(scratch)
+                if self.budget:
+                    self.budget.pin(directory)
+                return True
+            finally:
+                if scratch.exists():
+                    from .storage_budget import _remove
+                    _remove(self.root, scratch)
 
 
 class Worker:
@@ -287,7 +302,7 @@ class Worker:
 
 
 class Session:
-    def __init__(self, root, *, jobs=1, cpu_jobs=None, devices=(), scratch_root=None):
+    def __init__(self, root, *, jobs=1, cpu_jobs=None, devices=(), scratch_root=None, persistent=True, cache_max_bytes=None, work_max_bytes=None):
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
         from .resource_limits import current_settings,bounded_jobs
@@ -307,7 +322,16 @@ class Session:
                 (d.startswith('cuda:') and d[5:].isdigit())) for d in devices):
             raise ValueError('gpu_devices must be a list of available device names, for example cuda:0')
         self.devices = tuple(devices)
+        from .storage_budget import CacheBudget, WorkBudget, limits
+        cache_limit, work_limit = limits()
+        for value in (cache_max_bytes, work_max_bytes):
+            if value is not None and (type(value) is not int or value <= 0):
+                raise ValueError('Storage byte limits must be positive integers')
+        self.persistent = persistent
+        self.cache_budget = CacheBudget(root, cache_limit if cache_max_bytes is None else cache_max_bytes) if persistent else None
+        # Keep the one-argument constructor used by existing read-through adapters.
         self.objects = Objects(root)
+        self.objects.budget = self.cache_budget
         self.workers = {}
         self.thread_devices = {}
         self.digests = {}
@@ -321,14 +345,50 @@ class Session:
         from .storage import private_path
         scratch_root = private_path(scratch_root or Path(tempfile.gettempdir())/'superdj-scratch')
         scratch_root.mkdir(parents=True, exist_ok=True)
-        self.scratch = tempfile.TemporaryDirectory(prefix="run-", dir=scratch_root)
+        from .storage_budget import temporary
+        self.scratch = temporary(scratch_root, "run-")
         self.work = Path(self.scratch.name)
+        self.work_budget = WorkBudget(work_limit if work_max_bytes is None else work_max_bytes, [self.work] + ([] if persistent else [self.root]))
+        self.work_budget.watch_parent(scratch_root)
+        from .storage_budget import shared_workspace
+        shared=shared_workspace(root,scratch_root)
+        self.storage_root = str(shared[0]) if shared else None
+        if shared:
+            self.work_budget.maximum=min(self.work_budget.maximum,shared[1])
+            self.work_budget.watch(shared[0])
+            if self.cache_budget:
+                self.work_budget.watch(self.root)
+                self.cache_budget.shared_budget=self.work_budget
+        self.extra_scratch = []
         self.metrics = {'counts': {}, 'seconds': {}}
         if self.limit_settings.enabled:
             from .resource_limits import current_report
             self.metrics['resource_limits']=current_report()
             self.metrics['resource_limits_requested_queues']={'jobs':jobs,'cpu_jobs':cpu_jobs}
         self.started = time.perf_counter()
+
+    def watch_work(self, path):
+        self.work_budget.watch(path)
+        self.work_budget.check()
+        return Path(path)
+
+    def new_work(self, parent):
+        parent = Path(parent)
+        parent.mkdir(parents=True, exist_ok=True)
+        from .storage_budget import temporary
+        directory = temporary(parent, "build-")
+        self.work_budget.watch_parent(parent)
+        self.extra_scratch.append(directory)
+        return self.watch_work(directory.name)
+
+    def check_storage(self):
+        used = self.work_budget.check()
+        if self.cache_budget:
+            with self.cache_budget.locked():
+                if not self.cache_budget.make_room():
+                    from .storage_budget import StorageLimitError
+                    raise StorageLimitError('Cache limit reached by active/protected data; increase its limit or finish the other run first')
+        return used
 
     def digest(self, path):
         path = Path(path).resolve()
@@ -353,7 +413,9 @@ class Session:
     def phase(self, name):
         started = time.perf_counter()
         try:
+            self.check_storage()
             yield
+            self.check_storage()
         finally:
             self.timed(name, time.perf_counter()-started)
 
@@ -552,21 +614,39 @@ class Session:
     def close(self):
         self.metrics['concurrency'] = {'model_jobs': self.jobs, 'cpu_jobs': self.cpu_jobs,
                                        'preparation_overlap': self.preparation_overlap}
-        self.release_workers()
-        self.scratch.cleanup()
+        self.metrics["storage"] = {"work_limit_bytes": self.work_budget.maximum, "work_peak_measured_bytes": self.work_budget.peak, "cache_limit_bytes": self.cache_budget.maximum if self.cache_budget else 0, "cache_evicted_bytes": self.cache_budget.evicted_bytes if self.cache_budget else 0, "cache_skipped_writes": self.cache_budget.skipped_writes if self.cache_budget else 0}
+        try:
+            self.release_workers()
+        finally:
+            try:
+                try:
+                    for directory in self.extra_scratch:
+                        directory.cleanup()
+                finally:
+                    self.scratch.cleanup()
+            finally:
+                if self.cache_budget:
+                    self.cache_budget.close()
         self.metrics['wall_seconds'] = time.perf_counter() - self.started
 
 
 @contextmanager
-def _execution(cache=None, *, jobs=1, cpu_jobs=None, devices=(), report=None, scratch_root=None):
+def _execution(cache=None, *, jobs=1, cpu_jobs=None, devices=(), report=None, scratch_root=None, cache_max_bytes=None, work_max_bytes=None):
     if current() is not None:
         yield current()
         return
     from .storage import private_path, write_json
-    temporary = tempfile.TemporaryDirectory(prefix='superdj-') if cache is None else None
+    from .cues import runtime_config
+    from .storage_budget import temporary as owned_temporary, validate_storage_path
+    scratch_root = private_path(scratch_root or runtime_config().get('scratch_root') or Path(tempfile.gettempdir())/'superdj-scratch')
+    validate_storage_path(scratch_root)
+    if cache is not None:
+        validate_storage_path(cache)
+    scratch_root.mkdir(parents=True, exist_ok=True)
+    temporary = owned_temporary(scratch_root, 'superdj-') if cache is None else None
     root = private_path(cache if cache is not None else temporary.name)
     try:
-        session = Session(root, jobs=jobs, cpu_jobs=cpu_jobs, devices=devices, scratch_root=scratch_root)
+        session = Session(root, jobs=jobs, cpu_jobs=cpu_jobs, devices=devices, scratch_root=scratch_root, persistent=cache is not None, cache_max_bytes=cache_max_bytes, work_max_bytes=work_max_bytes)
     except BaseException:
         if temporary:
             temporary.cleanup()
@@ -594,19 +674,26 @@ def _execution(cache=None, *, jobs=1, cpu_jobs=None, devices=(), report=None, sc
 
 
 @contextmanager
-def execution(cache=None, *, jobs=1, cpu_jobs=None, devices=(), report=None, scratch_root=None):
+def execution(cache=None, *, jobs=1, cpu_jobs=None, devices=(), report=None, scratch_root=None, cache_max_bytes=None, work_max_bytes=None):
     if current() is not None:
         yield current()
         return
     from .resource_limits import limit_scope
     with limit_scope():
         with _execution(cache,jobs=jobs,cpu_jobs=cpu_jobs,devices=devices,
-                        report=report,scratch_root=scratch_root) as session:
+                        report=report,scratch_root=scratch_root,cache_max_bytes=cache_max_bytes,work_max_bytes=work_max_bytes) as session:
             yield session
 
 
 def cached(stage, dependencies, producer, owned):
     session = current()
+    if session:
+        from .storage_budget import validate_storage_path
+        validate_storage_path(owned)
+        # Explicit SDK work trees must not escape the same storage budget.
+        if not (session.persistent and Path(owned).resolve().is_relative_to(session.root.resolve())):
+            session.work_budget.watch(owned)
+        session.check_storage()
     index = getattr(session, 'render_index', None)
     if index is not None:
         return index.cached(_cached, stage, dependencies, producer, owned)
@@ -625,6 +712,7 @@ def _cached(stage, dependencies, producer, owned):
         started = time.perf_counter()
         try:
             result = producer()
+            session.check_storage()
             if memo_key is not None:
                 session.memo[memo_key] = json.loads(json.dumps(result))
             return result
@@ -644,6 +732,7 @@ def _cached(stage, dependencies, producer, owned):
         started = time.perf_counter()
         try:
             value = producer()
+            session.check_storage()
         finally:
             session.timed(stage, time.perf_counter() - started)
         session.objects.put(stage, key, value, owned)

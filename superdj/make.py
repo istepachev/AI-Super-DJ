@@ -45,6 +45,10 @@ def _make(args):
     output = private_path(args.output or runtime.get('private_output_root') or runtime.get("output_root") or files[0].parent / "AI_Super_DJ")
     from .execution import current
     work = private_path(args.work or current().work)
+    if args.work:
+        work = current().watch_work(work) if getattr(args, "keep_work", False) else current().new_work(work)
+        if not getattr(args, 'keep_work', False):
+            args._temporary_work = work
     args._performance_output = output
     output.mkdir(parents=True, exist_ok=True)
     work.mkdir(parents=True, exist_ok=True)
@@ -151,6 +155,18 @@ def make(args):
     from .execution import execution
     from .reporting import write_performance
     runtime = runtime_config()
+    import sys
+    if getattr(args, 'storage_setup', False) or (not runtime.get('storage_configured') and sys.stdin.isatty()):
+        from .storage_budget import setup
+        if not sys.stdin.isatty():
+            raise ValueError('Use storage configure/off with folder and size options when no interactive terminal is available')
+        setup()
+        runtime = runtime_config()
+    from .storage_budget import limits, gib
+    cache_limit, work_limit = limits(runtime)
+    if getattr(args, 'cache_max_gib', None) is not None: cache_limit = gib(args.cache_max_gib, 'cache_max_gib')
+    if getattr(args, 'scratch_max_gib', None) is not None: work_limit = gib(args.scratch_max_gib, 'scratch_max_gib')
+    scratch_root = getattr(args, 'scratch_root', None) or runtime.get('scratch_root')
     explicit_cache = getattr(args, 'cache', None)
     cache = None if getattr(args, 'no_cache', False) else (explicit_cache or
         (runtime.get('cache_root') if runtime.get('cache_mode') == 'persistent' else None))
@@ -158,9 +174,31 @@ def make(args):
     session = None
     try:
         with execution(cache, jobs=jobs, devices=runtime.get('gpu_devices',()),
-                       scratch_root=runtime.get('scratch_root')) as session:
-            return _make(args)
+                       scratch_root=scratch_root, cache_max_bytes=cache_limit, work_max_bytes=work_limit) as session:
+            print(f'Storage: cache {cache_limit/1024**3:g} GiB at {cache}' if cache else 'Storage: persistent cache off', flush=True)
+            print(f'Working storage: {work_limit/1024**3:g} GiB maximum, temporary files removed after this run', flush=True)
+            if session.storage_root:
+                print(f'Total generated storage: {session.work_budget.maximum/1000**3:g} GB at {session.storage_root}',flush=True)
+            try:
+                return _make(args)
+            finally:
+                temporary_work = getattr(args, '_temporary_work', None)
+                if temporary_work:
+                    _retain_work_reports(temporary_work, Path(args.work))
     finally:
         report_root = getattr(args, '_performance_output', None) or args.output or runtime.get('private_output_root') or runtime.get('output_root')
         if report_root and session is not None:
             write_performance(Path(report_root) / 'performance.json', session.metrics)
+
+
+def _retain_work_reports(work, parent):
+    """Preserve small recovery metadata, never a copy of rendered PCM."""
+    import shutil
+    from .reporting import archive_existing_report
+    for name in ('playlist.json','records.json','plan.json','render.json','effective_plan.json',
+                 'effective_records.json','prepared.json'):
+        source=Path(work)/name
+        if source.is_file():
+            target=parent/name
+            archive_existing_report(target)
+            shutil.copy2(source,target)
