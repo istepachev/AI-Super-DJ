@@ -35,6 +35,8 @@ def separate(source, source_hash, cache, config, ffmpeg):
     from .audio import ffmpeg_executable
     ffmpeg = ffmpeg_executable(ffmpeg)
     cache = Path(cache)
+    from .storage_budget import validate_storage_path
+    validate_storage_path(cache)
     key = key_for({'source': source_hash, 'config': config, 'ffmpeg': ffmpeg})
     with object_lock(cache / 'stem-locks' / (key + '.lock')):
         return _separate(source, source_hash, cache, config, ffmpeg)
@@ -44,6 +46,8 @@ def _separate(source, source_hash, cache, config, ffmpeg):
     from .storage import write_json
     key = hashlib.sha256(json.dumps({"source": source_hash, "config": config, "ffmpeg": str(ffmpeg), "adapter": 2}, sort_keys=True).encode()).hexdigest()
     directory = cache / "vocals" / key
+    from .storage_budget import validate_storage_path
+    validate_storage_path(directory)
     directory.mkdir(parents=True, exist_ok=True)
     result_file = directory / "result.json"
     if result_file.is_file():
@@ -63,7 +67,8 @@ def _separate(source, source_hash, cache, config, ffmpeg):
     write_json(job_file, {**config, "source": str(source), "ffmpeg": ffmpeg,
                          "output": str(directory / "vocals.wav"),
                          **({'drums_output':str(directory/'drums.wav')} if config.get('include_drums') else {})})
-    env = dict(os.environ, PYTHONPATH=str(Path(__file__).resolve().parents[1]), PYTHONUTF8="1")
+    env = dict(os.environ, PYTHONPATH=str(Path(__file__).resolve().parents[1]), PYTHONUTF8="1",
+               PYTHONDONTWRITEBYTECODE='1', TEMP=str(directory), TMP=str(directory), TMPDIR=str(directory))
     from .execution import current, sha256
     if current() is not None:
         result = current().model(config['python'], 'stem', json.loads(job_file.read_text(encoding='utf8')))
@@ -81,6 +86,9 @@ def _separate(source, source_hash, cache, config, ffmpeg):
 
 
 def _worker(job):
+    from .storage_budget import validate_storage_path
+    validate_storage_path(job['output'])
+    if job.get('drums_output'):validate_storage_path(job['drums_output'])
     import importlib.metadata
     import torch
     import soundfile as sf

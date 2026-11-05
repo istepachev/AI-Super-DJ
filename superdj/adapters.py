@@ -44,6 +44,9 @@ def _worker(job: dict) -> dict:
     # a fresh interpreter to isolate upstream `tools` imports and stochastic dither.
     import numpy as np
     import soundfile as sf
+    from .storage_budget import validate_storage_path
+    if job.get('action')=='prepare':validate_storage_path(job['output'])
+    if job.get('scratch'):validate_storage_path(job['scratch'])
 
     if job['checkout']['path'] not in sys.path:
         sys.path.insert(0, job["checkout"]["path"])
@@ -144,6 +147,10 @@ def _worker(job: dict) -> dict:
 
 def run_worker(job: dict, directory: str | Path, tag: str) -> dict:
     work = private_path(directory)
+    from .storage_budget import validate_storage_path
+    validate_storage_path(work)
+    if job.get('action')=='prepare':validate_storage_path(job['output'])
+    if job.get('scratch'):validate_storage_path(job['scratch'])
     work.mkdir(parents=True, exist_ok=True)
     job_file, result_file = work / f"{tag}_job.json", work / f"{tag}_result.json"
     write_json(job_file, job)
@@ -152,7 +159,7 @@ def run_worker(job: dict, directory: str | Path, tag: str) -> dict:
         result = current().audio(job)
         write_json(result_file, result)
         return result
-    env = dict(os.environ)
+    env = dict(os.environ, TEMP=str(work), TMP=str(work), TMPDIR=str(work), PYTHONDONTWRITEBYTECODE='1')
     env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1])
     if job.get('action')=='master':
         threads=str(1 if job.get('memory',{}).get('constrained') else min(4,job.get('cpu_jobs',1)))
@@ -190,6 +197,8 @@ def prepare_tracks(records, work_dir, *, audamcp, ffmpeg="ffmpeg", git="git", no
 def _prepare_tracks_uncached(records: list[dict], work_dir: str | Path, *, audamcp: str | Path, ffmpeg="ffmpeg", git="git", noise_profiles=None, progress=print,
                    sample_rate=44100) -> dict:
     directory = private_path(work_dir) / "prepared"
+    from .storage_budget import validate_storage_path
+    validate_storage_path(directory)
     directory.mkdir(parents=True, exist_ok=True)
     checkout = checkout_info(audamcp, "audamcp", git)
     prepared = {}

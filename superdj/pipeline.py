@@ -8,6 +8,8 @@ import threading
 
 class PreparationPipeline:
     def __init__(self, args, session):
+        from .storage_budget import validate_storage_path
+        validate_storage_path(args.work)
         self.args, self.session = args, session
         self.pool = ThreadPoolExecutor(max_workers=session.cpu_jobs)
         self.capacity = threading.Semaphore(2*session.cpu_jobs)

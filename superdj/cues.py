@@ -84,13 +84,16 @@ def configuration() -> dict | None:
 def infer(source: str | Path, cache: Path, config: dict) -> dict:
     from .audio import ffmpeg_executable, DECODER_VERSION
     config = {**config, 'ffmpeg': ffmpeg_executable(config.get('ffmpeg')), 'audio_decoder': DECODER_VERSION}
-    directory = cache / "cue-detr-jobs"
+    directory = Path(cache) / "cue-detr-jobs"
+    from .storage_budget import validate_storage_path
+    validate_storage_path(directory)
     directory.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="infer-", dir=directory) as temporary:
         job = Path(temporary) / "job.json"
         result = Path(temporary) / "result.json"
         job.write_text(json.dumps({**config, "source": str(source)}), encoding="utf-8")
-        env = dict(os.environ, PYTHONPATH=str(Path(__file__).resolve().parents[1]), PYTHONUTF8="1")
+        env = dict(os.environ, PYTHONPATH=str(Path(__file__).resolve().parents[1]), PYTHONUTF8="1",
+                   PYTHONDONTWRITEBYTECODE='1', TEMP=str(temporary), TMP=str(temporary), TMPDIR=str(temporary))
         from .execution import current
         if current() is not None:
             return current().model(config["python"], "cue", {**config, "source": str(source)})

@@ -124,6 +124,8 @@ def environment(python=sys.executable):
 @contextmanager
 def object_lock(path):
     """OS-released lock: an interrupted process cannot leave a permanent lock."""
+    from .storage_budget import validate_storage_path
+    validate_storage_path(path)
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open('a+b') as stream:
@@ -155,6 +157,8 @@ def object_lock(path):
 class Objects:
     """Immutable stage results: manifest committed only after all copies complete."""
     def __init__(self, root, budget=None):
+        from .storage_budget import validate_storage_path
+        validate_storage_path(root)
         self.root = Path(root)
         self.budget = budget
         self.engines = {}
@@ -198,7 +202,9 @@ class Objects:
             return None
 
     def put(self, stage, key, result, owned):
+        from .storage_budget import validate_storage_path,shared_workspace,WorkBudget
         directory = self.location(stage, key)
+        validate_storage_path(directory)
         owned = Path(owned).resolve()
         sources = {}
         def pack(value):
@@ -221,6 +227,9 @@ class Objects:
         checksum = hashlib.sha256(json.dumps(packed, sort_keys=True).encode()).hexdigest()
         placeholder = {'files': {name: '0'*64 for name in sources.values()}, 'result': packed, 'result_sha256': checksum}
         required = sum(path.stat().st_size for path in sources) + len(json.dumps(placeholder).encode()) + 1024
+        shared=shared_workspace(directory)
+        if shared and not self.budget:
+            WorkBudget(shared[1],[shared[0]]).check(required)
         with self.budget.admit(required) if self.budget else nullcontext(True) as admitted:
             if not admitted:
                 return False
@@ -252,8 +261,9 @@ class Worker:
         self.lock = threading.Lock()
         self.session = session
         self.family = family
-        self.log = tempfile.TemporaryFile()
-        env = dict(os.environ, PYTHONPATH=str(Path(__file__).resolve().parents[1]), PYTHONUTF8='1')
+        self.log = tempfile.TemporaryFile(dir=session.work)
+        env = dict(os.environ, PYTHONPATH=str(Path(__file__).resolve().parents[1]), PYTHONUTF8='1',
+                   PYTHONDONTWRITEBYTECODE='1', TEMP=str(session.work), TMP=str(session.work), TMPDIR=str(session.work))
         self.process = subprocess.Popen([python, '-u', '-m', 'superdj.model_worker'], stdin=subprocess.PIPE,
             stdout=subprocess.PIPE, stderr=self.log, text=True, encoding='utf8', env=env)
         self.device = device
@@ -303,6 +313,11 @@ class Worker:
 
 class Session:
     def __init__(self, root, *, jobs=1, cpu_jobs=None, devices=(), scratch_root=None, persistent=True, cache_max_bytes=None, work_max_bytes=None):
+        from .storage_budget import validate_storage_path,temporary_parent
+        validate_storage_path(root)
+        from .storage import private_path
+        scratch_root=private_path(scratch_root or temporary_parent())
+        validate_storage_path(scratch_root)
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
         from .resource_limits import current_settings,bounded_jobs
@@ -343,7 +358,7 @@ class Session:
         self.audio_condition = threading.Condition()
         self.audio_busy = set()
         from .storage import private_path
-        scratch_root = private_path(scratch_root or Path(tempfile.gettempdir())/'superdj-scratch')
+        scratch_root = private_path(scratch_root or temporary_parent())
         scratch_root.mkdir(parents=True, exist_ok=True)
         from .storage_budget import temporary
         self.scratch = temporary(scratch_root, "run-")
@@ -373,6 +388,8 @@ class Session:
         return Path(path)
 
     def new_work(self, parent):
+        from .storage_budget import validate_storage_path
+        validate_storage_path(parent)
         parent = Path(parent)
         parent.mkdir(parents=True, exist_ok=True)
         from .storage_budget import temporary
@@ -637,8 +654,8 @@ def _execution(cache=None, *, jobs=1, cpu_jobs=None, devices=(), report=None, sc
         return
     from .storage import private_path, write_json
     from .cues import runtime_config
-    from .storage_budget import temporary as owned_temporary, validate_storage_path
-    scratch_root = private_path(scratch_root or runtime_config().get('scratch_root') or Path(tempfile.gettempdir())/'superdj-scratch')
+    from .storage_budget import temporary as owned_temporary, validate_storage_path, temporary_parent
+    scratch_root = private_path(scratch_root or runtime_config().get('scratch_root') or temporary_parent())
     validate_storage_path(scratch_root)
     if cache is not None:
         validate_storage_path(cache)

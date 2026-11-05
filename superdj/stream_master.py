@@ -295,6 +295,10 @@ def master(input_path,output_path,module,*,target_lufs=-14.,ceiling_db=-1.5,
            limiter_lookahead_ms=5.,block=65536,scratch=None,seed=None,lra_jobs=1):
     """Ordinary adapter preset only; arbitrary upstream genre presets stay upstream."""
     from .lra_parallel import parallel_lra
+    from .storage_budget import validate_storage_path,temporary_parent
+    scratch=Path(scratch) if scratch is not None else temporary_parent()
+    validate_storage_path(scratch)
+    scratch.mkdir(parents=True,exist_ok=True)
     _validate_backend(module)
     source = FileAudio(input_path,block,mono_stereo=True)
     def input_identity():

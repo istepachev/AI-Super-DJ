@@ -67,6 +67,8 @@ def decode_f32_file(source, destination, *, sample_rate=22050, channels=1, ffmpe
         raise ValueError('A decode destination must not overwrite the original audio')
     if destination.exists() and destination.stat().st_size:
         raise FileExistsError('A decode destination must be new or an empty temporary file')
+    from .storage_budget import validate_storage_path
+    validate_storage_path(destination)
     try:
         from .execution import current
         if current():
@@ -170,6 +172,8 @@ def decode_wave_file(source, destination, *, sample_rate, channels=2, ffmpeg=Non
         raise FileExistsError(destination)
     if Path(source).resolve() == destination.resolve():
         raise ValueError('A decode destination must not overwrite original audio')
+    from .storage_budget import validate_storage_path
+    validate_storage_path(destination)
     if current() is None:
         command = _command(source, sample_rate, channels, ffmpeg)[:-2]
         _run(command + ['-rf64', 'auto', '-y', str(destination)], source)

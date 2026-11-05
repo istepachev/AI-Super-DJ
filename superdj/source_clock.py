@@ -16,7 +16,8 @@ def calibrate_window(path, times, *, source_origin=0., band=None, ffmpeg='ffmpeg
     from .kick_grid import attack_events, repeated_attacks, isolated_events
     from .timing_safety import _native_consensus
     times=np.asarray(times,dtype=float)
-    with tempfile.TemporaryDirectory(prefix='superdj-native-clock-') as scratch:
+    from .storage_budget import temporary,temporary_parent
+    with temporary(temporary_parent(),'superdj-native-clock-') as scratch:
         try:sf.info(path)
         except (RuntimeError,sf.LibsndfileError):
             decoded=Path(scratch)/'decoded.wav'

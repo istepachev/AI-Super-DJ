@@ -38,7 +38,10 @@ _MINOR_CAMELOT = ("5A", "12A", "7A", "2A", "9A", "4A", "11A", "6A", "1A", "8A", 
 
 def default_cache_dir() -> Path:
     """User-local private cache, never a default inside the repository."""
-    return Path(os.environ.get("SUPERDJ_CACHE", str(Path.home() / ".cache" / "superdj"))).expanduser().resolve()
+    from .storage_budget import workstation_policy
+    policy=workstation_policy()
+    base=policy.get('cache_root') or (str(Path(policy['storage_root'])/'cache') if policy.get('storage_root') else str(Path.home()/'.cache'/'superdj'))
+    return Path(os.environ.get('SUPERDJ_CACHE') or base).expanduser().resolve()
 
 
 def _cache_directory(path: str | Path | None) -> Path:
@@ -76,7 +79,11 @@ def prepare_beat_model(checkpoint: str = "final0", *, cache_dir: str | Path | No
     allowed = {f"{prefix}{seed}" for prefix in ("final", "small") for seed in range(3)}
     if checkpoint not in allowed:
         raise ValueError("Use an existing local checkpoint or final0/1/2, small0/1/2")
-    target = _cache_directory(cache_dir) / "models" / f"{checkpoint}.ckpt"
+    # Installed model weights are not generated audio. Keep their existing
+    # separate location readable without creating an old audio-cache directory.
+    model_root=Path(cache_dir).expanduser().resolve() if cache_dir is not None else Path.home()/'.cache'/'superdj'
+    from .storage import private_path
+    target = private_path(model_root) / "models" / f"{checkpoint}.ckpt"
     if target.is_file():
         return target
     if not allow_download:

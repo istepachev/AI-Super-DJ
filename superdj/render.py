@@ -786,8 +786,11 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                                allow_unverified=allow_unverified,
                                tempo_conflict_policy=tempo_conflict_policy)
     directory = Path(work_dir).expanduser().resolve()
-    directory.mkdir(parents=True, exist_ok=True)
     output = Path(output_path).expanduser().resolve()
+    from .storage_budget import validate_storage_path
+    validate_storage_path(directory)
+    validate_storage_path(output)
+    directory.mkdir(parents=True, exist_ok=True)
     output.parent.mkdir(parents=True, exist_ok=True)
     if output.exists():
         raise FileExistsError(f"Output already exists: {output}")

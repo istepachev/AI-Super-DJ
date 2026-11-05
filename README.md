@@ -300,4 +300,4 @@ superdj storage off --storage-root D:/SuperDJ --storage-max-gb 64
 superdj storage configure --storage-root D:/SuperDJ --storage-max-gb 64 --cache-root D:/SuperDJ/cache --cache-max-gib 16
 ```
 
-A build can override these with `--no-cache`, `--cache`, `--cache-max-gib`, `--scratch-root` and `--scratch-max-gib`. Prefer folders outside cloud sync. Old unused cache objects are evicted within the limit; active objects, originals and models are protected. See [storage policy](references/storage.md).
+A build can select cache/scratch subfolders and lower limits inside the configured working root with `--no-cache`, `--cache`, `--cache-max-gib`, `--scratch-root` and `--scratch-max-gib`. Generated data outside that root are refused before file creation; change it explicitly through storage setup/configuration. Prefer folders outside cloud sync. Old unused cache objects are evicted within the limit; active objects, originals and models are protected. See [storage policy](references/storage.md).

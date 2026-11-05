@@ -26,16 +26,39 @@ def workstation_policy():
     return json.loads(path.read_text(encoding='utf-8-sig')) if path.is_file() else {}
 
 
-def validate_storage_path(path):
+def validate_storage_path(path, *, policy=None):
+    """Validate generated data before any mkdir, lock, log or audio write.
+
+    Use the saved workstation policy even when a legacy SDK replaces its runtime
+    dictionary. Resolving existing links also rejects junctions escaping the root.
+    An explicit settings change may supply its candidate policy before commit.
+    """
     path=Path(path).expanduser().resolve()
-    for blocked in workstation_policy().get('forbidden_storage_roots',[]):
+    policy=workstation_policy() if policy is None else policy
+    base=policy.get('storage_root')
+    if base:
+        root=Path(base).expanduser().resolve()
+        if path!=root and not path.is_relative_to(root):
+            raise StorageLimitError(f'Generated storage must stay inside the configured working folder: {root}; rejected: {path}')
+    for blocked in policy.get('forbidden_storage_roots',[]):
         root=Path(blocked).expanduser().resolve()
         if path==root or path.is_relative_to(root):
             raise StorageLimitError(f'Generated storage is prohibited here: {root}; use the configured storage_root')
 
 
+def temporary_parent():
+    """Default generated scratch; never fall back to system temp after setup."""
+    policy=workstation_policy()
+    base=policy.get('storage_root')
+    parent=Path(policy.get('scratch_root') or (Path(base)/'scratch' if base else Path(tempfile.gettempdir())/'superdj-scratch'))
+    validate_storage_path(parent,policy=policy)
+    return parent.expanduser().resolve()
+
+
 def shared_workspace(*paths):
     policy=workstation_policy()
+    for path in paths:
+        if path is not None:validate_storage_path(path,policy=policy)
     base=Path(policy.get('storage_root') or policy.get('scratch_root') or Path(tempfile.gettempdir())/'superdj-scratch').expanduser().resolve()
     if any(p is not None and (Path(p).resolve()==base or Path(p).resolve().is_relative_to(base)) for p in paths):
         value=policy.get('storage_max_gb',DEFAULT_TOTAL_GB)
@@ -62,6 +85,7 @@ def owned_roots(parent):
 
 def cleanup_stale(parent):
     from .resource_config import _lock
+    validate_storage_path(parent)
     parent=Path(parent);parent.mkdir(parents=True,exist_ok=True)
     with _lock(parent/'.cleanup.lock'):
         for child,pid in owned_roots(parent):
@@ -151,6 +175,7 @@ def _alive(pid):
 
 class CacheBudget:
     def __init__(self, root, maximum):
+        validate_storage_path(root)
         self.root = Path(root).resolve()
         allowed={'.storage','objects-v2','objects-v1','analysis','cue-detr-jobs','energy-flow-v1',
                  'final-percussion','ri1','scratch','stem-locks','vocals','models','README.txt'}
@@ -169,7 +194,9 @@ class CacheBudget:
             (self.lease / 'owner.json').write_text(json.dumps({'pid': os.getpid(), 'created': time.time()}), encoding='utf8')
         self.evicted_bytes = 0
         self.skipped_writes = 0
-        self.shared_budget = None
+        shared=shared_workspace(self.root)
+        self.shared_budget=WorkBudget(shared[1],[shared[0]]) if shared else None
+        if shared:self.maximum=min(self.maximum,shared[1])
 
     @contextmanager
     def locked(self):
@@ -264,7 +291,12 @@ class WorkBudget:
             self.watch(root)
 
     def watch(self, root):
+        validate_storage_path(root)
         root = Path(root).resolve()
+        shared=shared_workspace(root)
+        if shared:
+            self.maximum=min(self.maximum,shared[1])
+            root=shared[0]  # Direct SDK budgets also count the complete folder.
         if not any(root == parent or root.is_relative_to(parent) for parent in self.roots):
             self.roots = [p for p in self.roots if not p.is_relative_to(root)] + [root]
 
@@ -315,7 +347,8 @@ def configure(action='status', *, path=None, cache_root=None, cache_max_gib=None
             if storage_root is not None:
                 from .storage import private_path
                 base=private_path(storage_root)
-                validate_storage_path(base)
+                candidate={**workstation_policy(),**value,'storage_root':str(base)}
+                validate_storage_path(base,policy=candidate)
                 value.update(storage_root=str(base),cache_root=str(base/'cache'),scratch_root=str(base/'scratch'),private_output_root=str(base/'reports'))
             if storage_max_gb is not None:
                 gib(storage_max_gb,'storage_max_gb')
@@ -327,12 +360,14 @@ def configure(action='status', *, path=None, cache_root=None, cache_max_gib=None
             for name, supplied in (('cache_root', cache_root), ('scratch_root', scratch_root)):
                 if supplied is not None:
                     from .storage import private_path
-                    validate_storage_path(supplied)
+                    validate_storage_path(supplied,policy={**workstation_policy(),**value})
                     value[name] = str(private_path(supplied))
             if action == 'off':
                 value['cache_mode'] = 'off'
             elif cache_root is not None:
                 value['cache_mode'] = 'persistent'
+            for name in ('cache_root','scratch_root','private_output_root'):
+                if value.get(name):validate_storage_path(value[name],policy={**workstation_policy(),**value})
             value['storage_configured'] = True
             limits(value)
             _atomic(target, value, expected=raw, compare=True)
