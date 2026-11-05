@@ -13,7 +13,7 @@ def selected(tmp_path,monkeypatch):
     runtime_path().write_text(json.dumps({'storage_root':str(root),'storage_max_gb':64,'cache_mode':'off'}))
     return root,tmp_path/'old-root'
 
-@pytest.mark.parametrize('entry',['temporary','cleanup','cache-budget','object','lock','session','execution-cache','execution-scratch','analysis','decode-f32','decode-wave','prepare','worker','pipeline','stems','cues','master-scratch','render-output'])
+@pytest.mark.parametrize('entry',['temporary','cleanup','cache-budget','object','lock','session','execution-cache','execution-scratch','analysis','decode-f32','decode-wave','prepare','worker','pipeline','stems','cues','master-scratch','render-output','master-output','cli-work','cli-output'])
 def test_old_destinations_refused_before_file_creation(selected,tmp_path,monkeypatch,entry):
     root,outside=selected
     from superdj import execution as engine, audio, adapters, analysis, cues, stems
@@ -44,6 +44,10 @@ def test_old_destinations_refused_before_file_creation(selected,tmp_path,monkeyp
         if entry=='master-scratch':
             from superdj.stream_master import master
             return master(source,root/'master.wav',None,scratch=outside)
+        if entry=='master-output':return adapters.run_worker({'action':'master','output':str(outside/'master.wav')},root/'jobs','bad')
+        if entry in ('cli-work','cli-output'):
+            from superdj.cli import render
+            return render(SimpleNamespace(work=outside if entry=='cli-work' else root/'render',output=outside if entry=='cli-output' else root/'out'))
         if entry=='render-output':
             from superdj.render import render_plan
             record={'id':'a','path':str(source),'duration':90,'bpm':120,'beats':[i*.5 for i in range(180)],'downbeats':[i*2 for i in range(45)],'grid_confidence':1,'grid_status':'reviewed','grid':{'meter':4,'human_reviewed':True}}

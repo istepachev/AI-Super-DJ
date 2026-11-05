@@ -43,6 +43,8 @@ def _make(args):
     playback_defaults(long_play=getattr(args,'long_play',False),target_play_seconds=getattr(args,'track_play_seconds',None))
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S_%f")
     output = private_path(args.output or runtime.get('private_output_root') or runtime.get("output_root") or files[0].parent / "AI_Super_DJ")
+    from .storage_budget import validate_storage_path
+    validate_storage_path(output)
     from .execution import current
     work = private_path(args.work or current().work)
     if args.work:

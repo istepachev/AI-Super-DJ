@@ -45,7 +45,7 @@ def _worker(job: dict) -> dict:
     import numpy as np
     import soundfile as sf
     from .storage_budget import validate_storage_path
-    if job.get('action')=='prepare':validate_storage_path(job['output'])
+    if job.get('action') in ('prepare','master'):validate_storage_path(job['output'])
     if job.get('scratch'):validate_storage_path(job['scratch'])
 
     if job['checkout']['path'] not in sys.path:
@@ -149,7 +149,7 @@ def run_worker(job: dict, directory: str | Path, tag: str) -> dict:
     work = private_path(directory)
     from .storage_budget import validate_storage_path
     validate_storage_path(work)
-    if job.get('action')=='prepare':validate_storage_path(job['output'])
+    if job.get('action') in ('prepare','master'):validate_storage_path(job['output'])
     if job.get('scratch'):validate_storage_path(job['scratch'])
     work.mkdir(parents=True, exist_ok=True)
     job_file, result_file = work / f"{tag}_job.json", work / f"{tag}_result.json"

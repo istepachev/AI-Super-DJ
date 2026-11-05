@@ -17,6 +17,8 @@ def _records(path):
 def _playlist(args):
     if args.playlist:
         return read_json(args.playlist)
+    from .storage_budget import validate_storage_path
+    validate_storage_path(args.work)
     seed = args.seed if args.seed is not None else random.SystemRandom().randrange(2**32)
     playlist = select_tracks(args.folder, args.count, seed,allow_repeats=getattr(args,'allow_repeats',False))
     write_json(Path(args.work) / "playlist.json", playlist)
@@ -139,6 +141,9 @@ def render(args, records=None, planned=None, prepared_data=None):
     from .render import render_plan, validate_transition_policy
     work = private_path(args.work)
     directory = private_path(args.output)
+    from .storage_budget import validate_storage_path
+    validate_storage_path(work)
+    validate_storage_path(directory)
     work.mkdir(parents=True, exist_ok=True)
     from .execution import current
     if current(): current().watch_work(work)
