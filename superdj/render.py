@@ -1042,7 +1042,10 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                                                        (by_id[incoming].get("grid") or {}).get("human_reviewed"))})
     for transition,edge in zip(transitions,edges):
         transition['mid_energy_mode']=plan.get('mixing_preferences',{}).get('mid_energy_mode','auto')
-        for key in ('mid_handoff_bars','bass_handoff_beats','handoff_windows','whole_spectrum_handoff','mid_energy_mode'):
+        from .difficult_mix import settings as difficult_settings
+        transition['difficult_transition']=difficult_settings(
+            edge.get('difficult_transition',plan.get('mixing_preferences',{}).get('difficult_transition')))
+        for key in ('mid_handoff_bars','bass_handoff_beats','handoff_windows','whole_spectrum_handoff','mid_energy_mode','difficult_transition'):
             if edge.get(key) is not None:transition[key]=edge[key]
     clips: list[dict[str, Any]] = []
     prepared_files = prepared_files or {}
@@ -1447,162 +1450,190 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
                     previous_vocal = source.read(incoming, dtype='float32', always_2d=True)
             if len(previous_tail) != incoming or len(block) != incoming:
                 raise RenderError('Missing overlap audio')
-            mode = transitions[position - 1]["mode"]
-            if mode == "free_time_echo_bridge":
-                from .bridges import echo_bridge
-                mixed, evidence = echo_bridge(previous_tail, block, sample_rate,
-                    **transitions[position - 1]["echo_parameters"])
-                transitions[position - 1]["echo_processing"] = evidence
-            elif mode == "outgoing_only_vinyl":
-                from .creative import mix_tape_exit
-                parameters = transitions[position - 1]["vinyl_parameters"]
-                mixed, evidence = mix_tape_exit(previous_tail, block, sample_rate,
-                    outgoing_release_seconds=parameters["outgoing_release_seconds"], bass_hz=bass_hz)
-                transitions[position - 1]["vinyl_gain_processing"] = evidence
-            else:
-                from .mixing import blend
-                from .stems import handoff
-                transition = transitions[position - 1]
-                incoming_vocal = None
-                if clip.get("aligned_vocal_path"):
-                    with sf.SoundFile(clip["aligned_vocal_path"]) as voice:
-                        incoming_vocal = voice.read(incoming, dtype="float32", always_2d=True)
-                previous_tail, block, voice_report = handoff(previous_tail, block, previous_vocal, incoming_vocal)
-                transition["vocal_processing"] = voice_report
-                mid_energy_args={'mid_energy_mode':transition.get('mid_energy_mode','auto'),
-                    'vocal_out':previous_vocal,'vocal_in':incoming_vocal,'vocal_processing':voice_report}
-                risk = any(float((transition.get(role) or {}).get("sustained_midband_proxy") or 0) > .5
-                           for role in ("outgoing_cue", "incoming_cue"))
-                clock = transition.get('shared_clock')
-                beat_phase = (np.interp(np.arange(incoming), clock['output_frames'], clock['phase']) / clock['beats']) if clock else None
-                if beat_phase is not None:
-                    beat_phase[-1] = 1.
-                from .percussion import needs_handoff,final_drum_estimates,ownership_policy,percussion_gains
-                percussion_args={}
-                if mode=='beatmapped_bass_swap' and transition.get('whole_spectrum_handoff') is None and needs_handoff(clips[position-1].get('warp'),clip.get('warp'),style=plan.get('style','default')):
-                    percussion_args,percussion_report=final_drum_estimates(previous_tail,block,sample_rate,directory/f'percussion-{position:02}',ffmpeg=ffmpeg)
-                    transition['percussion_estimates']=percussion_report
-                    percussion_args['percussion_policy']=ownership_policy(clips[position-1].get('warp'),clip.get('warp'))
-                    transition['percussion_ownership_policy']=percussion_args['percussion_policy']
-                mixed, evidence = blend(previous_tail, block, sample_rate,
-                    bass_hz=bass_hz if mode == "beatmapped_bass_swap" else 0.0,
-                    beats=transition.get("beats", 64), tonal_conflict=risk, beat_phase=beat_phase,
-                    style=plan.get('style','default'),
-                    mid_handoff_bars=transition.get('mid_handoff_bars'),
-                    bass_handoff_beats=transition.get('bass_handoff_beats'),handoff_windows=transition.get('handoff_windows'),whole_spectrum_handoff=transition.get('whole_spectrum_handoff'),**percussion_args,**mid_energy_args)
-                from .percussion import supported_mid_needs_drums
-                if (mode=='beatmapped_bass_swap'and supported_mid_needs_drums(evidence,
-                        mode=transition.get('mid_energy_mode','auto'),has_estimates=bool(percussion_args))):
-                    from .stems import configuration as stem_configuration
-                    if stem_configuration()is not None:
-                        percussion_args,percussion_report=final_drum_estimates(previous_tail,block,sample_rate,directory/f'percussion-{position:02}-mid-support',ffmpeg=ffmpeg)
-                        percussion_args['percussion_policy']='smooth'
+            from copy import deepcopy
+            from .transition_quality import TransitionFailure
+            from .difficult_mix import recover as recover_difficult, audit_impulse, settings as difficult_settings
+            raw_outgoing, raw_incoming = previous_tail, block
+            ordinary_transition = deepcopy(transition)
+            incoming_vocal = None
+            beat_phase = None
+            try:
+                mode = transitions[position - 1]["mode"]
+                if mode == "free_time_echo_bridge":
+                    from .bridges import echo_bridge
+                    mixed, evidence = echo_bridge(previous_tail, block, sample_rate,
+                        **transitions[position - 1]["echo_parameters"])
+                    transitions[position - 1]["echo_processing"] = evidence
+                elif mode == "outgoing_only_vinyl":
+                    from .creative import mix_tape_exit
+                    parameters = transitions[position - 1]["vinyl_parameters"]
+                    mixed, evidence = mix_tape_exit(previous_tail, block, sample_rate,
+                        outgoing_release_seconds=parameters["outgoing_release_seconds"], bass_hz=bass_hz)
+                    transitions[position - 1]["vinyl_gain_processing"] = evidence
+                else:
+                    from .mixing import blend
+                    from .stems import handoff
+                    transition = transitions[position - 1]
+                    incoming_vocal = None
+                    if clip.get("aligned_vocal_path"):
+                        with sf.SoundFile(clip["aligned_vocal_path"]) as voice:
+                            incoming_vocal = voice.read(incoming, dtype="float32", always_2d=True)
+                    previous_tail, block, voice_report = handoff(previous_tail, block, previous_vocal, incoming_vocal)
+                    transition["vocal_processing"] = voice_report
+                    mid_energy_args={'mid_energy_mode':transition.get('mid_energy_mode','auto'),
+                        'vocal_out':previous_vocal,'vocal_in':incoming_vocal,'vocal_processing':voice_report}
+                    risk = any(float((transition.get(role) or {}).get("sustained_midband_proxy") or 0) > .5
+                               for role in ("outgoing_cue", "incoming_cue"))
+                    clock = transition.get('shared_clock')
+                    beat_phase = (np.interp(np.arange(incoming), clock['output_frames'], clock['phase']) / clock['beats']) if clock else None
+                    if beat_phase is not None:
+                        beat_phase[-1] = 1.
+                    from .percussion import needs_handoff,final_drum_estimates,ownership_policy,percussion_gains
+                    percussion_args={}
+                    if mode=='beatmapped_bass_swap' and transition.get('whole_spectrum_handoff') is None and needs_handoff(clips[position-1].get('warp'),clip.get('warp'),style=plan.get('style','default')):
+                        percussion_args,percussion_report=final_drum_estimates(previous_tail,block,sample_rate,directory/f'percussion-{position:02}',ffmpeg=ffmpeg)
                         transition['percussion_estimates']=percussion_report
-                        transition['percussion_ownership_policy']='smooth'
-                        transition['mid_support_percussion_handoff']={'executed':True,
-                            'reason':'supported accompaniment must not leave the upper old kick at its middle gain',
-                            'source_windows_shared_clock_and_pitch_unchanged':True}
-                        mixed,evidence=blend(previous_tail,block,sample_rate,bass_hz=bass_hz,
-                            beats=transition.get('beats',64),tonal_conflict=risk,beat_phase=beat_phase,
-                            style=plan.get('style','default'),mid_handoff_bars=transition.get('mid_handoff_bars'),
-                            bass_handoff_beats=transition.get('bass_handoff_beats'),handoff_windows=transition.get('handoff_windows'),
-                            **percussion_args,**mid_energy_args)
-                transition["frequency_processing"] = evidence
-                if mode == 'beatmapped_bass_swap' and transition.get('tempo_technique') == 'shared_phase_sync':
-                    from .percussion import verify_blended_fronts as verify_raw_fronts,verification_components
-                    from .mixing import recorded_envelopes
-                    def quality_check(candidate,selected):
-                        from .transition_quality import verify_overlap
-                        return verify_overlap(previous_tail,block,candidate,sample_rate,clips[position-1:position+1],selected,
-                            vocal_out=previous_vocal,vocal_in=incoming_vocal,style=plan.get('style','default'),beat_phase=beat_phase)
-                    def verify_blended_fronts(pcm,rate,wa,wb,gain,destination,**options):
-                        try:return verify_raw_fronts(pcm,rate,wa,wb,gain,destination,**options)
-                        except ValueError as error:
-                            from .orchestration import legacy_mid_alternative
-                            from .transition_quality import TransitionFailure
-                            try:
-                                repaired,selected=legacy_mid_alternative(previous_tail,block,rate,wa,wb,transition,
-                                    Path(destination).with_name(Path(destination).name+'-legacy-middle'),style=plan.get('style','default'),
-                                    beat_phase=beat_phase,percussion_args=percussion_args,initial_error=error,quality_check=quality_check,
-                                    ffmpeg=ffmpeg,bass_hz=bass_hz,mid_energy_args=mid_energy_args,
-                                    allow_pitch_changing_residual=allow_pitch_changing_residual)
-                            except (ValueError,TransitionFailure):raise error
-                            transition.clear();transition.update(selected)
-                            return repaired,selected['blended_front_audit']
-                    gains,_=recorded_envelopes(incoming,transition.get('beats',64),transition,beat_phase=beat_phase,style=plan.get('style','default'))
-                    gains=percussion_gains(gains,beat_phase,transition.get('beats',64),percussion_args.get('percussion_policy','shared'))
-                    components=verification_components(previous_tail,block,sample_rate,gains,bass_hz=bass_hz,**{k:v for k,v in percussion_args.items() if k!='percussion_policy'})
-                    try:
-                        mixed,front_report=verify_blended_fronts(mixed,sample_rate,clips[position-1].get('warp'),clip.get('warp'),gains,directory/f'percussion-fronts-{position:02}',ffmpeg=ffmpeg,components=components,
-                            allow_pitch_changing_residual=allow_pitch_changing_residual)
-                    except ValueError as error:
-                        if transition.get('whole_spectrum_handoff') is not None:raise
-                        # Both timed decks already passed their independent
-                        # clock audit. A conflicting combined figure requires
-                        # another orchestration, never a relaxed timing gate.
-                        if not percussion_args:
-                            percussion_args,percussion_report=final_drum_estimates(previous_tail,block,sample_rate,directory/f'percussion-{position:02}',ffmpeg=ffmpeg)
+                        percussion_args['percussion_policy']=ownership_policy(clips[position-1].get('warp'),clip.get('warp'))
+                        transition['percussion_ownership_policy']=percussion_args['percussion_policy']
+                    mixed, evidence = blend(previous_tail, block, sample_rate,
+                        bass_hz=bass_hz if mode == "beatmapped_bass_swap" else 0.0,
+                        beats=transition.get("beats", 64), tonal_conflict=risk, beat_phase=beat_phase,
+                        style=plan.get('style','default'),
+                        mid_handoff_bars=transition.get('mid_handoff_bars'),
+                        bass_handoff_beats=transition.get('bass_handoff_beats'),handoff_windows=transition.get('handoff_windows'),whole_spectrum_handoff=transition.get('whole_spectrum_handoff'),**percussion_args,**mid_energy_args)
+                    from .percussion import supported_mid_needs_drums
+                    if (mode=='beatmapped_bass_swap'and supported_mid_needs_drums(evidence,
+                            mode=transition.get('mid_energy_mode','auto'),has_estimates=bool(percussion_args))):
+                        from .stems import configuration as stem_configuration
+                        if stem_configuration()is not None:
+                            percussion_args,percussion_report=final_drum_estimates(previous_tail,block,sample_rate,directory/f'percussion-{position:02}-mid-support',ffmpeg=ffmpeg)
+                            percussion_args['percussion_policy']='smooth'
                             transition['percussion_estimates']=percussion_report
-                        percussion_args['percussion_policy']='smooth'
-                        transition['percussion_ownership_policy']='smooth'
-                        transition['percussion_routing_review']={'reason':str(error),'independent_deck_clock_checks_retained':True,
-                            'source_windows_clock_overlap_and_harmonic_curves_unchanged':True,'timing_gate_relaxed':False}
-                        mixed,evidence=blend(previous_tail,block,sample_rate,bass_hz=bass_hz,beats=transition.get('beats',64),
-                            tonal_conflict=risk,beat_phase=beat_phase,style=plan.get('style','default'),
-                            mid_handoff_bars=transition.get('mid_handoff_bars'),bass_handoff_beats=transition.get('bass_handoff_beats'),handoff_windows=transition.get('handoff_windows'),whole_spectrum_handoff=transition.get('whole_spectrum_handoff'),**percussion_args,**mid_energy_args)
-                        transition['frequency_processing']=evidence
+                            transition['percussion_ownership_policy']='smooth'
+                            transition['mid_support_percussion_handoff']={'executed':True,
+                                'reason':'supported accompaniment must not leave the upper old kick at its middle gain',
+                                'source_windows_shared_clock_and_pitch_unchanged':True}
+                            mixed,evidence=blend(previous_tail,block,sample_rate,bass_hz=bass_hz,
+                                beats=transition.get('beats',64),tonal_conflict=risk,beat_phase=beat_phase,
+                                style=plan.get('style','default'),mid_handoff_bars=transition.get('mid_handoff_bars'),
+                                bass_handoff_beats=transition.get('bass_handoff_beats'),handoff_windows=transition.get('handoff_windows'),
+                                **percussion_args,**mid_energy_args)
+                    transition["frequency_processing"] = evidence
+                    if mode == 'beatmapped_bass_swap' and transition.get('tempo_technique') == 'shared_phase_sync':
+                        from .percussion import verify_blended_fronts as verify_raw_fronts,verification_components
+                        from .mixing import recorded_envelopes
+                        def quality_check(candidate,selected):
+                            from .transition_quality import verify_overlap
+                            return verify_overlap(previous_tail,block,candidate,sample_rate,clips[position-1:position+1],selected,
+                                vocal_out=previous_vocal,vocal_in=incoming_vocal,style=plan.get('style','default'),beat_phase=beat_phase)
+                        def verify_blended_fronts(pcm,rate,wa,wb,gain,destination,**options):
+                            try:return verify_raw_fronts(pcm,rate,wa,wb,gain,destination,**options)
+                            except ValueError as error:
+                                from .orchestration import legacy_mid_alternative
+                                from .transition_quality import TransitionFailure
+                                try:
+                                    repaired,selected=legacy_mid_alternative(previous_tail,block,rate,wa,wb,transition,
+                                        Path(destination).with_name(Path(destination).name+'-legacy-middle'),style=plan.get('style','default'),
+                                        beat_phase=beat_phase,percussion_args=percussion_args,initial_error=error,quality_check=quality_check,
+                                        ffmpeg=ffmpeg,bass_hz=bass_hz,mid_energy_args=mid_energy_args,
+                                        allow_pitch_changing_residual=allow_pitch_changing_residual)
+                                except (ValueError,TransitionFailure):raise error
+                                transition.clear();transition.update(selected)
+                                return repaired,selected['blended_front_audit']
                         gains,_=recorded_envelopes(incoming,transition.get('beats',64),transition,beat_phase=beat_phase,style=plan.get('style','default'))
-                        gains=percussion_gains(gains,beat_phase,transition.get('beats',64),'smooth')
-                        components=verification_components(previous_tail,block,sample_rate,gains,bass_hz=bass_hz,
-                            **{k:v for k,v in percussion_args.items() if k!='percussion_policy'})
+                        gains=percussion_gains(gains,beat_phase,transition.get('beats',64),percussion_args.get('percussion_policy','shared'))
+                        components=verification_components(previous_tail,block,sample_rate,gains,bass_hz=bass_hz,**{k:v for k,v in percussion_args.items() if k!='percussion_policy'})
                         try:
-                            mixed,front_report=verify_blended_fronts(mixed,sample_rate,clips[position-1].get('warp'),clip.get('warp'),gains,
-                                directory/f'percussion-fronts-{position:02}-smooth',ffmpeg=ffmpeg,components=components,
+                            mixed,front_report=verify_blended_fronts(mixed,sample_rate,clips[position-1].get('warp'),clip.get('warp'),gains,directory/f'percussion-fronts-{position:02}',ffmpeg=ffmpeg,components=components,
                                 allow_pitch_changing_residual=allow_pitch_changing_residual)
-                        except ValueError as smooth_error:
-                            from .orchestration import gradual_alternative
-                            from .transition_quality import verify_overlap,TransitionFailure
-                            def quality_check(candidate,selected):
-                                return verify_overlap(previous_tail,block,candidate,sample_rate,
-                                    clips[position-1:position+1],selected,vocal_out=previous_vocal,
-                                    vocal_in=incoming_vocal,style=plan.get('style','default'),beat_phase=beat_phase)
+                        except ValueError as error:
+                            if transition.get('whole_spectrum_handoff') is not None:raise
+                            # Both timed decks already passed their independent
+                            # clock audit. A conflicting combined figure requires
+                            # another orchestration, never a relaxed timing gate.
+                            if not percussion_args:
+                                percussion_args,percussion_report=final_drum_estimates(previous_tail,block,sample_rate,directory/f'percussion-{position:02}',ffmpeg=ffmpeg)
+                                transition['percussion_estimates']=percussion_report
+                            percussion_args['percussion_policy']='smooth'
+                            transition['percussion_ownership_policy']='smooth'
+                            transition['percussion_routing_review']={'reason':str(error),'independent_deck_clock_checks_retained':True,
+                                'source_windows_clock_overlap_and_harmonic_curves_unchanged':True,'timing_gate_relaxed':False}
+                            mixed,evidence=blend(previous_tail,block,sample_rate,bass_hz=bass_hz,beats=transition.get('beats',64),
+                                tonal_conflict=risk,beat_phase=beat_phase,style=plan.get('style','default'),
+                                mid_handoff_bars=transition.get('mid_handoff_bars'),bass_handoff_beats=transition.get('bass_handoff_beats'),handoff_windows=transition.get('handoff_windows'),whole_spectrum_handoff=transition.get('whole_spectrum_handoff'),**percussion_args,**mid_energy_args)
+                            transition['frequency_processing']=evidence
+                            gains,_=recorded_envelopes(incoming,transition.get('beats',64),transition,beat_phase=beat_phase,style=plan.get('style','default'))
+                            gains=percussion_gains(gains,beat_phase,transition.get('beats',64),'smooth')
+                            components=verification_components(previous_tail,block,sample_rate,gains,bass_hz=bass_hz,
+                                **{k:v for k,v in percussion_args.items() if k!='percussion_policy'})
                             try:
-                                mixed,selected=gradual_alternative(previous_tail,block,sample_rate,
-                                    clips[position-1].get('warp'),clip.get('warp'),transition,
-                                    directory/f'percussion-fronts-{position:02}-orchestration',
-                                    style=plan.get('style','default'),beat_phase=beat_phase,percussion_args=percussion_args,
-                                    initial_error=smooth_error,ffmpeg=ffmpeg,bass_hz=bass_hz,tonal_conflict=risk,
-                                    quality_check=quality_check,allow_pitch_changing_residual=allow_pitch_changing_residual,mid_energy_args=mid_energy_args)
-                            except (ValueError,TransitionFailure) as routing_error:
-                                from .orchestration import whole_spectrum_alternative
-                                mixed,selected=whole_spectrum_alternative(previous_tail,block,sample_rate,
-                                    clips[position-1].get('warp'),clip.get('warp'),transition,
-                                    directory/f'percussion-fronts-{position:02}-whole-spectrum',
-                                    style=plan.get('style','default'),beat_phase=beat_phase,
-                                    initial_error=routing_error,quality_check=quality_check,ffmpeg=ffmpeg,
+                                mixed,front_report=verify_blended_fronts(mixed,sample_rate,clips[position-1].get('warp'),clip.get('warp'),gains,
+                                    directory/f'percussion-fronts-{position:02}-smooth',ffmpeg=ffmpeg,components=components,
                                     allow_pitch_changing_residual=allow_pitch_changing_residual)
-                            transition.clear();transition.update(selected)
-                            front_report=transition['blended_front_audit']
-                    transition['blended_front_audit']=front_report
-            if transition.get('tempo_technique') == 'shared_phase_sync':
-                from .transition_quality import verify_overlap,TransitionFailure
-                try:
-                    transition['quality_gate'] = verify_overlap(previous_tail, block, mixed, sample_rate,
-                        clips[position-1:position+1], transition, vocal_out=previous_vocal,
-                        vocal_in=incoming_vocal, style=plan.get('style','default'), beat_phase=beat_phase)
-                except TransitionFailure as error:
-                    if mode!='beatmapped_bass_swap':raise
-                    from .orchestration import quality_alternative
+                            except ValueError as smooth_error:
+                                from .orchestration import gradual_alternative
+                                from .transition_quality import verify_overlap,TransitionFailure
+                                def quality_check(candidate,selected):
+                                    return verify_overlap(previous_tail,block,candidate,sample_rate,
+                                        clips[position-1:position+1],selected,vocal_out=previous_vocal,
+                                        vocal_in=incoming_vocal,style=plan.get('style','default'),beat_phase=beat_phase)
+                                try:
+                                    mixed,selected=gradual_alternative(previous_tail,block,sample_rate,
+                                        clips[position-1].get('warp'),clip.get('warp'),transition,
+                                        directory/f'percussion-fronts-{position:02}-orchestration',
+                                        style=plan.get('style','default'),beat_phase=beat_phase,percussion_args=percussion_args,
+                                        initial_error=smooth_error,ffmpeg=ffmpeg,bass_hz=bass_hz,tonal_conflict=risk,
+                                        quality_check=quality_check,allow_pitch_changing_residual=allow_pitch_changing_residual,mid_energy_args=mid_energy_args)
+                                except (ValueError,TransitionFailure) as routing_error:
+                                    from .orchestration import whole_spectrum_alternative
+                                    mixed,selected=whole_spectrum_alternative(previous_tail,block,sample_rate,
+                                        clips[position-1].get('warp'),clip.get('warp'),transition,
+                                        directory/f'percussion-fronts-{position:02}-whole-spectrum',
+                                        style=plan.get('style','default'),beat_phase=beat_phase,
+                                        initial_error=routing_error,quality_check=quality_check,ffmpeg=ffmpeg,
+                                        allow_pitch_changing_residual=allow_pitch_changing_residual)
+                                transition.clear();transition.update(selected)
+                                front_report=transition['blended_front_audit']
+                        transition['blended_front_audit']=front_report
+                if transition.get('tempo_technique') == 'shared_phase_sync':
+                    from .transition_quality import verify_overlap,TransitionFailure
                     try:
-                        mixed,selected=quality_alternative(previous_tail,block,sample_rate,
-                            clips[position-1].get('warp'),clip.get('warp'),transition,directory/f'quality-recovery-{position:02}',
-                            style=plan.get('style','default'),beat_phase=beat_phase,percussion_args=percussion_args,
-                            initial_error=error,quality_check=quality_check,ffmpeg=ffmpeg,bass_hz=bass_hz,
-                            percussion_factory=lambda:final_drum_estimates(previous_tail,block,sample_rate,
-                                directory/f'quality-percussion-{position:02}',ffmpeg=ffmpeg),
-                            mid_energy_args=mid_energy_args,allow_pitch_changing_residual=allow_pitch_changing_residual)
-                    except (ValueError,TransitionFailure):raise error
-                    transition.clear();transition.update(selected)
+                        transition['quality_gate'] = verify_overlap(previous_tail, block, mixed, sample_rate,
+                            clips[position-1:position+1], transition, vocal_out=previous_vocal,
+                            vocal_in=incoming_vocal, style=plan.get('style','default'), beat_phase=beat_phase)
+                    except TransitionFailure as error:
+                        if mode!='beatmapped_bass_swap':raise
+                        from .orchestration import quality_alternative
+                        try:
+                            mixed,selected=quality_alternative(previous_tail,block,sample_rate,
+                                clips[position-1].get('warp'),clip.get('warp'),transition,directory/f'quality-recovery-{position:02}',
+                                style=plan.get('style','default'),beat_phase=beat_phase,percussion_args=percussion_args,
+                                initial_error=error,quality_check=quality_check,ffmpeg=ffmpeg,bass_hz=bass_hz,
+                                percussion_factory=lambda:final_drum_estimates(previous_tail,block,sample_rate,
+                                    directory/f'quality-percussion-{position:02}',ffmpeg=ffmpeg),
+                                mid_energy_args=mid_energy_args,allow_pitch_changing_residual=allow_pitch_changing_residual)
+                        except (ValueError,TransitionFailure):raise error
+                        transition.clear();transition.update(selected)
+                if (transition.get('tempo_technique') == 'shared_phase_sync'
+                        and difficult_settings(ordinary_transition.get('difficult_transition'))['enabled']):
+                    impulse = audit_impulse(raw_outgoing,raw_incoming,mixed,sample_rate)
+                    if not impulse['passed']:
+                        raise TransitionFailure(transition['from'],transition['to'],
+                            'Sustained loss of available energy during the actual handoff', {'impulse':impulse})
+                    transition['quality_gate']['impulse'] = impulse
+            except (ValueError,TransitionFailure) as error:
+                if (ordinary_transition.get('mode') != 'beatmapped_bass_swap'
+                        or ordinary_transition.get('tempo_technique') != 'shared_phase_sync'):
+                    raise
+                from .difficult_mix import eligible as difficult_eligible
+                if not difficult_eligible(error, ordinary_transition):
+                    raise
+                mixed,selected = recover_difficult(raw_outgoing,raw_incoming,sample_rate,
+                    clips[position-1:position+1],ordinary_transition,directory/f'difficult-{position:02}',
+                    vocal_out=previous_vocal,vocal_in=incoming_vocal,initial_error=error,
+                    beat_phase=beat_phase,style=plan.get('style','default'),ffmpeg=ffmpeg,
+                    bass_hz=bass_hz,allow_pitch_changing_residual=allow_pitch_changing_residual)
+                transition.clear();transition.update(selected)
             path = directory / f'verified-overlap-{position:02d}.wav'
             sf.write(path, mixed, sample_rate, subtype='FLOAT')
             import hashlib
@@ -1615,6 +1646,7 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
         # The combined-front audit can request estimates even when source
         # evidence did not request an initial percussion handoff. Its model
         # configuration belongs to the cache key for that fallback as well.
+        from .difficult_mix import EPOCH as difficult_mix_epoch
         uses_drums = (transition['mode'] == 'beatmapped_bass_swap' and
                       (needs_handoff(clips[position-1].get('warp'), clip.get('warp'), style=plan.get('style','default'))
                        or transition.get('tempo_technique') == 'shared_phase_sync'))
@@ -1622,6 +1654,7 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
             'transition': transition, 'style': plan.get('style', 'default'), 'bass_hz': bass_hz,
             'sample_rate': sample_rate, 'decoder': render_controls['ffmpeg'],
             'allow_pitch_changing_residual':allow_pitch_changing_residual,
+            'difficult_mix_epoch': difficult_mix_epoch,
             'zhilin_profile': reference_profile() if plan.get('style') == 'zhilin' else None,
             'stem_configuration': stem_configuration() if uses_drums else None,
             'gpu_devices': list(current().devices) if current() and uses_drums else []}, produce, directory)
@@ -1633,8 +1666,10 @@ def render_plan(plan: Mapping[str, Any], records: Sequence[Mapping[str, Any]] | 
         dependencies = {'record': by_id[identity], 'prepared': prepared_files.get(identity, prepared_files.get(str(by_id[identity]['path']), str(by_id[identity]['path']))),
             'head': head[identity], 'tail': tail[identity], 'reset_head': reset_head.get(identity), 'reset_tail': reset_tail.get(identity),
              'section': sections.get(identity),
-            'previous': transition_inputs[position-1] if position else None,
-            'next': transition_inputs[position] if position < len(transitions) else None, 'controls': render_controls}
+            # Foreground recovery changes the overlap, never this native deck.
+            # Switching its priority must not repeat a successful full stretch.
+            'previous': {k:v for k,v in transition_inputs[position-1].items() if k!='difficult_transition'} if position else None,
+            'next': {k:v for k,v in transition_inputs[position].items() if k!='difficult_transition'} if position < len(transitions) else None, 'controls': render_controls}
         try:
             return position, identity, cached('clip', dependencies, lambda: prepare_clip(position, identity), directory)
         except RenderError as error:

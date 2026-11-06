@@ -66,8 +66,13 @@ def audit_vocals(outgoing, incoming, mixed, sample_rate, vocal_out, vocal_in, tr
     a, b = [resample_poly(x, 1, divisor, axis=0) for x in (vocal_out, vocal_in)]
     gain, _ = recorded_envelopes(len(mixed),transition.get('beats',64),transition,style=style,beat_phase=beat_phase)
     p = np.linspace(0, 1, len(mixed))
-    keep_a = 1-smooth((p-.20)/.25) if transition.get('vocal_processing', {}).get('executed') else np.ones(len(p))
-    keep_b = smooth((p-.55)/.25) if transition.get('vocal_processing', {}).get('executed') else np.ones(len(p))
+    voice_report = transition.get('vocal_processing', {})
+    if voice_report.get('method') == 'continuous foreground recovery v1':
+        from .difficult_mix import voice_gains
+        keep_a, keep_b = [x[:, 0] for x in voice_gains(len(mixed), sample_rate, voice_report)]
+    else:
+        keep_a = 1-smooth((p-.20)/.25) if voice_report.get('executed') else np.ones(len(p))
+        keep_b = smooth((p-.55)/.25) if voice_report.get('executed') else np.ones(len(p))
     indices = np.minimum(np.arange(len(a))*divisor, len(p)-1)
     a *= (keep_a*gain['mid_out'][:, 0])[indices, None]
     b *= (keep_b*gain['mid_in'][:, 0])[indices, None]
