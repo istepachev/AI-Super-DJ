@@ -1,0 +1,68 @@
+{
+  "schema": "superdj.post-build-analysis.v1",
+  "groups": [
+    {
+      "method": "native_deck",
+      "rule_id": null,
+      "version_group": "513098151652ca818fd24b4c48b6044d7a998d0be9f59522056a3392ebcf4c28",
+      "observations": 2,
+      "scored": 2,
+      "passed": 2,
+      "refused": 0,
+      "false_accepts": 0,
+      "false_refusals": 0,
+      "unknown": 2,
+      "censored": 0,
+      "service": 0,
+      "seconds": 73.0460000000021,
+      "distinct_recordings": 2,
+      "distinct_dependencies": 2,
+      "observed_refusal_fraction": 0.0
+    },
+    {
+      "method": "retained_overlap",
+      "rule_id": null,
+      "version_group": "513098151652ca818fd24b4c48b6044d7a998d0be9f59522056a3392ebcf4c28",
+      "observations": 3,
+      "scored": 3,
+      "passed": 3,
+      "refused": 0,
+      "false_accepts": 0,
+      "false_refusals": 0,
+      "unknown": 3,
+      "censored": 0,
+      "service": 0,
+      "seconds": 27.719999999986612,
+      "distinct_recordings": 4,
+      "distinct_dependencies": 3,
+      "observed_refusal_fraction": 0.0
+    },
+    {
+      "method": "zhilin_selective",
+      "rule_id": null,
+      "version_group": "513098151652ca818fd24b4c48b6044d7a998d0be9f59522056a3392ebcf4c28",
+      "observations": 1,
+      "scored": 0,
+      "passed": 0,
+      "refused": 0,
+      "false_accepts": 0,
+      "false_refusals": 0,
+      "unknown": 0,
+      "censored": 1,
+      "service": 1,
+      "seconds": 10.828000000008615,
+      "distinct_recordings": 2,
+      "distinct_dependencies": 1,
+      "observed_refusal_fraction": null
+    }
+  ],
+  "live_thresholds_changed": false,
+  "qualified_hard_filters": [],
+  "interpretation": [
+    "Skipped variants have no observed audio outcome.",
+    "No independent counterfactual is available for blocked variants.",
+    "Counts are descriptive; shared recordings and dependencies are correlated.",
+    "100 observed refusals do not establish a 99 percent population guarantee.",
+    "Qualification requires source-disjoint validation and method-specific error review."
+  ]
+}

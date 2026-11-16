@@ -1,0 +1,13 @@
+{
+  "schema": "superdj.post-build-analysis.v1",
+  "groups": [],
+  "live_thresholds_changed": false,
+  "qualified_hard_filters": [],
+  "interpretation": [
+    "Skipped variants have no observed audio outcome.",
+    "No independent counterfactual is available for blocked variants.",
+    "Counts are descriptive; shared recordings and dependencies are correlated.",
+    "100 observed refusals do not establish a 99 percent population guarantee.",
+    "Qualification requires source-disjoint validation and method-specific error review."
+  ]
+}

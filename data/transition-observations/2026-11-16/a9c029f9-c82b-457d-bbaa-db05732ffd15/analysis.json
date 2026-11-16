@@ -1,0 +1,32 @@
+{
+  "schema": "superdj.post-build-analysis.v1",
+  "groups": [
+    {
+      "method": "native_deck",
+      "rule_id": null,
+      "version_group": "02f565a66b5653ef0a54c77d0f0b57fd44d75d916794fe5dceeefc203bb2cbb0",
+      "observations": 6,
+      "scored": 6,
+      "passed": 6,
+      "refused": 0,
+      "false_accepts": 0,
+      "false_refusals": 0,
+      "unknown": 6,
+      "censored": 0,
+      "service": 0,
+      "seconds": 43.37399999999616,
+      "distinct_recordings": 6,
+      "distinct_dependencies": 6,
+      "observed_refusal_fraction": 0.0
+    }
+  ],
+  "live_thresholds_changed": false,
+  "qualified_hard_filters": [],
+  "interpretation": [
+    "Skipped variants have no observed audio outcome.",
+    "No independent counterfactual is available for blocked variants.",
+    "Counts are descriptive; shared recordings and dependencies are correlated.",
+    "100 observed refusals do not establish a 99 percent population guarantee.",
+    "Qualification requires source-disjoint validation and method-specific error review."
+  ]
+}

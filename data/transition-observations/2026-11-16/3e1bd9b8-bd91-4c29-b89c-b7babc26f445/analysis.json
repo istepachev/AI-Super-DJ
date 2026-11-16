@@ -1,0 +1,50 @@
+{
+  "schema": "superdj.post-build-analysis.v1",
+  "groups": [
+    {
+      "method": "native_deck",
+      "rule_id": null,
+      "version_group": "052ce53ab17e02321e901334b06a1e2c34873c4f6486205d6f2a03f0889a36fa",
+      "observations": 6,
+      "scored": 6,
+      "passed": 0,
+      "refused": 6,
+      "false_accepts": 0,
+      "false_refusals": 0,
+      "unknown": 6,
+      "censored": 0,
+      "service": 0,
+      "seconds": 107.25200000002224,
+      "distinct_recordings": 1,
+      "distinct_dependencies": 6,
+      "observed_refusal_fraction": 1.0
+    },
+    {
+      "method": "zhilin_selective",
+      "rule_id": null,
+      "version_group": "052ce53ab17e02321e901334b06a1e2c34873c4f6486205d6f2a03f0889a36fa",
+      "observations": 1,
+      "scored": 1,
+      "passed": 1,
+      "refused": 0,
+      "false_accepts": 0,
+      "false_refusals": 0,
+      "unknown": 1,
+      "censored": 0,
+      "service": 0,
+      "seconds": 10.75,
+      "distinct_recordings": 2,
+      "distinct_dependencies": 1,
+      "observed_refusal_fraction": 0.0
+    }
+  ],
+  "live_thresholds_changed": false,
+  "qualified_hard_filters": [],
+  "interpretation": [
+    "Skipped variants have no observed audio outcome.",
+    "No independent counterfactual is available for blocked variants.",
+    "Counts are descriptive; shared recordings and dependencies are correlated.",
+    "100 observed refusals do not establish a 99 percent population guarantee.",
+    "Qualification requires source-disjoint validation and method-specific error review."
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "schema": "superdj.dataset-batch.v1",
+  "build_id": "a86d60a5-0ed0-4eea-b586-1ceb776a4fd6",
+  "verified_complete_set": true,
+  "terminal_receipt_sha256": "76c343e795900321c16a47bafb7d70b626a19917a4f6e17c706717963e888048",
+  "binding": {
+    "ladder_sha256": "bb824207e6af5fd1f66ef563245ba063000897a85c11eb4ce5cbca5735407430",
+    "predictor_sha256": "747f815630465e3b5bec1c167fc308e3fd2e6bbc770187817bb0fd667b03f3a8",
+    "engine_sha256": "cb539d451f82c229927f4059dc973d35ec16ec583d8ba413bbda30d153fa24a2"
+  },
+  "observation_count": 0,
+  "observations_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "analysis_sha256": "801c54bd13936b7d57a72f285406c16c3f771b3d82822c86517ff97a93220a3f",
+  "contains_audio": false,
+  "contains_source_paths": false
+}
